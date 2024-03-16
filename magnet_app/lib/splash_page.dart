@@ -8,6 +8,7 @@ import 'package:flutter_neumorphic/flutter_neumorphic.dart';
 // import 'package:magnet_app/connection_error.dart';
 // import 'package:magnet_app/active_treatment.dart';
 // import 'package:magnet_app/done_treatment.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 // XXX TODO: redo this with Neumorphic
 class SplashPageWidget extends StatefulWidget {
@@ -18,10 +19,13 @@ class SplashPageWidget extends StatefulWidget {
 }
 
 class _SplashPageWidgetState extends State<SplashPageWidget> {
+  final player = AudioPlayer();
+
   @override
   void initState() {
     super.initState();
    // _navigatetohome();
+   
   }
   Widget _letter(String letter) {
     return Text(letter,
@@ -34,6 +38,7 @@ class _SplashPageWidgetState extends State<SplashPageWidget> {
   
   @override
   Widget build(BuildContext context) {
+    player.play(AssetSource('audio/splash.wav'));
     return Scaffold(
       /*
       floatingActionButton: NeumorphicFloatingActionButton(
