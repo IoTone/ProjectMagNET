@@ -9,6 +9,7 @@ import 'package:magnet_app/splash_page.dart';
 import 'package:magnet_app/about.dart';
 import 'package:magnet_app/app_state_model.dart';
 import 'package:magnet_app/provider/ble_provider.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 
 Future<void> main() async {
@@ -60,6 +61,7 @@ class MyApp extends StatelessWidget {
 }
 
 class MyHomePage extends StatelessWidget {
+  final player = AudioPlayer();
   MyHomePage({super.key});
   
   Widget build(BuildContext context) {
@@ -69,6 +71,7 @@ class MyHomePage extends StatelessWidget {
       floatingActionButton: NeumorphicFloatingActionButton(
         child: Icon(Icons.add, size: 30),
         onPressed: () {
+          player.play(AssetSource('audio/scanning_loop.wav'));
           appState.scanAndConnectToDevice();
         },
       ),

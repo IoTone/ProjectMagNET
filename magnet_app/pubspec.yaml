@@ -89,6 +89,13 @@ flutter:
   assets:
     - assets/images/magnet_splash.jpg
     - assets/images/magnet_icon.png
+    - assets/audio/success_alert.wav
+    - assets/audio/scanning_loop.wav
+    - assets/audio/failure_alert.wav
+    - assets/audio/click_alert.wav
+    - assets/audio/scan_alt.wav
+    - assets/audio/splash.wav
+    - assets/audio/forbidden_alert.wav
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see
