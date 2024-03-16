@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 
 import 'package:cbl_flutter/cbl_flutter.dart';
 
+import 'package:horizontal_data_table/horizontal_data_table.dart';
+
 import 'package:magnet_app/splash_page.dart';
 import 'package:magnet_app/about.dart';
 import 'package:magnet_app/app_state_model.dart';
@@ -34,7 +36,7 @@ Future<void> main() async {
   });
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatelessWidget, State<SimpleTablePage> {
   const MyApp({super.key});
   // This widget is the root of your application.
   @override
@@ -174,12 +176,109 @@ class MyHomePage extends StatelessWidget {
                   style: TextStyle(color: _textColor(context)),
                 )),
                 */
+                HorizontalDataTable(
+                  leftHandSideColumnWidth: 100,
+                  rightHandSideColumnWidth: 600,
+                  isFixedHeader: true,
+                  headerWidgets: _getTitleWidget(),
+                  isFixedFooter: true,
+                  footerWidgets: _getTitleWidget(),
+                  leftSideItemBuilder: _generateFirstColumnRow,
+                  rightSideItemBuilder: _generateRightHandSideColumnRow,
+                  itemCount: widget.user.userInfo.length,
+                  rowSeparatorWidget: const Divider(
+                    color: Colors.black38,
+                    height: 1.0,
+                    thickness: 0.0,
+                  ),
+                  leftHandSideColBackgroundColor: const Color(0xFFFFFFFF),
+                  rightHandSideColBackgroundColor: const Color(0xFFFFFFFF),
+                  itemExtent: 55,
+                ),
           ],
         ),
       ),
     );
+
+    
   }
 
+  List<Widget> _getTitleWidget() {
+    return [
+      _getTitleItemWidget('Name', 100),
+      _getTitleItemWidget('Status', 100),
+      _getTitleItemWidget('Phone', 200),
+      _getTitleItemWidget('Register', 100),
+      _getTitleItemWidget('Termination', 200),
+    ];
+  }
+
+  Widget _getTitleItemWidget(String label, double width) {
+    return Container(
+      width: width,
+      height: 56,
+      padding: const EdgeInsets.fromLTRB(5, 0, 0, 0),
+      alignment: Alignment.centerLeft,
+      child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+    );
+  }
+
+  Widget _generateFirstColumnRow(BuildContext context, int index) {
+    return Container(
+      width: 100,
+      height: 52,
+      padding: const EdgeInsets.fromLTRB(5, 0, 0, 0),
+      alignment: Alignment.centerLeft,
+      child: Text(widget.user.userInfo[index].name),
+    );
+  }
+
+  Widget _generateRightHandSideColumnRow(BuildContext context, int index) {
+    return Row(
+      children: <Widget>[
+        Container(
+          width: 100,
+          height: 52,
+          padding: const EdgeInsets.fromLTRB(5, 0, 0, 0),
+          alignment: Alignment.centerLeft,
+          child: Row(
+            children: <Widget>[
+              Icon(
+                  widget.user.userInfo[index].status
+                      ? Icons.notifications_off
+                      : Icons.notifications_active,
+                  color: widget.user.userInfo[index].status
+                      ? Colors.red
+                      : Colors.green),
+              Text(widget.user.userInfo[index].status ? 'Disabled' : 'Active')
+            ],
+          ),
+        ),
+        Container(
+          width: 200,
+          height: 52,
+          padding: const EdgeInsets.fromLTRB(5, 0, 0, 0),
+          alignment: Alignment.centerLeft,
+          child: Text(widget.user.userInfo[index].phone),
+        ),
+        Container(
+          width: 100,
+          height: 52,
+          padding: const EdgeInsets.fromLTRB(5, 0, 0, 0),
+          alignment: Alignment.centerLeft,
+          child: Text(widget.user.userInfo[index].registerDate),
+        ),
+        Container(
+          width: 200,
+          height: 52,
+          padding: const EdgeInsets.fromLTRB(5, 0, 0, 0),
+          alignment: Alignment.centerLeft,
+          child: Text(widget.user.userInfo[index].terminationDate),
+        ),
+      ],
+    );
+  }
+  
   Color? _iconsColor(BuildContext context) {
     final theme = NeumorphicTheme.of(context);
     if (theme!.isUsingDark) {
@@ -229,4 +328,6 @@ Widget switchScreen(AppState app_provider) {
     default:
       throw Exception("$app_provider.app_screen is not a valid screen state");
   }
+
+  
 }
