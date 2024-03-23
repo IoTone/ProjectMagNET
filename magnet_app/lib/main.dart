@@ -1,4 +1,6 @@
 
+import 'dart:async';
+
 import 'package:flutter_neumorphic/flutter_neumorphic.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -10,6 +12,8 @@ import 'package:magnet_app/about.dart';
 import 'package:magnet_app/app_state_model.dart';
 import 'package:magnet_app/provider/ble_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
+
+// import 'package:horizontal_data_table/horizontal_data_table.dart';
 
 
 Future<void> main() async {
@@ -60,10 +64,23 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class MyHomePage extends StatelessWidget {
-  final player = AudioPlayer();
+class MyHomePage extends StatefulWidget {
   MyHomePage({super.key});
+
+  @override
+  State<StatefulWidget> createState() => _MyHomePageWidgetState();
+}
+
+class _MyHomePageWidgetState extends State<MyHomePage> {
+  final player = AudioPlayer();
   
+  List<Map> _devicesScannedNow = [
+    
+  ];
+  
+  @override
+  State<StatefulWidget> createState() => _MyHomePageWidgetState();
+
   Widget build(BuildContext context) {
     final appState = Provider.of<AppState>(context, listen: false);
 
@@ -72,6 +89,18 @@ class MyHomePage extends StatelessWidget {
         child: Icon(Icons.add, size: 30),
         onPressed: () {
           player.play(AssetSource('audio/scanning_loop.wav'));
+          Timer timer;
+          int secs = 0;
+          timer = Timer.periodic(Duration(milliseconds:1000),(timer){
+            if (secs < 30) {
+              secs += 1;
+              _devicesScannedNow = appState.getDevices();
+              print("devices ${_devicesScannedNow}");
+              
+            } else {
+                timer.cancel();
+            }
+          });
           appState.scanAndConnectToDevice();
         },
       ),
@@ -124,6 +153,7 @@ class MyHomePage extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
+            
             /*
             NeumorphicButton(
               onPressed: () {
@@ -177,6 +207,7 @@ class MyHomePage extends StatelessWidget {
                   style: TextStyle(color: _textColor(context)),
                 )),
                 */
+                _createDataTable()
           ],
         ),
       ),
@@ -199,6 +230,29 @@ class MyHomePage extends StatelessWidget {
       return Colors.black;
     }
   }
+
+  DataTable _createDataTable() {
+      return DataTable(columns: _createColumns(), rows: _createRows());
+  }
+  List<DataColumn> _createColumns() {
+      return [
+        DataColumn(label: Text('ID')),
+        DataColumn(label: Text('Name')),
+        DataColumn(label: Text('Type'))
+      ];
+  }
+
+  List<DataRow> _createRows() {
+      return _devicesScannedNow
+          .map((device) => DataRow(cells: [
+                DataCell(Text('#' + device['id'].toString())),
+                DataCell(Text(device['name'])),
+                DataCell(Text(device['type']))
+              ]))
+          .toList();
+  }
+  
+  
 }
 
 Widget switchScreen(AppState app_provider) {

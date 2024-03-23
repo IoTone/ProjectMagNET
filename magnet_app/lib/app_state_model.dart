@@ -12,6 +12,7 @@ import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 // import 'package:location_permissions/location_permissions.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:cbl/cbl.dart';
+import 'package:observable_ish/observable_ish.dart';
 
 
 /**
@@ -28,6 +29,10 @@ class AppState extends BLEProvider {
   bool timerStatus = false;
   AsyncDatabase? _db;
 
+  RxList<Map> _devices = RxList<Map>(); /* = [
+
+  ]; */
+  
   Timer? btnStatusTimer;
   
 
@@ -125,10 +130,20 @@ class AppState extends BLEProvider {
           }
           
 
+          /*
           device.serviceData.forEach((k, v) {
             print('{ key: $k, value: $v }');
           });
-
+          */
+          // _genericBleDevices_connected.addIf(!_genericBleDevices_connected.contains(device),device);
+          // int sz = _devices.length;
+          _devices.addIf(!_devices.contains(device), {
+            'id': device.id,
+            'name': device.name,
+            'type':  device.manufacturerData.toString()
+          });
+          
+          // if (sz <  _devices.length)
           print(device.name +
               " UUIDs: " +
               device.serviceUuids.toString() +
@@ -138,11 +153,12 @@ class AppState extends BLEProvider {
               device.id);
         }
         // print(device.id);
+        // XXX TODO: add a proper target name to match
         if (device.name == "target") {
           discoveredDevice = device;
           foundDeviceWaitingToConnect = true;
           notifyListeners();
-          print("Halo is found");
+          print("Device is found");
 
           //Stop the scan
           scanDeviceStream.cancel();
@@ -160,6 +176,7 @@ class AppState extends BLEProvider {
         scanStarted = false;
 
         if (!connected) {
+          print("Not connected");
           // XXX TODO: update screen at end of scan
           // _bleUpdateScreenState("disconnected");
         }
@@ -180,6 +197,10 @@ class AppState extends BLEProvider {
     _bleUpdateScreenState("disconnected");
   }
 
+  RxList<Map> getDevices() {
+    return _devices;
+  }
+  
   void scanAndConnectToDevice() async {
     //Update Screen
     // XXX TODO: show progress on scan
@@ -187,8 +208,9 @@ class AppState extends BLEProvider {
 
     startScan();
 
+    // XXX Why do we need this?
     if (connected) {
-      print("isCalled");
+      print("scanAndConnectToDevice is connected");
     } else {
       print("Is not connected");
     }

@@ -313,14 +313,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.1"
-  horizontal_data_table:
-    dependency: "direct main"
-    description:
-      name: horizontal_data_table
-      sha256: c8ab5256bbced698a729f3e0ff2cb0e8e97416cdbb082860370eaf883badf722
-      url: "https://pub.dev"
-    source: hosted
-    version: "4.3.1"
   http:
     dependency: transitive
     description:
@@ -441,6 +433,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.0"
+  observable_ish:
+    dependency: "direct main"
+    description:
+      name: observable_ish
+      sha256: d102a9dab48c332a81d99bcd0a59d1aa956dc6c147f6c0a1b197a74bddbf76e9
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.0.8"
   page_transition:
     dependency: "direct main"
     description:
