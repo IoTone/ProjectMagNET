@@ -119,6 +119,7 @@ class AppState extends BLEProvider {
         if (device.id == deviceId) {
           print("--------------> Found match!!!!");
         } else {
+          // XXX TODO: fix database dups
           // Create a new document.
           final adoc = await _db!.document(device.id);
           if (adoc == null) {
@@ -137,8 +138,10 @@ class AppState extends BLEProvider {
           */
           // _genericBleDevices_connected.addIf(!_genericBleDevices_connected.contains(device),device);
           // int sz = _devices.length;
-          _devices.addIf(!_devices.contains(device), {
-            'id': device.id,
+          
+          _devices.addIf(!_devices.contains(device) && _devices.every((element) => element['uuid'] != device.id), {
+            'id': device.id.substring(device.id.length-5),
+            'uuid': device.id,
             'name': device.name,
             'type':  device.manufacturerData.toString()
           });
