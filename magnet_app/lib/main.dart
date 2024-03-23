@@ -91,6 +91,7 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
           player.play(AssetSource('audio/scanning_loop.wav'));
           Timer timer;
           int secs = 0;
+          /*
           timer = Timer.periodic(Duration(milliseconds:1000),(timer){
             if (secs < 30) {
               secs += 1;
@@ -101,7 +102,9 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
                 timer.cancel();
             }
           });
+          */
           appState.scanAndConnectToDevice();
+          _devicesScannedNow = appState.getDevices();
         },
       ),
       backgroundColor: NeumorphicTheme.baseColor(context),
@@ -149,7 +152,8 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
                 ],
               ),
             ),
-      body: Center(
+      body: SingleChildScrollView(
+        // Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
@@ -210,6 +214,7 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
                 _createDataTable()
           ],
         ),
+      //),
       ),
     );
   }
