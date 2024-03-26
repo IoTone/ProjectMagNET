@@ -87,6 +87,7 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
     return Scaffold(
       floatingActionButton: NeumorphicFloatingActionButton(
         child: Icon(Icons.add, size: 30),
+        tooltip: "SCAN",
         onPressed: () {
           player.play(AssetSource('audio/scanning_loop.wav'));
           Timer timer;
