@@ -112,7 +112,7 @@ class AppState extends BLEProvider {
       print("Scanning ...");
       scanDeviceStream = ble.scanForDevices(
           withServices: [], // [serviceUuid]
-          scanMode: ScanMode.lowLatency).listen((device) async {
+          scanMode: ScanMode.lowLatency).distinct().listen((device) async { // #49 try out distinct
         print("examining new device");
         print("---------------------");
         
