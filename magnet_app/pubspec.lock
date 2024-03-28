@@ -441,6 +441,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.0.8"
+  overlay_loader_with_app_icon:
+    dependency: "direct main"
+    description:
+      name: overlay_loader_with_app_icon
+      sha256: "707eea85584ec5d50668819fb56ee1cf60222abcc7c6dcd32304b0bbc0e59f12"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.3"
   page_transition:
     dependency: "direct main"
     description:

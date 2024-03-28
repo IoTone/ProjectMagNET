@@ -27,6 +27,7 @@ class AppState extends BLEProvider {
   String? app_screen = "splash";
   String? prev_screen = null;
   bool timerStatus = false;
+  bool isBusy = false;
   AsyncDatabase? _db;
 
   RxList<Map> _devices = RxList<Map>(); /* = [
@@ -58,6 +59,7 @@ class AppState extends BLEProvider {
   }
 
   AppState() {
+    isBusy = false;
     Timer(const Duration(seconds: 5), () {
       // scanAndConnectToDevice();
       print("Move to home screen");
@@ -177,6 +179,7 @@ class AppState extends BLEProvider {
         scanDeviceStream.cancel();
         print("scan stopped");
         scanStarted = false;
+        isBusy = false;
 
         if (!connected) {
           print("Not connected");

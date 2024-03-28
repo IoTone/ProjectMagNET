@@ -50,6 +50,7 @@ dependencies:
   iconic: ^0.0.3
   # horizontal_data_table: ^4.3.1
   observable_ish: ^4.0.8
+  overlay_loader_with_app_icon: ^0.0.3
   flutter_neumorphic:
     git:
       url: https://github.com/truedat101/Flutter-Neumorphic

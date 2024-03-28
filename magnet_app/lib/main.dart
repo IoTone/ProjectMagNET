@@ -12,6 +12,8 @@ import 'package:magnet_app/about.dart';
 import 'package:magnet_app/app_state_model.dart';
 import 'package:magnet_app/provider/ble_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:overlay_loader_with_app_icon/overlay_loader_with_app_icon.dart';
+
 
 // import 'package:horizontal_data_table/horizontal_data_table.dart';
 
@@ -73,7 +75,8 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageWidgetState extends State<MyHomePage> {
   final player = AudioPlayer();
-  
+  bool _isLoading=false;
+    
   List<Map> _devicesScannedNow = [
     
   ];
@@ -83,8 +86,13 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
 
   Widget build(BuildContext context) {
     final appState = Provider.of<AppState>(context, listen: false);
-
-    return Scaffold(
+    //This manage state of modal progress widget
+   return OverlayLoaderWithAppIcon(
+      isLoading: appState.isBusy,
+      overlayBackgroundColor: Colors.black,
+      circularProgressColor: Color(0xff670099),
+      appIcon: Icon(Icons.tips_and_updates),  // Image.asset('assets/images/magnet_icon.png'),
+      child: Scaffold(
       floatingActionButton: NeumorphicFloatingActionButton(
         child: Icon(Icons.add, size: 30),
         tooltip: "SCAN",
@@ -104,6 +112,7 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
             }
           });
           */
+          appState.isBusy = true;
           appState.scanAndConnectToDevice();
           _devicesScannedNow = appState.getDevices();
         },
@@ -217,6 +226,7 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
         ),
       //),
       ),
+    )
     );
   }
 
