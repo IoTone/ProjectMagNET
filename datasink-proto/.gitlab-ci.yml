@@ -1,0 +1,314 @@
+stages:
+  - build_docker
+  - build
+  - test
+  - analysis
+  - deploy
+  - pages
+
+variables:
+  MINIMAL_COVERAGE: 15
+
+.docker-build:
+  stage: build_docker
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  before_script:
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_JOB_TOKEN\"}}}" > /kaniko/.docker/config.json
+  tags:
+    - docker
+  when: manual
+
+deploy-latest-docker-ci_gcc9:
+  extends: .docker-build
+  variables:
+    REGISTRY_IMAGE_TAG: "latest"
+  script:
+    - |
+      /kaniko/executor \
+      --context $CI_PROJECT_DIR \
+      --dockerfile $CI_PROJECT_DIR/docker/ci_gcc9/Dockerfile \
+      --destination $CI_REGISTRY_IMAGE/ci_gcc9:$REGISTRY_IMAGE_TAG
+
+#
+# BUILD
+#
+
+.build:linux:
+  stage: build
+  script:
+    - rm -rf build
+    - mkdir -p build
+    - cd build
+    - |
+      cmake .. \
+      -DEXPRESSCPP_USE_CONAN_DEPENDENCIES=ON \
+      -DEXPRESSCPP_ENABLE_COVERAGE=ON \
+      -DEXPRESSCPP_BUILD_EXAMPLES=ON \
+      -DEXPRESSCPP_BUILD_TESTS=ON
+    - make -j4
+    - |
+      find . \
+      -type f \
+      -not \( -name 'test_expresscpp' -or -name '*.gcno' \) -delete
+    - find . -type d -empty -delete
+  tags:
+    - docker
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/build/
+    expire_in: 10 hrs
+
+
+.build:windows:
+  stage: build
+  script:
+    - pip3 install conan --upgrade
+    - mkdir -p build
+    - cd build
+    - cmake .. -DEXPRESSCPP_USE_CONAN_DEPENDENCIES=ON
+    - cmake --build . -j4
+  tags:
+    - windows
+  allow_failure: true
+
+.build:windows:msvc:
+  extends: .build:windows
+  before_script:
+    - echo "start job on windows"
+
+build:linux:gcc9:
+  extends: .build:linux
+  image: registry.gitlab.com/expresscpp/expresscpp/ci_gcc9:latest
+  before_script:
+    - export CC=/usr/bin/gcc-9
+    - export CXX=/usr/bin/g++-9
+
+build:linux:conan:clang9:
+  extends: .build:linux
+  image: conanio/clang9-x86
+
+build:linux:conan:gcc10:
+  extends: .build:linux
+  image: conanio/gcc10
+
+build:linux:without_conan:
+  stage: build
+  script:
+  image: ubuntu:20.04
+  script:
+    - |
+      apt update -y && \
+      apt install -y cmake \
+      gcc \
+      g++ \
+      libboost-all-dev \
+      nlohmann-json3-dev \
+      libfmt-dev \
+      libgtest-dev
+
+    - rm -rf build
+    - mkdir -p build
+    - cd build
+    - |
+      cmake .. \
+      -DEXPRESSCPP_USE_CONAN_DEPENDENCIES=OFF \
+      -DEXPRESSCPP_BUILD_EXAMPLES=ON \
+      -DEXPRESSCPP_BUILD_TESTS=ON
+    - make -j4
+  tags:
+    - docker
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/build/
+    expire_in: 10 hrs
+
+#
+# TEST
+#
+
+.test:linux:
+  stage: test
+  script:
+    - ./build/bin/test_expresscpp --gtest_output=xml:./test_report.xml
+    - |
+      gcovr -r ${CI_PROJECT_DIR} \
+      --gcov-executable $GCOV_VERSION \
+      --exclude=".*test*." \
+      --exclude=".*example*." \
+      --exclude=".*/build/*." \
+      --exclude=".*/_build/*." \
+      --fail-under-line=$MINIMAL_COVERAGE
+    - mkdir -p coverage/
+    - |
+      gcovr -r ${CI_PROJECT_DIR} \
+      --gcov-executable $GCOV_VERSION \
+      --exclude=".*test*." \
+      --exclude=".*example*." \
+      --exclude=".*/_build/*." \
+      --exclude=".*/build/*." \
+      -s -p --html --html-details \
+      -o coverage/coverage.html
+    - ls coverage/
+    - mv ./coverage/coverage.html ./coverage/index.html || true
+  tags:
+    - docker
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/coverage/*
+    reports:
+      junit: ${CI_PROJECT_DIR}/*.xml
+    expire_in: 10 hrs
+
+test:linux:gcc9:
+  extends: .test:linux
+  image: registry.gitlab.com/expresscpp/expresscpp/ci_gcc9:latest
+  variables:
+    GCOV_VERSION: "gcov-9"
+  dependencies:
+    - build:linux:gcc9
+  needs: ["build:linux:gcc9"]
+
+ADDRESS_SANITIZER:linux:gcc9:
+  stage: test
+  image: registry.gitlab.com/expresscpp/expresscpp/ci_gcc9:latest
+  script:
+    - export CC=/usr/bin/gcc-9
+    - export CXX=/usr/bin/g++-9
+    - rm -rf build
+    - mkdir -p build
+    - cd build
+
+    - |
+      cmake .. \
+      -DEXPRESSCPP_USE_CONAN_DEPENDENCIES=ON \
+      -DEXPRESSCPP_ENABLE_COVERAGE=OFF \
+      -DEXPRESSCPP_BUILD_EXAMPLES=OFF \
+      -DEXPRESSCPP_BUILD_TESTS=ON \
+      -DEXPRESSCPP_USE_ADDRESS_SANITIZER=ON
+    - make -j4
+    - ./bin/test_expresscpp --gtest_output=xml:./test_report.xml
+  tags:
+    - docker
+
+LEAK_SANITIZER:linux:gcc9:
+  stage: test
+  image: registry.gitlab.com/expresscpp/expresscpp/ci_gcc9:latest
+  dependencies: []
+  script:
+    - export CC=/usr/bin/gcc-9
+    - export CXX=/usr/bin/g++-9
+    - rm -rf build
+    - mkdir -p build
+    - cd build
+    
+    - |
+      cmake .. \
+      -DEXPRESSCPP_USE_CONAN_DEPENDENCIES=ON \
+      -DEXPRESSCPP_ENABLE_COVERAGE=OFF \
+      -DEXPRESSCPP_BUILD_EXAMPLES=OFF \
+      -DEXPRESSCPP_BUILD_TESTS=ON \
+      -DEXPRESSCPP_USE_LEAK_SANITIZER=ON
+    - make -j4
+    - ./bin/test_expresscpp --gtest_output=xml:./test_report.xml
+  tags:
+    - docker
+
+UNDEFINED_SANITIZER:linux:gcc9:
+  stage: test
+  image: registry.gitlab.com/expresscpp/expresscpp/ci_gcc9:latest
+  dependencies: []
+  script:
+    - export CC=/usr/bin/gcc-9
+    - export CXX=/usr/bin/g++-9
+    - rm -rf build
+    - mkdir -p build
+    - cd build
+    
+    - |
+      cmake .. \
+      -DEXPRESSCPP_USE_CONAN_DEPENDENCIES=ON \
+      -DEXPRESSCPP_ENABLE_COVERAGE=OFF \
+      -DEXPRESSCPP_BUILD_EXAMPLES=OFF \
+      -DEXPRESSCPP_BUILD_TESTS=ON \
+      -DEXPRESSCPP_USE_UNDEFINED_SANITIZER=ON
+    - make -j4
+    - ./bin/test_expresscpp --gtest_output=xml:./test_report.xml
+  tags:
+    - docker
+
+THREAD_SANITIZER:linux:gcc9:
+  stage: test
+  image: registry.gitlab.com/expresscpp/expresscpp/ci_gcc9:latest
+  dependencies: []
+  script:
+    - export CC=/usr/bin/gcc-9
+    - export CXX=/usr/bin/g++-9
+    - rm -rf build
+    - mkdir -p build
+    - cd build
+    
+    - |
+      cmake .. \
+      -DEXPRESSCPP_USE_CONAN_DEPENDENCIES=ON \
+      -DEXPRESSCPP_ENABLE_COVERAGE=OFF \
+      -DEXPRESSCPP_BUILD_EXAMPLES=OFF \
+      -DEXPRESSCPP_BUILD_TESTS=ON \
+      -DEXPRESSCPP_USE_THREAD_SANITIZER=ON
+    - make -j4
+    - ./bin/test_expresscpp --gtest_output=xml:./test_report.xml
+  tags:
+    - docker
+
+#
+# DEPLOY
+#
+
+.package:
+  stage: deploy
+  image: registry.gitlab.com/expresscpp/expresscpp/ci_gcc9:latest
+  before_script:
+    - conan remote add expresscpp https://api.bintray.com/conan/expresscpp/expresscpp/
+    - conan user -p $BINTRAY_API_KEY -r expresscpp gocarlos
+    - apt update -y && apt install -y git
+    - export CC=/usr/bin/gcc-9
+    - export CXX=/usr/bin/g++-9
+  tags:
+    - docker
+
+package_testing:
+  extends: .package
+  script:
+    - conan --version
+    - conan create . expresscpp/testing --build missing
+    - yes | conan upload expresscpp/* -r expresscpp || true
+  only:
+    - master
+
+package_stable:
+  extends: .package
+  script:
+    - conan --version
+    - conan create . expresscpp/stable --build missing
+    - yes | conan upload expresscpp/* -r expresscpp || true
+  tags:
+    - docker
+  only:
+    - tags
+
+pages:
+  stage: pages
+  image: ubuntu:19.04
+  script:
+    - mkdir -p public
+    - mv ${CI_PROJECT_DIR}/coverage/* ${CI_PROJECT_DIR}/public/.
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/public
+    expire_in: 1 hour
+  only:
+    refs:
+      - master
+  tags:
+    - docker

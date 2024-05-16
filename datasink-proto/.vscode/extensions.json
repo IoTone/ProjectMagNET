@@ -1,0 +1,15 @@
+{
+    "recommendations": [
+        "ms-vscode.cpptools",
+        "xaver.clang-format",
+        "twxs.cmake",
+        "ms-vscode.cmake-tools",
+        "cheshirekow.cmake-format",
+        "matepek.vscode-catch2-test-adapter",
+        "jebbs.plantuml",
+        "fcrespo82.markdown-table-formatter",
+        "mhutchie.git-graph",
+        "sonkengmaldini.conanlight",
+        "fireblackhat.conan-tools"
+    ]
+}
