@@ -1,0 +1,57 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "simple_rest_router_server",
+            "program": "${workspaceFolder}/example/simple_rest_router_server.js"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "middleware_logging",
+            "program": "${workspaceFolder}/test/middleware_logging.js"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "basic_dump_stack",
+            "program": "${workspaceFolder}/test/basic_dump_stack.js"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "http_methods_",
+            "program": "${workspaceFolder}/test/http_methods_.js"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "basic_",
+            "program": "${workspaceFolder}/test/basic_.js"
+        },
+        {
+            "name": "(gdb) Launch",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "enter program name, for example ${workspaceFolder}/a.out",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}
