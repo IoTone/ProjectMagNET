@@ -1,0 +1,21 @@
+[package]
+name = "datasync-proto"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+socketioxide = { version = "0.14.1", features = [
+    "extensions",
+    "state",
+] }
+# futures = "0.3.27"
+tower = { version = "0.4.13", default-features = false }
+tracing = "0.1.37"
+tracing-subscriber = "0.3.18"
+axum = "0.7.5"
+hyper-util.version = "0.1.1"
+hyper = { version = "1.0.1", features = ["http1", "server"] }
+tokio = { version =  "1.35.0", features = ["rt-multi-thread", "macros"] }
+tower-http = { version = "0.5.0", features = ["cors", "fs"] }
+serde = { version = "1.0.193", features = ["derive"] }
+serde_json = "1.0.108"
