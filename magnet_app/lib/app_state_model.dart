@@ -145,7 +145,8 @@ class AppState extends BLEProvider {
             'id': device.id.substring(device.id.length-5),
             'uuid': device.id,
             'name': device.name,
-            'type':  device.manufacturerData.toString()
+            'type':  device.manufacturerData.toString(),
+            'lastseen': DateTime.now().toLocal()
           });
           
           // if (sz <  _devices.length)

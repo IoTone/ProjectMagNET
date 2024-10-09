@@ -271,7 +271,8 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
       return [
         DataColumn(label: Text('ID')),
         DataColumn(label: Text('Name')),
-        DataColumn(label: Text('Type'))
+        DataColumn(label: Text('Type')),
+        DataColumn(label: Text('Last'))
       ];
   }
 
@@ -280,7 +281,9 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
           .map((device) => DataRow(cells: [
                 DataCell(Text('#' + device['id'].toString())),
                 DataCell(Text(device['name'])),
-                DataCell(Text(device['type']))
+                DataCell(Text(device['type'])),
+                DataCell(Text(
+                  ((DateTime.now().millisecondsSinceEpoch - (device['lastseen'] as DateTime).millisecondsSinceEpoch)/1000).toString()))
               ]))
           .toList();
   }
