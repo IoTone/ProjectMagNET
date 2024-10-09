@@ -13,7 +13,7 @@ import 'package:magnet_app/app_state_model.dart';
 import 'package:magnet_app/provider/ble_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:overlay_loader_with_app_icon/overlay_loader_with_app_icon.dart';
-
+import 'package:magnet_app/navrouter.dart';
 
 // import 'package:horizontal_data_table/horizontal_data_table.dart';
 
@@ -118,7 +118,7 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
         },
       ),
       backgroundColor: NeumorphicTheme.baseColor(context),
-      appBar: NeumorphicAppBar (
+      appBar: NeumorphicAppBar ( 
         centerTitle: true,
         // toolbarHeight: 80,
         // backgroundColor: const Color(0xFF4bb0c9),
@@ -134,10 +134,23 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
                     },
                   ),
                   ListTile(
+                    title: const Text('About'),
+                    onTap: () {
+                      appState.app_screen = "about";
+                      Navigator.of(context)
+                        .push(MaterialPageRoute(builder: (context) => switchScreen(appState),
+                        ),
+                      );
+                    },
+                  ),
+                  ListTile(
                     title: const Text('Privacy'),
                     onTap: () {
                       appState.app_screen = "privacy";
-
+                      Navigator.of(context)
+                        .push(MaterialPageRoute(builder: (context) => switchScreen(appState),
+                        ),
+                      );
                       // Navigator.of(context).push(
                       //   MaterialPageRoute(
                       //     builder: (context) => const AboutPageWidget(),
@@ -150,7 +163,11 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
                     title: const Text('Terms'),
                     onTap: () {
                       appState.app_screen = "terms";
-
+                      appState.app_screen = "privacy";
+                      Navigator.of(context)
+                        .push(MaterialPageRoute(builder: (context) => switchScreen(appState),
+                        ),
+                      );
                       // Navigator.of(context).push(
                       //   MaterialPageRoute(
                       //     builder: (context) => const AboutPageWidget(),
@@ -271,7 +288,9 @@ class _MyHomePageWidgetState extends State<MyHomePage> {
   
 }
 
+/*
 Widget switchScreen(AppState app_provider) {
+
   String title;
   print("app_screen: $app_provider.app_screen");
   switch (app_provider.app_screen) {
@@ -303,3 +322,4 @@ Widget switchScreen(AppState app_provider) {
       throw Exception("$app_provider.app_screen is not a valid screen state");
   }
 }
+*/

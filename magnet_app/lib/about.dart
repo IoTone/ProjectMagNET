@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 // import 'package:magnet_app/connecting.dart';
 import 'package:magnet_app/app_state_model.dart';
+import 'package:magnet_app/navrouter.dart';
 
 // XXX TODO: redo this with Neumorphic
 class AboutPageWidget extends StatefulWidget {
@@ -34,6 +35,10 @@ class _AboutPageWidgetState extends State<AboutPageWidget> {
                     title: const Text('Home'),
                     onTap: () {
                       appState.app_screen = "home";
+                      Navigator.of(context)
+                        .push(MaterialPageRoute(builder: (context) => switchScreen(appState),
+                        ),
+                      );
                     },
                   ),
                   ListTile(
