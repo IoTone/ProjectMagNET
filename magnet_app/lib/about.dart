@@ -20,13 +20,13 @@ class _AboutPageWidgetState extends State<AboutPageWidget> {
      final appState = Provider.of<AppState>(context, listen: false);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF4bb0c9),
+      backgroundColor: const Color(0xFFFFFFFF),
       appBar: NeumorphicAppBar( // AppBar(
         centerTitle: true,
         
         // toolbarHeight: 80,
         // backgroundColor: const Color(0xFF4bb0c9),
-        title: Image.asset('assets/images/mobilelogo.png'),
+        title: Image.asset('assets/images/magnet_icon.png'),
         ),
             drawer: Drawer(
               child: ListView(
@@ -75,9 +75,9 @@ class _AboutPageWidgetState extends State<AboutPageWidget> {
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: <Widget>[
             Flexible(child:
-            Image(image: AssetImage('assets/images/splash_image.png'))
+            Image(image: AssetImage('assets/images/magnet_splash.jpg'))
             ),
-                            Image(image: AssetImage('assets/images/logo.png')),
+                            // Image(image: AssetImage('assets/images/logo.png')),
             // XXX TODO: pull app version from metadata
             Text('App v1.0.0 \nCopyright IoTone, Inc. 2024', textAlign: TextAlign.center ,style: TextStyle(color: Color(0xFF1B68AF),
                     fontSize: 32, 
