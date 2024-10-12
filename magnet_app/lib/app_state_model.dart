@@ -141,13 +141,29 @@ class AppState extends BLEProvider {
           // _genericBleDevices_connected.addIf(!_genericBleDevices_connected.contains(device),device);
           // int sz = _devices.length;
           
-          _devices.addIf(!_devices.contains(device) && _devices.every((element) => element['uuid'] != device.id), {
-            'id': device.id.substring(device.id.length-5),
-            'uuid': device.id,
-            'name': device.name,
-            'type':  device.manufacturerData.toString(),
-            'lastseen': DateTime.now().toLocal()
-          });
+          // instead of this sort of "addif", first handle 
+          // Already in the list (and update the last seen)
+          // then handle the "not in the list" case
+          // if (_devices.contains(device)) {
+          if (_devices.indexWhere((element) => element['uuid'] == device.id) >= 0) {
+          // indexWhere((element) => element['uuid'] == device.id) {
+            // Modify the last seen time
+            print("examining ${device.name}");
+            var adevice = _devices.firstWhere(
+              (element) => element['uuid'] == device.id,
+              orElse: () => {'id': Null}, 
+              );
+            adevice['lastseen'] = DateTime.now().toLocal();
+            _devices[_devices.indexOf(adevice)] = adevice;
+          } else {
+            _devices.addIf(!_devices.contains(device) && _devices.every((element) => element['uuid'] != device.id), {
+              'id': device.id.substring(device.id.length-5),
+              'uuid': device.id,
+              'name': device.name,
+              'type':  device.manufacturerData.toString(),
+              'lastseen': DateTime.now().toLocal()
+            });
+          }
           
           // if (sz <  _devices.length)
           print(device.name +
