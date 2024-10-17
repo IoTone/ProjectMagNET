@@ -21,7 +21,7 @@ enum ButtonState {
 extern const int       BUTTON_PIN;                        		//-- from M5Atom_DigDug_Camera_Button
 extern BLEByteCharacteristic buttonCharacteristic;              		//-- from M5Atom_DigDug_Camera_Button
 extern int             currentState;                      		//-- from M5Atom_DigDug_Camera_Button
-extern ButtonState     g_btn_state;                       		//-- from M5Atom_DigDug_Camera_Button
+// extern ButtonState     g_btn_state;                       		//-- from M5Atom_DigDug_Camera_Button
 extern int             lastState;                         		//-- from M5Atom_DigDug_Camera_Button
 extern const int       ledPin;                            		//-- from M5Atom_DigDug_Camera_Button
 extern BLEService      ledService;                        		//-- from M5Atom_DigDug_Camera_Button
