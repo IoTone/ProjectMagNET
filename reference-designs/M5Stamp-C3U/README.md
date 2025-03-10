@@ -61,3 +61,8 @@ after that, the port is successfully identified, program burning.
 
 > Manjaro kernel 5.15 LTS, Arduino IDE
 ![image](https://user-images.githubusercontent.com/12049360/189372496-20315b99-53ec-4071-b5c7-1e33a9ff0d8e.png)
+
+## Troubleshooting
+
+The M5C3U is a strange variant.  See: https://github.com/nicolasdb/M5Stamp-C3U/issues/1
+

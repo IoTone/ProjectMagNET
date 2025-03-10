@@ -8,9 +8,9 @@
         {
             "name": "PlatformIO",
             "includePath": [
-                "/Users/dkords/dev/repos/M5Stamp-C3U/include",
-                "/Users/dkords/dev/repos/M5Stamp-C3U/src",
-                "/Users/dkords/dev/repos/M5Stamp-C3U/.pio/libdeps/esp32c3/Adafruit NeoPixel",
+                "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/M5Stamp-C3U/include",
+                "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/M5Stamp-C3U/src",
+                "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/M5Stamp-C3U/.pio/libdeps/esp32c3/Adafruit NeoPixel",
                 "/Users/dkords/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/newlib/platform_include",
                 "/Users/dkords/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/freertos/include",
                 "/Users/dkords/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/freertos/include/esp_additions/freertos",
@@ -242,9 +242,9 @@
             "browse": {
                 "limitSymbolsToIncludedHeaders": true,
                 "path": [
-                    "/Users/dkords/dev/repos/M5Stamp-C3U/include",
-                    "/Users/dkords/dev/repos/M5Stamp-C3U/src",
-                    "/Users/dkords/dev/repos/M5Stamp-C3U/.pio/libdeps/esp32c3/Adafruit NeoPixel",
+                    "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/M5Stamp-C3U/include",
+                    "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/M5Stamp-C3U/src",
+                    "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/M5Stamp-C3U/.pio/libdeps/esp32c3/Adafruit NeoPixel",
                     "/Users/dkords/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/newlib/platform_include",
                     "/Users/dkords/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/freertos/include",
                     "/Users/dkords/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32c3/include/freertos/include/esp_additions/freertos",
@@ -475,9 +475,11 @@
                 ]
             },
             "defines": [
-                "PLATFORMIO=60116",
+                "PLATFORMIO=60117",
                 "ARDUINO_ESP32C3_DEV",
                 "ARDUINO_ESP32C3_DEV",
+                "ARDUINO_USB_CDC_ON_BOOT=1",
+                "ARDUINO_USB_MODE=1",
                 "HAVE_CONFIG_H",
                 "MBEDTLS_CONFIG_FILE=\"mbedtls/esp_config.h\"",
                 "UNITY_INCLUDE_CONFIG_H",
