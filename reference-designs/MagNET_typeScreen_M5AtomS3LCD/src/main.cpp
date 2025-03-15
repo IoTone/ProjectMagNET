@@ -17,6 +17,7 @@ limitations under the License.
 #if defined ( ARDUINO )
 
 #include <Arduino.h>
+#include <math.h>
 
 // If you use SD card, write this.
 #include <SD.h>
@@ -82,9 +83,15 @@ limitations under the License.
 // Include this to enable the M5 global instance.
 #include <M5Unified.h>
 
+#define DEBUG_GYRO_AND_ACCEL           1
+#define MAX_DECAY  10
+static int falldecay = 0;
 
+static bool wasFalling = false;
+static bool isFalling = false;
 void setup(void)
 {
+  Serial.begin(115200);
   auto cfg = M5.config();
 
   // external display setting. (Pre-include required)
@@ -287,9 +294,24 @@ void draw_function(LovyanGFX* gfx)
   gfx->fillRect(x-r, y-r, r*2, r*2, c);
 }
 
+void handleRandomCircles() {
+  M5.delay(1);
+  for (int i = 0; i < M5.getDisplayCount(); ++i) {
+    int x = rand() % M5.Displays(i).width();
+    int y = rand() % M5.Displays(i).height();
+    int r = (M5.Displays(i).width() >> 4) + 4;
+    uint16_t c = rand();
+    M5.Displays(i).fillCircle(x, y, r, c);
+  }
+
+  for (int i = 0; i < M5.getDisplayCount(); ++i) {
+    draw_function(&M5.Displays(i));
+  }
+}
 
 void loop(void)
 {
+  /*
   M5.delay(1);
 
   for (int i = 0; i < M5.getDisplayCount(); ++i) {
@@ -303,6 +325,69 @@ void loop(void)
   for (int i = 0; i < M5.getDisplayCount(); ++i) {
     draw_function(&M5.Displays(i));
   }
+  */
+
+  auto imu_update = M5.Imu.update();
+  if (imu_update) {
+      M5.Lcd.setCursor(0, 40);
+      M5.Lcd.clear();  // Delay 100ms 延迟100ms
+
+      auto data = M5.Imu.getImuData();
+
+      // The data obtained by getImuData can be used as follows.
+      data.accel.x;      // accel x-axis value.
+      data.accel.y;      // accel y-axis value.
+      data.accel.z;      // accel z-axis value.
+      data.accel.value;  // accel 3values array [0]=x / [1]=y / [2]=z.
+
+      data.gyro.x;      // gyro x-axis value.
+      data.gyro.y;      // gyro y-axis value.
+      data.gyro.z;      // gyro z-axis value.
+      data.gyro.value;  // gyro 3values array [0]=x / [1]=y / [2]=z.
+
+      data.value;  // all sensor 9values array [0~2]=accel / [3~5]=gyro /
+                    // [6~8]=mag
+
+#ifdef DEBUG_GYRO_AND_ACCEL
+      Serial.printf("ax:%f  ay:%f  az:%f\r\n", data.accel.x, data.accel.y,
+                    data.accel.z);
+      Serial.printf("gx:%f  gy:%f  gz:%f\r\n", data.gyro.x, data.gyro.y,
+                    data.gyro.z);
+#endif
+      if (std::abs(data.accel.x)  > 2) {
+        Serial.printf("---------X-FALL---------");
+        handleRandomCircles();
+        isFalling = true;
+      } else if (std::abs(data.accel.y) > 2) {
+        Serial.printf("---------Y-FALL---------");
+        handleRandomCircles();
+        isFalling = true;
+      } else if (std::abs(data.accel.z) > 2) {
+        Serial.printf("---------Z-FALL---------");
+        handleRandomCircles();
+        isFalling = true;
+      } else {
+        if (isFalling) {
+          handleRandomCircles();
+          falldecay++;
+          
+          if (falldecay == MAX_DECAY) {
+            isFalling = false;
+            wasFalling = true;
+            falldecay = 0;
+          }
+        } else if (wasFalling) {
+          wasFalling = false;
+          handleRandomCircles();
+        }
+      }
+      M5.Lcd.printf("IMU:\r\n");
+      M5.Lcd.printf("%0.2f %0.2f %0.2f\r\n", data.accel.x, data.accel.y,
+                    data.accel.z);
+      M5.Lcd.printf("%0.2f %0.2f %0.2f\r\n", data.gyro.x, data.gyro.y,
+                    data.gyro.z);
+  }
+  delay(100);
 }
 
 // for ESP-IDF compat
