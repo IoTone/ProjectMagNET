@@ -1,3 +1,10 @@
+/**
+  * AsyncUDPMulticastServer
+  * Based on source from Arduino ESP32 Async UDP 
+  * https://github.com/espressif/arduino-esp32/tree/master/libraries/AsyncUDP/examples
+  * To send
+  * echo "hi" | nc -cu 10.0.0.194 1234
+ **/
 #include "WiFi.h"
 #include "AsyncUDP.h"
 
