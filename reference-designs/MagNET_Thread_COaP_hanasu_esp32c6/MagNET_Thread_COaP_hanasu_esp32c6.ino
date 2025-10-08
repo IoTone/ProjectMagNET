@@ -20,6 +20,8 @@
 
 #define OT_CHANNEL            "24" // TODO: let the device "agent" choose the channel
 #define OT_NETWORK_KEY        "34b45350791f65454b8a4d41d5691674" // keccaksum -N 128 somefile
+#define OT_PANID              "0xface"
+#define OT_MESH_PREFIX        "fdde:ad00:beef:cafe"
                                
 #define OT_MCAST_ADDR         "ff05::abcd"
 #define OT_COAP_RESOURCE_NAME "Lamp"
@@ -62,13 +64,14 @@ const char *otSetupNode[] = {
   "ifconfig", "down",
   // clear the dataset
   "dataset", "clear",
-  // -- set dataset
-  // create a new complete dataset with random data
-  "dataset", "init new",
   // set the channel
   "dataset channel", OT_CHANNEL,
   // set the network key
   "dataset networkkey", OT_NETWORK_KEY,
+  // set the pan id
+  "dataset panid", OT_PANID,
+  // set the mesh local prefix
+  "dataset meshlocalprefix", OT_MESH_PREFIX,
   // commit the dataset
   "dataset", "commit active",
   // -- network start
@@ -90,7 +93,7 @@ const char *otCoapLamp[] = {
   "coap set", "0"
 };
 
-bool otDeviceSetup(const char **otSetupCmds, uint8_t nCmds1, const char **otCoapCmds, uint8_t nCmds2, ot_device_role_t expectedRole) {
+bool otDeviceSetup(const char **otSetupCmds, uint8_t nCmds1, const char **otCoapCmds, uint8_t nCmds2) {
   Serial.println("Starting OpenThread.");
   Serial.println("Running as Lamp (RGB LED) - use the other C6/H2 as a Switch");
   uint8_t i;
@@ -104,19 +107,41 @@ bool otDeviceSetup(const char **otSetupCmds, uint8_t nCmds1, const char **otCoap
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
     return false;
   }
-  Serial.println("OpenThread started.\r\nWaiting for activating correct Device Role.");
-  // wait for the expected Device Role to start
+  Serial.println("OpenThread started.\r\nWaiting for attaching to the network.");
+  // wait to attach (role != DISABLED)
   uint8_t tries = 24;  // 24 x 2.5 sec = 1 min
-  while (tries && otGetDeviceRole() != expectedRole) {
+  while (tries && otGetDeviceRole() == OT_DEVICE_ROLE_DISABLED) {
     Serial.print(".");
     delay(2500);
     tries--;
   }
   Serial.println();
   if (!tries) {
-    log_e("Sorry, Device Role failed by timeout! Current Role: %s.", otGetStringDeviceRole());
+    log_e("Sorry, failed to attach by timeout!");
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
     return false;
+  }
+  // If not leader, set to end device
+  if (otGetDeviceRole() != OT_DEVICE_ROLE_LEADER) {
+    Serial.println("Joining as end device.");
+    if (!otExecCommand("thread", "role enddevice")) {
+      log_e("Failed to set end device role!");
+      rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
+      return false;
+    }
+    // wait for child role
+    tries = 12;  // 12 x 2.5 sec = 30 sec
+    while (tries && otGetDeviceRole() != OT_DEVICE_ROLE_CHILD) {
+      Serial.print(".");
+      delay(2500);
+      tries--;
+    }
+    Serial.println();
+    if (!tries) {
+      log_e("Sorry, failed to become end device by timeout! Current Role: %s.", otGetStringDeviceRole());
+      rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
+      return false;
+    }
   }
   Serial.printf("Device is %s.\r\n", otGetStringDeviceRole());
   for (i = 0; i < nCmds2; i++) {
@@ -140,7 +165,7 @@ void setupNode() {
   bool startedCorrectly = false;
   while (!startedCorrectly) {
     startedCorrectly |=
-      otDeviceSetup(otSetupNode, sizeof(otSetupNode) / sizeof(char *) / 2, otCoapLamp, sizeof(otCoapLamp) / sizeof(char *) / 2, OT_ROLE_LEADER);
+      otDeviceSetup(otSetupNode, sizeof(otSetupNode) / sizeof(char *) / 2, otCoapLamp, sizeof(otCoapLamp) / sizeof(char *) / 2);
     if (!startedCorrectly) {
       Serial.println("Setup Failed...\r\nTrying again...");
     }
