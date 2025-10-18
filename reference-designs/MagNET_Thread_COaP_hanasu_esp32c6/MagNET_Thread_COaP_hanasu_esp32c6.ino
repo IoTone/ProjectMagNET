@@ -19,12 +19,12 @@
 #include "OThreadCLI_Util.h"
 
 #define OT_CHANNEL            "24" // TODO: let the device "agent" choose the channel
-#define OT_NETWORK_KEY        "34b45350791f65454b8a4d41d5691674" // keccaksum -N 128 somefile
+#define OT_NETWORK_KEY        "00112233445566778899aabbccddeeff" // keccaksum -N 128 somefile
 #define OT_PANID              "0xface"
 #define OT_MESH_PREFIX        "fdde:ad00:beef:cafe"
                                
 #define OT_MCAST_ADDR         "ff05::abcd"
-#define OT_COAP_RESOURCE_NAME "Lamp"
+#define OT_COAP_RESOURCE_NAME "chat"
 
 #ifdef LED_BUILTIN
   #define LED_PIN     LED_BUILTIN
@@ -32,6 +32,46 @@
   #define LED_PIN     13
 #endif
 #define RGB_BUILTIN LED_PIN
+
+String hexToAscii(String hex) {
+  String res = "";
+  hex.trim();
+  for (size_t i = 0; i < hex.length(); i += 2) {
+    if (i + 1 < hex.length()) {
+      String byteStr = hex.substring(i, i + 2);
+      char c = (char)strtol(byteStr.c_str(), NULL, 16);
+      res += c;
+    }
+  }
+  return res;
+}
+
+bool otExecCommandMulti(const char* fullcmd) {
+  OThreadCLI.println(fullcmd);
+  char resp[256];
+  unsigned long start = millis();
+  while (millis() - start < 2000) {  // 2s timeout
+    if (OThreadCLI.available()) {
+      size_t len = OThreadCLI.readBytesUntil('\n', resp, sizeof(resp) - 1);
+      if (len > 0) {
+        resp[len] = '\0';
+        String s(resp);
+        s.trim();
+        if (s == "Done") {
+          return true;
+        }
+        if (s.startsWith("Error")) {
+          Serial.println("Command error: " + s);
+          return false;
+        }
+      }
+    }
+    delay(10);
+  }
+  Serial.println("Command timeout");
+  return false;
+}
+
 /*
   Mag*NET Thread CoAP hanasu esp32c6
 
@@ -54,6 +94,15 @@
  *
  */
 
+#include "OThreadCLI.h"
+#include "OThreadCLI_Util.h"
+
+#define USER_BUTTON           9  // C6/H2 Boot button
+#define OT_CHANNEL            "24"
+#define OT_NETWORK_KEY        "084948b37d440b7603a2cef251bbc72c" // keccaksum -N 128 README.md
+#define OT_MCAST_ADDR         "ff05::abcd"
+#define OT_COAP_RESOURCE_NAME "Lamp"
+
 const char *otSetupNode[] = {
   // -- clear/disable all
   // stop CoAP
@@ -64,14 +113,11 @@ const char *otSetupNode[] = {
   "ifconfig", "down",
   // clear the dataset
   "dataset", "clear",
+  // -- set dataset
   // set the channel
   "dataset channel", OT_CHANNEL,
   // set the network key
   "dataset networkkey", OT_NETWORK_KEY,
-  // set the pan id
-  "dataset panid", OT_PANID,
-  // set the mesh local prefix
-  "dataset meshlocalprefix", OT_MESH_PREFIX,
   // commit the dataset
   "dataset", "commit active",
   // -- network start
@@ -81,21 +127,16 @@ const char *otSetupNode[] = {
   "thread", "start"
 };
 
-const char *otCoapLamp[] = {
-  // -- create a multicast IPv6 Address for this device
-  "ipmaddr add", OT_MCAST_ADDR,
-  // -- start and create a CoAP resource
-  // start CoAP as server
-  "coap", "start",
-  // create a CoAP resource
-  "coap resource", OT_COAP_RESOURCE_NAME,
-  // set the CoAP resource initial value
-  "coap set", "0"
+const char *otCoapSwitch[] = {
+  // -- start CoAP as client
+  "coap", "start"
 };
 
-bool otDeviceSetup(const char **otSetupCmds, uint8_t nCmds1, const char **otCoapCmds, uint8_t nCmds2) {
+bool otDeviceSetup(
+  const char **otSetupCmds, uint8_t nCmds1, const char **otCoapCmds, uint8_t nCmds2, ot_device_role_t expectedRole1, ot_device_role_t expectedRole2
+) {
   Serial.println("Starting OpenThread.");
-  Serial.println("Running as Lamp (RGB LED) - use the other C6/H2 as a Switch");
+  Serial.println("Running as Switch - use the BOOT button to toggle the other C6/H2 as a Lamp");
   uint8_t i;
   for (i = 0; i < nCmds1; i++) {
     if (!otExecCommand(otSetupCmds[i * 2], otSetupCmds[i * 2 + 1])) {
@@ -107,41 +148,19 @@ bool otDeviceSetup(const char **otSetupCmds, uint8_t nCmds1, const char **otCoap
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
     return false;
   }
-  Serial.println("OpenThread started.\r\nWaiting for attaching to the network.");
-  // wait to attach (role != DISABLED)
+  Serial.println("OpenThread started.\r\nWaiting for activating correct Device Role.");
+  // wait for the expected Device Role to start
   uint8_t tries = 24;  // 24 x 2.5 sec = 1 min
-  while (tries && otGetDeviceRole() == OT_DEVICE_ROLE_DISABLED) {
+  while (tries && otGetDeviceRole() != expectedRole1 && otGetDeviceRole() != expectedRole2) {
     Serial.print(".");
     delay(2500);
     tries--;
   }
   Serial.println();
   if (!tries) {
-    log_e("Sorry, failed to attach by timeout!");
+    log_e("Sorry, Device Role failed by timeout! Current Role: %s.", otGetStringDeviceRole());
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
     return false;
-  }
-  // If not leader, set to end device
-  if (otGetDeviceRole() != OT_DEVICE_ROLE_LEADER) {
-    Serial.println("Joining as end device.");
-    if (!otExecCommand("thread", "role enddevice")) {
-      log_e("Failed to set end device role!");
-      rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
-      return false;
-    }
-    // wait for child role
-    tries = 12;  // 12 x 2.5 sec = 30 sec
-    while (tries && otGetDeviceRole() != OT_DEVICE_ROLE_CHILD) {
-      Serial.print(".");
-      delay(2500);
-      tries--;
-    }
-    Serial.println();
-    if (!tries) {
-      log_e("Sorry, failed to become end device by timeout! Current Role: %s.", otGetStringDeviceRole());
-      rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
-      return false;
-    }
   }
   Serial.printf("Device is %s.\r\n", otGetStringDeviceRole());
   for (i = 0; i < nCmds2; i++) {
@@ -155,8 +174,8 @@ bool otDeviceSetup(const char **otSetupCmds, uint8_t nCmds1, const char **otCoap
     return false;
   }
   Serial.println("OpenThread setup done. Node is ready.");
-  // all fine! LED goes Green
-  rgbLedWrite(RGB_BUILTIN, 0, 64, 8);  // GREEN ... Lamp is ready!
+  // all fine! LED goes and stays Blue
+  rgbLedWrite(RGB_BUILTIN, 0, 0, 64);  // BLUE ... Switch is ready!
   return true;
 }
 
@@ -164,43 +183,74 @@ void setupNode() {
   // tries to set the Thread Network node and only returns when succeeded
   bool startedCorrectly = false;
   while (!startedCorrectly) {
-    startedCorrectly |=
-      otDeviceSetup(otSetupNode, sizeof(otSetupNode) / sizeof(char *) / 2, otCoapLamp, sizeof(otCoapLamp) / sizeof(char *) / 2);
+    startedCorrectly |= otDeviceSetup(
+      otSetupNode, sizeof(otSetupNode) / sizeof(char *) / 2, otCoapSwitch, sizeof(otCoapSwitch) / sizeof(char *) / 2, OT_ROLE_CHILD, OT_ROLE_ROUTER
+    );
     if (!startedCorrectly) {
       Serial.println("Setup Failed...\r\nTrying again...");
     }
   }
 }
 
-// this function is used by the Lamp mode to listen for CoAP frames from the Switch Node
-void otCOAPListen() {
-  // waits for the client to send a CoAP request
-  char cliResp[256] = {0};
-  size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
-  cliResp[len - 1] = '\0';
-  if (strlen(cliResp)) {
-    String sResp(cliResp);
-    // cliResp shall be something like:
-    // "coap request from fd0c:94df:f1ae:b39a:ec47:ec6d:15e8:804a PUT with payload: 30"
-    // payload may be 30 or 31 (HEX) '0' or '1' (ASCII)
-    log_d("Msg[%s]", cliResp);
-    if (sResp.startsWith("coap request from") && sResp.indexOf("PUT") > 0) {
-      char payload = sResp.charAt(sResp.length() - 1);  //  last character in the payload
-      log_i("CoAP PUT [%s]\r\n", payload == '0' ? "OFF" : "ON");
-      if (payload == '0') {
-        for (int16_t c = 248; c > 16; c -= 8) {
-          rgbLedWrite(RGB_BUILTIN, c, c, c);  // ramp down
-          delay(5);
-        }
-        rgbLedWrite(RGB_BUILTIN, 0, 0, 0);  // Lamp Off
-      } else {
-        for (int16_t c = 16; c < 248; c += 8) {
-          rgbLedWrite(RGB_BUILTIN, c, c, c);  // ramp up
-          delay(5);
-        }
-        rgbLedWrite(RGB_BUILTIN, 255, 255, 255);  // Lamp On
+// Sends the CoAP frame to the Lamp node
+bool otCoapPUT(bool lampState) {
+  bool gotDone = false, gotConfirmation = false;
+  String coapMsg = "coap put ";
+  coapMsg += OT_MCAST_ADDR;
+  coapMsg += " ";
+  coapMsg += OT_COAP_RESOURCE_NAME;
+  coapMsg += " con 0";
+
+  // final command is "coap put ff05::abcd Lamp con 1" or "coap put ff05::abcd Lamp con 0"
+  if (lampState) {
+    coapMsg[coapMsg.length() - 1] = '1';
+  }
+  OThreadCLI.println(coapMsg.c_str());
+  log_d("Send CLI CMD:[%s]", coapMsg.c_str());
+
+  char cliResp[256];
+  // waits for the CoAP confirmation and Done message for about 1.25 seconds
+  // timeout is based on Stream::setTimeout()
+  // Example of the expected confirmation response: "coap response from fdae:3289:1783:5c3f:fd84:c714:7e83:6122"
+  uint8_t tries = 5;
+  *cliResp = '\0';
+  while (tries && !(gotDone && gotConfirmation)) {
+    size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
+    cliResp[len - 1] = '\0';
+    log_d("Try[%d]::MSG[%s]", tries, cliResp);
+    if (strlen(cliResp)) {
+      if (!strncmp(cliResp, "coap response from", 18)) {
+        gotConfirmation = true;
+      }
+      if (!strncmp(cliResp, "Done", 4)) {
+        gotDone = true;
       }
     }
+    tries--;
+  }
+  if (gotDone && gotConfirmation) {
+    return true;
+  }
+  return false;
+}
+
+// this function is used by the Switch mode to check the BOOT Button and send the user action to the Lamp node
+void checkUserButton() {
+  static long unsigned int lastPress = 0;
+  const long unsigned int debounceTime = 500;
+  static bool lastLampState = true;  // first button press will turn the Lamp OFF from initial Green
+
+  pinMode(USER_BUTTON, INPUT_PULLUP);  // C6/H2 User Button
+  if (millis() > lastPress + debounceTime && digitalRead(USER_BUTTON) == LOW) {
+    lastLampState = !lastLampState;
+    if (!otCoapPUT(lastLampState)) {  // failed: Lamp Node is not responding due to be off or unreachable
+      // timeout from the CoAP PUT message... restart the node.
+      rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... something failed!
+      Serial.println("Resetting the Node as Switch... wait.");
+      // start over...
+      setupNode();
+    }
+    lastPress = millis();
   }
 }
 
@@ -211,10 +261,10 @@ void setup() {
   OThreadCLI.begin(false);     // No AutoStart is necessary
   OThreadCLI.setTimeout(250);  // waits 250ms for the OpenThread CLI response
   setupNode();
-  // LED goes Green when all is ready and Red when failed.
+  // LED goes and keeps Blue when all is ready and Red when failed.
 }
 
 void loop() {
-  otCOAPListen();
+  checkUserButton();
   delay(10);
 }

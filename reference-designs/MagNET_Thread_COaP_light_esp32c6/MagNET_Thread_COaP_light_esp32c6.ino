@@ -6,6 +6,16 @@
 #define OT_MCAST_ADDR         "ff05::abcd"
 #define OT_COAP_RESOURCE_NAME "Lamp"
 
+// Additional changes for m5nanoc6
+#define M5NANO_C6_RGB_LED_PWR_PIN  19
+#define M5NANO_C6_RGB_LED_DATA_PIN 20
+#ifdef LED_BUILTIN
+  #define LED_PIN     LED_BUILTIN
+#else
+  #define LED_PIN     13
+#endif
+#define RGB_BUILTIN LED_PIN
+
 const char *otSetupLeader[] = {
   // -- clear/disable all
   // stop CoAP
