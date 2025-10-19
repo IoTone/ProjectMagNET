@@ -1,12 +1,20 @@
 #include "OThreadCLI.h"
 #include "OThreadCLI_Util.h"
 
+#include <Adafruit_NeoPixel.h>
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+#include <M5Unified.h>
+#endif
+
 #define OT_CHANNEL            "24"
 #define OT_NETWORK_KEY        "00112233445566778899aabbccddeeff"
 #define OT_MCAST_ADDR         "ff05::abcd"
 #define OT_COAP_RESOURCE_NAME "Lamp"
 
 // Additional changes for m5nanoc6
+#define BUTTON      9
+#define LED         2
+#define NUMPIXELS   1
 #define M5NANO_C6_RGB_LED_PWR_PIN  19
 #define M5NANO_C6_RGB_LED_DATA_PIN 20
 #ifdef LED_BUILTIN
@@ -15,6 +23,12 @@
   #define LED_PIN     13
 #endif
 #define RGB_BUILTIN LED_PIN
+
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+  Adafruit_NeoPixel pixels(NUMPIXELS, M5NANO_C6_RGB_LED_DATA_PIN, NEO_GRB + NEO_KHZ800);
+#else
+  Adafruit_NeoPixel pixels(NUMPIXELS, LED, NEO_GRB + NEO_KHZ800);
+#endif
 
 const char *otSetupLeader[] = {
   // -- clear/disable all
@@ -65,7 +79,13 @@ bool otDeviceSetup(const char **otSetupCmds, uint8_t nCmds1, const char **otCoap
   }
   if (i != nCmds1) {
     log_e("Sorry, OpenThread Network setup failed!");
+  #if ( defined(ARDUINO_M5STACK_NANOC6) )
+    // RED
+    pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+    pixels.show();
+  #else
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
+  #endif
     return false;
   }
   Serial.println("OpenThread started.\r\nWaiting for activating correct Device Role.");
@@ -79,7 +99,13 @@ bool otDeviceSetup(const char **otSetupCmds, uint8_t nCmds1, const char **otCoap
   Serial.println();
   if (!tries) {
     log_e("Sorry, Device Role failed by timeout! Current Role: %s.", otGetStringDeviceRole());
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+    // RED
+    pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+    pixels.show();
+#else
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
+#endif
     return false;
   }
   Serial.printf("Device is %s.\r\n", otGetStringDeviceRole());
@@ -90,12 +116,24 @@ bool otDeviceSetup(const char **otSetupCmds, uint8_t nCmds1, const char **otCoap
   }
   if (i != nCmds2) {
     log_e("Sorry, OpenThread CoAP setup failed!");
+    #if ( defined(ARDUINO_M5STACK_NANOC6) )
+    // RED
+    pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+    pixels.show();
+#else
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
+#endif
     return false;
   }
   Serial.println("OpenThread setup done. Node is ready.");
   // all fine! LED goes Green
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+    // GREEN
+    pixels.setPixelColor(0, pixels.Color(0, 255, 0));
+    pixels.show();
+#else
   rgbLedWrite(RGB_BUILTIN, 0, 64, 8);  // GREEN ... Lamp is ready!
+#endif
   return true;
 }
 
@@ -128,16 +166,38 @@ void otCOAPListen() {
       log_i("CoAP PUT [%s]\r\n", payload == '0' ? "OFF" : "ON");
       if (payload == '0') {
         for (int16_t c = 248; c > 16; c -= 8) {
+        #if ( defined(ARDUINO_M5STACK_NANOC6) )
+          // RED
+          pixels.setPixelColor(0, pixels.Color(c, c, c));
+          pixels.show();
+        #else
           rgbLedWrite(RGB_BUILTIN, c, c, c);  // ramp down
+        #endif
           delay(5);
         }
-        rgbLedWrite(RGB_BUILTIN, 0, 0, 0);  // Lamp Off
+        #if ( defined(ARDUINO_M5STACK_NANOC6) )
+          pixels.clear();
+        #else
+          rgbLedWrite(RGB_BUILTIN, 0, 0, 0);  // Lamp Off
+        #endif
       } else {
         for (int16_t c = 16; c < 248; c += 8) {
+        #if ( defined(ARDUINO_M5STACK_NANOC6) )
+          // RED
+          pixels.setPixelColor(0, pixels.Color(c, c, c));
+          pixels.show();
+        #else
           rgbLedWrite(RGB_BUILTIN, c, c, c);  // ramp up
+        #endif
           delay(5);
         }
+      #if ( defined(ARDUINO_M5STACK_NANOC6) )
+        // RED
+        pixels.setPixelColor(0, pixels.Color(255, 255, 255));
+        pixels.show();
+      #else
         rgbLedWrite(RGB_BUILTIN, 255, 255, 255);  // Lamp On
+      #endif
       }
     }
   }
@@ -146,7 +206,24 @@ void otCOAPListen() {
 void setup() {
   Serial.begin(115200);
   // LED starts RED, indicating not connected to Thread network.
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+  pinMode(M5NANO_C6_RGB_LED_PWR_PIN, OUTPUT);
+  digitalWrite(M5NANO_C6_RGB_LED_PWR_PIN, HIGH);
+  auto cfg = M5.config();
+  M5.begin(cfg);
+
+  pixels.begin();
+  pinMode(BUTTON, INPUT_PULLUP);
+
+  delay(200);
+
+  // RED
+  pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+  pixels.show();
+#else
   rgbLedWrite(RGB_BUILTIN, 64, 0, 0);
+#endif
+  
   OThreadCLI.begin(false);     // No AutoStart is necessary
   OThreadCLI.setTimeout(250);  // waits 250ms for the OpenThread CLI response
   setupNode();
@@ -156,4 +233,7 @@ void setup() {
 void loop() {
   otCOAPListen();
   delay(10);
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+  M5.update();
+#endif
 }
