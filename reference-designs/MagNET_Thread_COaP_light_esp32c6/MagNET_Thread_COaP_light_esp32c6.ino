@@ -177,6 +177,7 @@ void otCOAPListen() {
         }
         #if ( defined(ARDUINO_M5STACK_NANOC6) )
           pixels.clear();
+          pixels.show();
         #else
           rgbLedWrite(RGB_BUILTIN, 0, 0, 0);  // Lamp Off
         #endif

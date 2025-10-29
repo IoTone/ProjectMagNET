@@ -15,16 +15,55 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/*
+  Mag*NET Thread CoAP hanasu esp32c6
+
+  The goal is a generic OpenThread based COAP chat server that forms a P2P mesh
+  This prototype will just converse autonomously with anyone on the same network channel
+
+  ## Design Goals
+
+  - ZeroConf
+  - has a serial UART interface for configuration and communication from a host agent
+  - Doesn't require special firmware, partitions or compile time settings on ESP32C6 devices 
+  (unlike the zigbee code)
+  - Able to switch between modes of operation, leader, router, or end device
+
+*/
+/**
+ *
+ * Based on a mix of examples from 
+ * https://github.com/espressif/arduino-esp32/tree/master/libraries/OpenThread/examples/CLI/COAP
+ *
+ */
+
 #include "OThreadCLI.h"
 #include "OThreadCLI_Util.h"
 
+#include <Adafruit_NeoPixel.h>
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+#include <M5Unified.h>
+#endif
+#include <Regexp.h> 
+
+
+
+
+#define BUTTON      9   // C6/H2 Boot button
+#define USER_BUTTON           BUTTON
 #define OT_CHANNEL            "24" // TODO: let the device "agent" choose the channel
 #define OT_NETWORK_KEY        "00112233445566778899aabbccddeeff" // keccaksum -N 128 somefile
-#define OT_PANID              "0xface"
-#define OT_MESH_PREFIX        "fdde:ad00:beef:cafe"
+// #define OT_PANID              "0xface"
+// #define OT_MESH_PREFIX        "fdde:ad00:beef:cafe"
                                
 #define OT_MCAST_ADDR         "ff05::abcd"
-#define OT_COAP_RESOURCE_NAME "chat"
+#define OT_COAP_RESOURCE_NAME "Lamp"
+
+// Additional changes for m5nanoc6
+#define LED         2
+#define NUMPIXELS   1
+#define M5NANO_C6_RGB_LED_PWR_PIN  19
+#define M5NANO_C6_RGB_LED_DATA_PIN 20
 
 #ifdef LED_BUILTIN
   #define LED_PIN     LED_BUILTIN
@@ -32,6 +71,12 @@
   #define LED_PIN     13
 #endif
 #define RGB_BUILTIN LED_PIN
+
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+  Adafruit_NeoPixel pixels(NUMPIXELS, M5NANO_C6_RGB_LED_DATA_PIN, NEO_GRB + NEO_KHZ800);
+#else
+  Adafruit_NeoPixel pixels(NUMPIXELS, LED, NEO_GRB + NEO_KHZ800);
+#endif
 
 String hexToAscii(String hex) {
   String res = "";
@@ -72,38 +117,9 @@ bool otExecCommandMulti(const char* fullcmd) {
   return false;
 }
 
-/*
-  Mag*NET Thread CoAP hanasu esp32c6
 
-  The goal is a generic OpenThread based COAP chat server that forms a P2P mesh
-  This prototype will just converse autonomously with anyone on the same network channel
 
-  ## Design Goals
-
-  - ZeroConf
-  - has a serial UART interface for configuration and communication from a host agent
-  - Doesn't require special firmware, partitions or compile time settings on ESP32C6 devices 
-  (unlike the zigbee code)
-  - Able to switch between modes of operation, leader, router, or end device
-
-*/
-/**
- *
- * Based on a mix of examples from 
- * https://github.com/espressif/arduino-esp32/tree/master/libraries/OpenThread/examples/CLI/COAP
- *
- */
-
-#include "OThreadCLI.h"
-#include "OThreadCLI_Util.h"
-
-#define USER_BUTTON           9  // C6/H2 Boot button
-#define OT_CHANNEL            "24"
-#define OT_NETWORK_KEY        "084948b37d440b7603a2cef251bbc72c" // keccaksum -N 128 README.md
-#define OT_MCAST_ADDR         "ff05::abcd"
-#define OT_COAP_RESOURCE_NAME "Lamp"
-
-const char *otSetupNode[] = {
+const char *otSetupChildNode[] = {
   // -- clear/disable all
   // stop CoAP
   "coap", "stop",
@@ -127,9 +143,47 @@ const char *otSetupNode[] = {
   "thread", "start"
 };
 
+const char *otSetupLeader[] = {
+  // -- clear/disable all
+  // stop CoAP
+  "coap", "stop",
+  // stop Thread
+  "thread", "stop",
+  // stop the interface
+  "ifconfig", "down",
+  // clear the dataset
+  "dataset", "clear",
+  // -- set dataset
+  // create a new complete dataset with random data
+  "dataset", "init new",
+  // set the channel
+  "dataset channel", OT_CHANNEL,
+  // set the network key
+  "dataset networkkey", OT_NETWORK_KEY,
+  // commit the dataset
+  "dataset", "commit active",
+  // -- network start
+  // start the interface
+  "ifconfig", "up",
+  // start the Thread network
+  "thread", "start"
+};
+
 const char *otCoapSwitch[] = {
   // -- start CoAP as client
   "coap", "start"
+};
+
+const char *otCoapLamp[] = {
+  // -- create a multicast IPv6 Address for this device
+  "ipmaddr add", OT_MCAST_ADDR,
+  // -- start and create a CoAP resource
+  // start CoAP as server
+  "coap", "start",
+  // create a CoAP resource
+  "coap resource", OT_COAP_RESOURCE_NAME,
+  // set the CoAP resource initial value
+  "coap set", "0"
 };
 
 bool otDeviceSetup(
@@ -145,7 +199,13 @@ bool otDeviceSetup(
   }
   if (i != nCmds1) {
     log_e("Sorry, OpenThread Network setup failed!");
+  #if ( defined(ARDUINO_M5STACK_NANOC6) )
+    // RED
+    pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+    pixels.show();
+  #else
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
+  #endif
     return false;
   }
   Serial.println("OpenThread started.\r\nWaiting for activating correct Device Role.");
@@ -159,7 +219,13 @@ bool otDeviceSetup(
   Serial.println();
   if (!tries) {
     log_e("Sorry, Device Role failed by timeout! Current Role: %s.", otGetStringDeviceRole());
+  #if ( defined(ARDUINO_M5STACK_NANOC6) )
+    // RED
+    pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+    pixels.show();
+  #else
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
+  #endif
     return false;
   }
   Serial.printf("Device is %s.\r\n", otGetStringDeviceRole());
@@ -170,22 +236,46 @@ bool otDeviceSetup(
   }
   if (i != nCmds2) {
     log_e("Sorry, OpenThread CoAP setup failed!");
+  #if ( defined(ARDUINO_M5STACK_NANOC6) )
+    // RED
+    pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+    pixels.show();
+  #else
     rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... failed!
+  #endif
     return false;
   }
   Serial.println("OpenThread setup done. Node is ready.");
   // all fine! LED goes and stays Blue
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+  // BLUE
+  pixels.setPixelColor(0, pixels.Color(0, 0, 255));
+  pixels.show();
+#else
   rgbLedWrite(RGB_BUILTIN, 0, 0, 64);  // BLUE ... Switch is ready!
+#endif
   return true;
 }
 
-void setupNode() {
+void setupChildNode() {
   // tries to set the Thread Network node and only returns when succeeded
   bool startedCorrectly = false;
   while (!startedCorrectly) {
     startedCorrectly |= otDeviceSetup(
-      otSetupNode, sizeof(otSetupNode) / sizeof(char *) / 2, otCoapSwitch, sizeof(otCoapSwitch) / sizeof(char *) / 2, OT_ROLE_CHILD, OT_ROLE_ROUTER
+      otSetupChildNode, sizeof(otSetupChildNode) / sizeof(char *) / 2, otCoapSwitch, sizeof(otCoapSwitch) / sizeof(char *) / 2, OT_ROLE_CHILD, OT_ROLE_ROUTER
     );
+    if (!startedCorrectly) {
+      Serial.println("Setup Failed...\r\nTrying again...");
+    }
+  }
+}
+
+void setupLeaderNode() {
+  // tries to set the Thread Network node and only returns when succeeded
+  bool startedCorrectly = false;
+  while (!startedCorrectly) {
+    startedCorrectly |=
+      otDeviceSetup(otSetupLeader, sizeof(otSetupLeader) / sizeof(char *) / 2, otCoapLamp, sizeof(otCoapLamp) / sizeof(char *) / 2, OT_ROLE_LEADER, OT_ROLE_LEADER);
     if (!startedCorrectly) {
       Serial.println("Setup Failed...\r\nTrying again...");
     }
@@ -240,15 +330,26 @@ void checkUserButton() {
   const long unsigned int debounceTime = 500;
   static bool lastLampState = true;  // first button press will turn the Lamp OFF from initial Green
 
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+  if (M5.BtnA.wasReleased()) {
+    Serial.println("Button Released");
+#else
   pinMode(USER_BUTTON, INPUT_PULLUP);  // C6/H2 User Button
   if (millis() > lastPress + debounceTime && digitalRead(USER_BUTTON) == LOW) {
+#endif
     lastLampState = !lastLampState;
     if (!otCoapPUT(lastLampState)) {  // failed: Lamp Node is not responding due to be off or unreachable
       // timeout from the CoAP PUT message... restart the node.
+    #if ( defined(ARDUINO_M5STACK_NANOC6) )
+      // RED
+      pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+      pixels.show();
+    #else
       rgbLedWrite(RGB_BUILTIN, 255, 0, 0);  // RED ... something failed!
+    #endif
       Serial.println("Resetting the Node as Switch... wait.");
       // start over...
-      setupNode();
+      setupChildNode();
     }
     lastPress = millis();
   }
@@ -257,14 +358,121 @@ void checkUserButton() {
 void setup() {
   Serial.begin(115200);
   // LED starts RED, indicating not connected to Thread network.
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+  pinMode(M5NANO_C6_RGB_LED_PWR_PIN, OUTPUT);
+  digitalWrite(M5NANO_C6_RGB_LED_PWR_PIN, HIGH);
+  auto cfg = M5.config();
+  M5.begin(cfg);
+
+  pixels.begin();
+  pinMode(BUTTON, INPUT_PULLUP);
+
+  delay(200);
+
+  // RED
+  pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+  pixels.show();
+#else
   rgbLedWrite(RGB_BUILTIN, 64, 0, 0);
+#endif
   OThreadCLI.begin(false);     // No AutoStart is necessary
   OThreadCLI.setTimeout(250);  // waits 250ms for the OpenThread CLI response
-  setupNode();
+
+
+  // Perform up to 5 scans to find a match for channel 24 and our sessionkey
+  // If we don't find it, it's ok to go ahead and elect ourselves leader
+  int count = 0;
+  // while(otGetDeviceRole() < OT_ROLE_CHILD) {
+  while(count < 10) {
+    // bool otGetRespCmd(const char *cmd, char *resp = NULL, uint32_t respTimeout = 5000);
+    /* if (!otPrintRespCLI("scan", Serial, 3000)) {
+      Serial.println("Scan Failed...");
+    }
+    */
+    // Buffer to hold CLI response
+    char respBuf[1024];  
+    memset(respBuf, 0, sizeof(respBuf));
+
+    // Run an active scan
+    int ret = otGetRespCmd("scan", respBuf, /* sizeof(respBuf), */ 5000);
+
+    if (ret == 1) {
+      Serial.println("Scan results:");
+      Serial.println(respBuf);
+
+      // Example parsing: each line looks like
+      // " | Channel | PAN ID | Ext PAN ID | RSSI | LQI |"
+      char *line = strtok(respBuf, "\r\n");
+
+      while (line != NULL) {
+        // Serial.print("Found: ");
+        // Serial.println(line);
+
+        //
+        // Parse the scan for an existin channel that matches ours
+        //
+        MatchState ms;
+        // ms.Target((char*)line);
+        ms.Target(line);
+        char result[32];
+
+        
+        // Regex pattern
+        const char *pattern =  "^|%s*(%x+)%s*|%s*(%x+)%s*|%s*(-?%d+)%s*|%s*(-?%d+)%s*|%s*(-?%d+)%s*|%s*$";
+
+        if (ms.Match(pattern) == REGEXP_MATCHED) {
+          ms.GetCapture(result, 2);
+          // int chan = atoi(result);
+          if (strcmp(result, OT_CHANNEL) == 0) {
+            Serial.print("Found target channel: ");
+            Serial.print(result);
+            Serial.print("\n");
+            //
+            // We can break now and setup ourselves as a child
+            count = -1;
+            break;
+          }
+          /*
+          ms.GetCapture(result, 0); Serial.print("PAN: "); Serial.println(result);
+          ms.GetCapture(result, 1); Serial.print("MAC: "); Serial.println(result);
+          ms.GetCapture(result, 2); Serial.print("Channel: "); Serial.println(result);
+          ms.GetCapture(result, 3); Serial.print("dBm: "); Serial.println(result);
+          ms.GetCapture(result, 4); Serial.print("LQI: "); Serial.println(result);
+          */
+          
+        } else {
+          Serial.println("No match");
+        }
+
+        line = strtok(NULL, "\r\n");
+      }
+
+      
+    } else {
+      Serial.printf("Scan failed, error=%d\n", ret);
+    }
+    if (count >= 0) {
+      delay(5000);
+      count++;
+    } else {
+      break;
+    }
+  }
+
+  if (count >= 0) {
+    Serial.println("Setting up a leader node");
+    setupLeaderNode();
+  } else {
+    Serial.println("Setting up a child node");
+    setupChildNode();
+  }
   // LED goes and keeps Blue when all is ready and Red when failed.
 }
 
 void loop() {
   checkUserButton();
   delay(10);
+#if ( defined(ARDUINO_M5STACK_NANOC6) )
+  M5.update();
+#endif
 }
