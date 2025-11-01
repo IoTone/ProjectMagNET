@@ -91,6 +91,44 @@ String hexToAscii(String hex) {
   return res;
 }
 
+// this function is used to listen for CoAP chat messages
+void otChatListen() {
+  // waits for the client to send a CoAP request
+  char cliResp[512] = {0};
+  size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
+  cliResp[len] = '\0';  // ensure null-terminated
+  if (strlen(cliResp)) {
+    String sResp(cliResp);
+    sResp.trim();
+    log_d("CLI[%s]", cliResp);
+    if (sResp.startsWith("coap request from")) {
+      // Parse: coap request from [addr] METHOD with payload: hex
+      size_t fromPos = sResp.indexOf("from ") + 5;
+      size_t endBracket = sResp.indexOf(']', fromPos);
+      if (endBracket != -1) {
+        String fromAddr = sResp.substring(fromPos, endBracket);
+        size_t methodStart = endBracket + 1;
+        while (methodStart < sResp.length() && sResp[methodStart] == ' ') methodStart++;
+        size_t methodEnd = sResp.indexOf(' ', methodStart);
+        if (methodEnd == -1) methodEnd = sResp.length();
+        String method = sResp.substring(methodStart, methodEnd);
+        size_t payloadStart = sResp.indexOf("payload: ", methodEnd);
+        if (payloadStart != -1) {
+          payloadStart += 9;
+          String hexPayload = sResp.substring(payloadStart);
+          hexPayload.trim();
+          String textMsg = hexToAscii(hexPayload);
+          Serial.println("Received from " + fromAddr + " (" + method + "): " + textMsg);
+          // Optional: blink LED to indicate message received
+          rgbLedWrite(RGB_BUILTIN, 0, 0, 255);  // Blue flash
+          delay(100);
+          rgbLedWrite(RGB_BUILTIN, 0, 64, 8);  // Back to green
+        }
+      }
+    }
+  }
+}
+
 bool otExecCommandMulti(const char* fullcmd) {
   OThreadCLI.println(fullcmd);
   char resp[256];
@@ -471,6 +509,38 @@ void setup() {
 
 void loop() {
   checkUserButton();
+  otChatListen();
+  if (Serial.available()) {
+    Serial.println("Sending chat message");
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    if (input.length() > 0) {
+      bool isDirect = input.startsWith("@");
+      String addr, msg;
+      if (isDirect) {
+        size_t colonPos = input.indexOf(':', 1);
+        if (colonPos != -1) {
+          addr = input.substring(1, colonPos);
+          msg = input.substring(colonPos + 1);
+          msg.trim();
+        } else {
+          Serial.println("Invalid direct format. Use @addr: message");
+          return;
+        }
+      } else {
+        addr = String(OT_MCAST_ADDR);
+        msg = input;
+      }
+      if (msg.length() > 0) {
+        String fullcmd = "coap post " + addr + " " + OT_COAP_RESOURCE_NAME + " con " + msg;
+        if (otExecCommandMulti(fullcmd.c_str())) {
+          Serial.println("Sent to " + (isDirect ? addr : "multicast") + ": " + msg);
+        } else {
+          Serial.println("Failed to send message.");
+        }
+      }
+    }
+  }
   delay(10);
 #if ( defined(ARDUINO_M5STACK_NANOC6) )
   M5.update();

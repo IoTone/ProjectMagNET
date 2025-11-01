@@ -200,6 +200,8 @@ void otCOAPListen() {
         rgbLedWrite(RGB_BUILTIN, 255, 255, 255);  // Lamp On
       #endif
       }
+    } else {
+      Serial.println("Recevied unexpected message: ");
     }
   }
 }
