@@ -47,7 +47,7 @@
 #include <Regexp.h> 
 
 
-
+#define SWVERSION "0.0.2"
 
 #define BUTTON      9   // C6/H2 Boot button
 #define USER_BUTTON           BUTTON
@@ -77,6 +77,25 @@
 #else
   Adafruit_NeoPixel pixels(NUMPIXELS, LED, NEO_GRB + NEO_KHZ800);
 #endif
+
+static String eui64 = "0x0000";
+
+String getThreadEui64() {
+  // Execute CLI command to get EUI-64
+  OThreadCLI.println("eui64");
+  delay(100);  // Brief wait for response
+  char resp[64] = {0};
+  size_t len = OThreadCLI.readBytesUntil('\n', resp, sizeof(resp) - 1);
+  if (len > 0) {
+    resp[len] = '\0';
+    String s(resp);
+    s.trim();
+    if (s.length() == 16 && s.indexOf(':') == -1) {  // Expect hex like "0011223344556677"
+      return s;  // Full 16-char hex EUI-64
+    }
+  }
+  return "0000000000000000";  // Fallback
+}
 
 String hexToAscii(String hex) {
   String res = "";
@@ -421,7 +440,7 @@ void setup() {
   // If we don't find it, it's ok to go ahead and elect ourselves leader
   int count = 0;
   // while(otGetDeviceRole() < OT_ROLE_CHILD) {
-  while(count < 10) {
+  while(count < 2) {
     // bool otGetRespCmd(const char *cmd, char *resp = NULL, uint32_t respTimeout = 5000);
     /* if (!otPrintRespCLI("scan", Serial, 3000)) {
       Serial.println("Scan Failed...");
@@ -505,6 +524,10 @@ void setup() {
     setupChildNode();
   }
   // LED goes and keeps Blue when all is ready and Red when failed.
+  eui64 = getThreadEui64();
+  String startup = "Starting MagNET Thread CoAP Hanasu " + String(SWVERSION) + String(" Thread EUI64: ") + eui64;
+  Serial.println(startup);
+  // Serial.println(std::string("Starting MagNET Thread CoAP Hanasu " + std::string(SWVERSION)).c_str() + std::string(" EUI64:").c_str());
 }
 
 void loop() {
