@@ -1,3 +1,5 @@
+#define CORE_DEBUG_LEVEL 4
+#define LOG_CAL_LEVEL CORE_DEBUG_LEVEL
 /**
  * Portions by 2025 IoTone Japan
  */
@@ -47,7 +49,7 @@
 #include <Regexp.h> 
 
 
-#define SWVERSION "0.0.2"
+#define SWVERSION "0.0.3"
 
 #define BUTTON      9   // C6/H2 Boot button
 #define USER_BUTTON           BUTTON
@@ -108,6 +110,63 @@ String hexToAscii(String hex) {
     }
   }
   return res;
+}
+
+// this function is used by the Lamp mode to listen for CoAP frames from the Switch Node
+void otCOAPListen() {
+  // waits for the client to send a CoAP request
+  char cliResp[256] = {0};
+  size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
+  cliResp[len - 1] = '\0';
+  if (strlen(cliResp)) {
+    String sResp(cliResp);
+    // cliResp shall be something like:
+    // "coap request from fd0c:94df:f1ae:b39a:ec47:ec6d:15e8:804a PUT with payload: 30"
+    // payload may be 30 or 31 (HEX) '0' or '1' (ASCII)
+    log_d("Msg[%s]", cliResp);
+    if (sResp.startsWith("coap request from") && sResp.indexOf("PUT") > 0) {
+      char payload = sResp.charAt(sResp.length() - 1);  //  last character in the payload
+      log_i("CoAP PUT [%s]\r\n", payload == '0' ? "OFF" : "ON");
+      if (payload == '0') {
+        for (int16_t c = 248; c > 16; c -= 8) {
+        #if ( defined(ARDUINO_M5STACK_NANOC6) )
+          // RED
+          pixels.setPixelColor(0, pixels.Color(c, c, c));
+          pixels.show();
+        #else
+          rgbLedWrite(RGB_BUILTIN, c, c, c);  // ramp down
+        #endif
+          delay(5);
+        }
+        #if ( defined(ARDUINO_M5STACK_NANOC6) )
+          pixels.clear();
+          pixels.show();
+        #else
+          rgbLedWrite(RGB_BUILTIN, 0, 0, 0);  // Lamp Off
+        #endif
+      } else {
+        for (int16_t c = 16; c < 248; c += 8) {
+        #if ( defined(ARDUINO_M5STACK_NANOC6) )
+          // RED
+          pixels.setPixelColor(0, pixels.Color(c, c, c));
+          pixels.show();
+        #else
+          rgbLedWrite(RGB_BUILTIN, c, c, c);  // ramp up
+        #endif
+          delay(5);
+        }
+      #if ( defined(ARDUINO_M5STACK_NANOC6) )
+        // RED
+        pixels.setPixelColor(0, pixels.Color(255, 255, 255));
+        pixels.show();
+      #else
+        rgbLedWrite(RGB_BUILTIN, 255, 255, 255);  // Lamp On
+      #endif
+      }
+    } else {
+      Serial.println("Received unexpected message: ");
+    }
+  }
 }
 
 // this function is used to listen for CoAP chat messages
@@ -247,7 +306,13 @@ bool otDeviceSetup(
   const char **otSetupCmds, uint8_t nCmds1, const char **otCoapCmds, uint8_t nCmds2, ot_device_role_t expectedRole1, ot_device_role_t expectedRole2
 ) {
   Serial.println("Starting OpenThread.");
-  Serial.println("Running as Switch - use the BOOT button to toggle the other C6/H2 as a Lamp");
+  bool isLeader = (expectedRole1 == expectedRole2);
+
+  if (isLeader) {
+    Serial.println("Running as Lamp (RGB LED) - use the other C6/H2 as a Switch");
+  } else {
+    Serial.println("Running as Switch - use the BOOT button to toggle the other C6/H2 as a Lamp");
+  }
   uint8_t i;
   for (i = 0; i < nCmds1; i++) {
     if (!otExecCommand(otSetupCmds[i * 2], otSetupCmds[i * 2 + 1])) {
@@ -268,10 +333,19 @@ bool otDeviceSetup(
   Serial.println("OpenThread started.\r\nWaiting for activating correct Device Role.");
   // wait for the expected Device Role to start
   uint8_t tries = 24;  // 24 x 2.5 sec = 1 min
-  while (tries && otGetDeviceRole() != expectedRole1 && otGetDeviceRole() != expectedRole2) {
-    Serial.print(".");
-    delay(2500);
-    tries--;
+  if (isLeader) {
+    while (tries && otGetDeviceRole() != expectedRole1) {
+      Serial.print(".");
+      delay(2500);
+      tries--;
+    }
+  } else {
+    while (tries && otGetDeviceRole() != expectedRole1 && otGetDeviceRole() != expectedRole2) {
+      Serial.print(".");
+      // Serial.print(otGetDeviceRole());
+      delay(2500);
+      tries--;
+    }
   }
   Serial.println();
   if (!tries) {
@@ -303,14 +377,26 @@ bool otDeviceSetup(
     return false;
   }
   Serial.println("OpenThread setup done. Node is ready.");
-  // all fine! LED goes and stays Blue
-#if ( defined(ARDUINO_M5STACK_NANOC6) )
-  // BLUE
-  pixels.setPixelColor(0, pixels.Color(0, 0, 255));
-  pixels.show();
-#else
-  rgbLedWrite(RGB_BUILTIN, 0, 0, 64);  // BLUE ... Switch is ready!
-#endif
+
+  if (isLeader) {
+    // all fine! LED goes Green
+  #if ( defined(ARDUINO_M5STACK_NANOC6) )
+    // GREEN
+    pixels.setPixelColor(0, pixels.Color(0, 255, 0));
+    pixels.show();
+  #else
+    rgbLedWrite(RGB_BUILTIN, 0, 64, 8);  // GREEN ... Lamp is ready!
+  #endif
+  } else {
+    // all fine! LED goes and stays Blue
+  #if ( defined(ARDUINO_M5STACK_NANOC6) )
+    // BLUE
+    pixels.setPixelColor(0, pixels.Color(0, 0, 255));
+    pixels.show();
+  #else
+    rgbLedWrite(RGB_BUILTIN, 0, 0, 64);  // BLUE ... Switch is ready!
+  #endif
+  }
   return true;
 }
 
@@ -498,7 +584,7 @@ void setup() {
           */
           
         } else {
-          Serial.println("No match");
+          Serial.println("No existing PAN match found");
         }
 
         line = strtok(NULL, "\r\n");
@@ -532,7 +618,8 @@ void setup() {
 
 void loop() {
   checkUserButton();
-  otChatListen();
+  otCOAPListen();
+  // otChatListen();
   if (Serial.available()) {
     Serial.println("Sending chat message");
     String input = Serial.readStringUntil('\n');
