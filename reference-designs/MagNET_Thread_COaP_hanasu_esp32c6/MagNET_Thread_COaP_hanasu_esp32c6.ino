@@ -124,7 +124,15 @@ void otCOAPListen() {
     // "coap request from fd0c:94df:f1ae:b39a:ec47:ec6d:15e8:804a PUT with payload: 30"
     // payload may be 30 or 31 (HEX) '0' or '1' (ASCII)
     log_d("Msg[%s]", cliResp);
+    Serial.println(sResp);
+    Serial.println(cliResp);
     if (sResp.startsWith("coap request from") && sResp.indexOf("PUT") > 0) {
+      if (sResp.indexOf("chat>") >= 0) {
+        Serial.print("p2pchat received:>");
+        String chatmsg = sResp.substring(sResp.indexOf("chat>"), sResp.length()-1);
+        Serial.print(chatmsg);
+        Serial.println("");
+      }
       char payload = sResp.charAt(sResp.length() - 1);  //  last character in the payload
       log_i("CoAP PUT [%s]\r\n", payload == '0' ? "OFF" : "ON");
       if (payload == '0') {
@@ -164,7 +172,8 @@ void otCOAPListen() {
       #endif
       }
     } else {
-      Serial.println("Received unexpected message: ");
+      Serial.print("Received unexpected message: ");
+      Serial.print(sResp);
     }
   }
 }
@@ -208,6 +217,8 @@ void otChatListen() {
 }
 
 bool otExecCommandMulti(const char* fullcmd) {
+  Serial.print("otExecCommandMulti: ");
+  Serial.println(fullcmd);
   OThreadCLI.println(fullcmd);
   char resp[256];
   unsigned long start = millis();
@@ -219,6 +230,7 @@ bool otExecCommandMulti(const char* fullcmd) {
         String s(resp);
         s.trim();
         if (s == "Done") {
+          Serial.println("Success");
           return true;
         }
         if (s.startsWith("Error")) {
@@ -287,7 +299,11 @@ const char *otSetupLeader[] = {
 
 const char *otCoapSwitch[] = {
   // -- start CoAP as client
-  "coap", "start"
+  "coap", "start",
+  // create a CoAP resource
+  "coap resource", OT_COAP_RESOURCE_NAME,
+  // set the CoAP resource initial value
+  "coap set", "0"
 };
 
 const char *otCoapLamp[] = {
@@ -426,6 +442,7 @@ void setupLeaderNode() {
 }
 
 // Sends the CoAP frame to the Lamp node
+// XXX Rename this
 bool otCoapPUT(bool lampState) {
   bool gotDone = false, gotConfirmation = false;
   String coapMsg = "coap put ";
@@ -438,6 +455,9 @@ bool otCoapPUT(bool lampState) {
   if (lampState) {
     coapMsg[coapMsg.length() - 1] = '1';
   }
+  Serial.print("otCoapPUT(): ");
+  Serial.print(coapMsg);
+  Serial.println("");
   OThreadCLI.println(coapMsg.c_str());
   log_d("Send CLI CMD:[%s]", coapMsg.c_str());
 
@@ -642,7 +662,7 @@ void loop() {
         msg = input;
       }
       if (msg.length() > 0) {
-        String fullcmd = "coap post " + addr + " " + OT_COAP_RESOURCE_NAME + " con " + msg;
+        String fullcmd = "coap put " + addr + " " + OT_COAP_RESOURCE_NAME + " con " + msg;
         if (otExecCommandMulti(fullcmd.c_str())) {
           Serial.println("Sent to " + (isDirect ? addr : "multicast") + ": " + msg);
         } else {
