@@ -60,6 +60,7 @@
                                
 #define OT_MCAST_ADDR         "ff05::abcd"
 #define OT_COAP_RESOURCE_NAME "Lamp"
+#define OT_COAP_CHAT_RESOURCE_NAME "Chat"
 
 // Additional changes for m5nanoc6
 #define LED         2
@@ -81,7 +82,7 @@
 #endif
 
 static String eui64 = "0x0000";
-
+static bool isLeader = false;
 String getThreadEui64() {
   // Execute CLI command to get EUI-64
   OThreadCLI.println("eui64");
@@ -298,10 +299,12 @@ const char *otSetupLeader[] = {
 };
 
 const char *otCoapSwitch[] = {
+  // -- create a multicast IPv6 Address for this device
+  "ipmaddr add", OT_MCAST_ADDR,
   // -- start CoAP as client
   "coap", "start",
   // create a CoAP resource
-  "coap resource", OT_COAP_RESOURCE_NAME,
+  "coap resource", OT_COAP_CHAT_RESOURCE_NAME,
   // set the CoAP resource initial value
   "coap set", "0"
 };
@@ -322,7 +325,7 @@ bool otDeviceSetup(
   const char **otSetupCmds, uint8_t nCmds1, const char **otCoapCmds, uint8_t nCmds2, ot_device_role_t expectedRole1, ot_device_role_t expectedRole2
 ) {
   Serial.println("Starting OpenThread.");
-  bool isLeader = (expectedRole1 == expectedRole2);
+  isLeader = (expectedRole1 == expectedRole2);
 
   if (isLeader) {
     Serial.println("Running as Lamp (RGB LED) - use the other C6/H2 as a Switch");
@@ -647,7 +650,10 @@ void loop() {
     if (input.length() > 0) {
       bool isDirect = input.startsWith("@");
       String addr, msg;
-      if (isDirect) {
+      if (isLeader) {
+        addr = "ff03::1";
+        msg = input;
+      } else if (isDirect) {
         size_t colonPos = input.indexOf(':', 1);
         if (colonPos != -1) {
           addr = input.substring(1, colonPos);
@@ -662,7 +668,7 @@ void loop() {
         msg = input;
       }
       if (msg.length() > 0) {
-        String fullcmd = "coap put " + addr + " " + OT_COAP_RESOURCE_NAME + " con " + msg;
+        String fullcmd = "coap put " + addr + " " + (isLeader ? OT_COAP_CHAT_RESOURCE_NAME : OT_COAP_RESOURCE_NAME) + (isDirect ? " con " : " non " ) + msg;
         if (otExecCommandMulti(fullcmd.c_str())) {
           Serial.println("Sent to " + (isDirect ? addr : "multicast") + ": " + msg);
         } else {
