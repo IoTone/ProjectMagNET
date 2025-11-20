@@ -49,7 +49,7 @@
 #include <Regexp.h> 
 
 
-#define SWVERSION "0.0.4"
+#define SWVERSION "0.0.5"
 
 #define BUTTON      9   // C6/H2 Boot button
 #define USER_BUTTON           BUTTON
@@ -83,6 +83,8 @@
 
 static String eui64 = "0x0000";
 static bool isLeader = false;
+static String currentChatPayload = "";
+
 String getThreadEui64() {
   // Execute CLI command to get EUI-64
   OThreadCLI.println("eui64");
@@ -125,12 +127,21 @@ void otCOAPListen() {
     // "coap request from fd0c:94df:f1ae:b39a:ec47:ec6d:15e8:804a PUT with payload: 30"
     // payload may be 30 or 31 (HEX) '0' or '1' (ASCII)
     
-    log_d("Msg[%s]", cliResp);
-    Serial.println(sResp);
+    // log_d("Msg[%s]", cliResp);
+    // Serial.println(sResp);
     Serial.println(cliResp);
 
     if (sResp.startsWith("coap request from") && sResp.indexOf("PUT") > 0) {
       size_t payloadStart = sResp.indexOf("PUT with payload: ");
+      size_t fromStart = sResp.indexOf("from ");
+      size_t longID_start = fromStart+5;
+      size_t longID_end = longID_start + sResp.substring(longID_start).indexOf(" PUT ");
+      Serial.print("start: ");
+      Serial.print(longID_start); 
+      Serial.print(" end: ");
+      Serial.println(longID_end);
+      String longID = sResp.substring(longID_start, longID_end /* size of an euid */);
+      String shortID = longID.substring(longID.lastIndexOf(":")+1);
       if (payloadStart >= 0) {
         payloadStart += 18;
         String hexPayload = sResp.substring(payloadStart);
@@ -142,8 +153,11 @@ void otCOAPListen() {
         size_t chatidx = textMsg.indexOf("chat>");
         if (chatidx == 0) {
           String chatmsg = textMsg.substring(chatidx + 5, textMsg.length());
-          Serial.print(chatmsg);
+          currentChatPayload = longID + "," + shortID + "," + chatmsg; // TODO: change to a json format, this can break easily
+          // Serial.print(chatmsg);
+          Serial.print(currentChatPayload); // TODO clean this up to queue
           Serial.println("");
+          
         } else {
           Serial.println("Ignoring: " + textMsg);
           // ignore anything else
@@ -190,45 +204,6 @@ void otCOAPListen() {
     } else {
       Serial.print("Received unexpected message: ");
       Serial.print(sResp);
-    }
-  }
-}
-
-// this function is used to listen for CoAP chat messages
-// XXX NOT USED
-void otChatListen() {
-  // waits for the client to send a CoAP request
-  char cliResp[512] = {0};
-  size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
-  cliResp[len] = '\0';  // ensure null-terminated
-  if (strlen(cliResp)) {
-    String sResp(cliResp);
-    sResp.trim();
-    log_d("CLI[%s]", cliResp);
-    if (sResp.startsWith("coap request from")) {
-      // Parse: coap request from [addr] METHOD with payload: hex
-      size_t fromPos = sResp.indexOf("from ") + 5;
-      size_t endBracket = sResp.indexOf(']', fromPos);
-      if (endBracket != -1) {
-        String fromAddr = sResp.substring(fromPos, endBracket);
-        size_t methodStart = endBracket + 1;
-        while (methodStart < sResp.length() && sResp[methodStart] == ' ') methodStart++;
-        size_t methodEnd = sResp.indexOf(' ', methodStart);
-        if (methodEnd == -1) methodEnd = sResp.length();
-        String method = sResp.substring(methodStart, methodEnd);
-        size_t payloadStart = sResp.indexOf("payload: ", methodEnd);
-        if (payloadStart != -1) {
-          payloadStart += 9;
-          String hexPayload = sResp.substring(payloadStart);
-          hexPayload.trim();
-          String textMsg = hexToAscii(hexPayload);
-          Serial.println("Received from " + fromAddr + " (" + method + "): " + textMsg);
-          // Optional: blink LED to indicate message received
-          rgbLedWrite(RGB_BUILTIN, 0, 0, 255);  // Blue flash
-          delay(100);
-          rgbLedWrite(RGB_BUILTIN, 0, 64, 8);  // Back to green
-        }
-      }
     }
   }
 }
@@ -658,7 +633,7 @@ void setup() {
 void loop() {
   checkUserButton();
   otCOAPListen();
-  // otChatListen();
+
   if (Serial.available()) {
     Serial.println("Sending chat message");
     String input = Serial.readStringUntil('\n');
