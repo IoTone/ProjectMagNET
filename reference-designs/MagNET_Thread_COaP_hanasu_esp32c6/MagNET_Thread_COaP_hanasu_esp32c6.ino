@@ -49,7 +49,7 @@
 #include <Regexp.h> 
 
 
-#define SWVERSION "0.0.3"
+#define SWVERSION "0.0.4"
 
 #define BUTTON      9   // C6/H2 Boot button
 #define USER_BUTTON           BUTTON
@@ -124,15 +124,30 @@ void otCOAPListen() {
     // cliResp shall be something like:
     // "coap request from fd0c:94df:f1ae:b39a:ec47:ec6d:15e8:804a PUT with payload: 30"
     // payload may be 30 or 31 (HEX) '0' or '1' (ASCII)
+    
     log_d("Msg[%s]", cliResp);
     Serial.println(sResp);
     Serial.println(cliResp);
+
     if (sResp.startsWith("coap request from") && sResp.indexOf("PUT") > 0) {
-      if (sResp.indexOf("chat>") >= 0) {
+      size_t payloadStart = sResp.indexOf("PUT with payload: ");
+      if (payloadStart >= 0) {
+        payloadStart += 18;
+        String hexPayload = sResp.substring(payloadStart);
+        hexPayload.trim();
+        String textMsg = hexToAscii(hexPayload);
+      // if (sResp.indexOf("chat>") >= 0) {
         Serial.print("p2pchat received:>");
-        String chatmsg = sResp.substring(sResp.indexOf("chat>"), sResp.length()-1);
-        Serial.print(chatmsg);
-        Serial.println("");
+        // String chatmsg = sResp.substring(sResp.indexOf("chat>"), sResp.length()-1);
+        size_t chatidx = textMsg.indexOf("chat>");
+        if (chatidx == 0) {
+          String chatmsg = textMsg.substring(chatidx + 5, textMsg.length());
+          Serial.print(chatmsg);
+          Serial.println("");
+        } else {
+          Serial.println("Ignoring: " + textMsg);
+          // ignore anything else
+        }
       }
       char payload = sResp.charAt(sResp.length() - 1);  //  last character in the payload
       log_i("CoAP PUT [%s]\r\n", payload == '0' ? "OFF" : "ON");
@@ -180,6 +195,7 @@ void otCOAPListen() {
 }
 
 // this function is used to listen for CoAP chat messages
+// XXX NOT USED
 void otChatListen() {
   // waits for the client to send a CoAP request
   char cliResp[512] = {0};
@@ -446,7 +462,7 @@ void setupLeaderNode() {
 
 // Sends the CoAP frame to the Lamp node
 // XXX Rename this
-bool otCoapPUT(bool lampState) {
+bool otLampCoapPUT(bool lampState) {
   bool gotDone = false, gotConfirmation = false;
   String coapMsg = "coap put ";
   coapMsg += OT_MCAST_ADDR;
@@ -458,7 +474,7 @@ bool otCoapPUT(bool lampState) {
   if (lampState) {
     coapMsg[coapMsg.length() - 1] = '1';
   }
-  Serial.print("otCoapPUT(): ");
+  Serial.print("otLampCoapPUT(): ");
   Serial.print(coapMsg);
   Serial.println("");
   OThreadCLI.println(coapMsg.c_str());
@@ -504,7 +520,7 @@ void checkUserButton() {
   if (millis() > lastPress + debounceTime && digitalRead(USER_BUTTON) == LOW) {
 #endif
     lastLampState = !lastLampState;
-    if (!otCoapPUT(lastLampState)) {  // failed: Lamp Node is not responding due to be off or unreachable
+    if (!otLampCoapPUT(lastLampState)) {  // failed: Lamp Node is not responding due to be off or unreachable
       // timeout from the CoAP PUT message... restart the node.
     #if ( defined(ARDUINO_M5STACK_NANOC6) )
       // RED
@@ -636,7 +652,7 @@ void setup() {
   eui64 = getThreadEui64();
   String startup = "Starting MagNET Thread CoAP Hanasu " + String(SWVERSION) + String(" Thread EUI64: ") + eui64;
   Serial.println(startup);
-  // Serial.println(std::string("Starting MagNET Thread CoAP Hanasu " + std::string(SWVERSION)).c_str() + std::string(" EUI64:").c_str());
+  
 }
 
 void loop() {
