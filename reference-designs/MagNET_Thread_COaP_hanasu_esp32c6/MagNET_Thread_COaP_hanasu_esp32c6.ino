@@ -98,6 +98,17 @@ String hexToAscii(String hex) {
   }
   return res;
 }
+
+String stringToHex(const String& input) {
+  String hex = "";
+  for (size_t i = 0; i < input.length(); ++i) {
+    char buf[3];
+    sprintf(buf, "%02X", (unsigned char)input[i]);
+    hex += buf;
+  }
+  return hex;
+}
+
 // this function is used by the Lamp mode to listen for CoAP frames from the Switch Node
 void otCOAPListen() {
   // waits for the client to send a CoAP request
@@ -118,6 +129,7 @@ void otCOAPListen() {
         payloadStart += 18;
         String hexPayload = sResp.substring(payloadStart);
         hexPayload.trim();
+
         String textMsg = hexToAscii(hexPayload);
 
         // First, check if it's a lamp control command (single '0' or '1')
@@ -169,9 +181,14 @@ void otCOAPListen() {
           }
         }
         // Then, check if it's a chat message
-        size_t chatidx = textMsg.indexOf("chat>");
+        // Format will be 
+        // coap put ff05::abcd chat non -x 636861743E2069732074686520636174
+        // so look for -x
+        // above is string: chat> is the cat
+        Serial.println("textMsg=" + textMsg);
+        size_t chatidx = textMsg.indexOf("-x");
         if (chatidx == 0) {
-          String chatmsg = textMsg.substring(chatidx + 5);
+          String chatmsg = hexToAscii(textMsg.substring(chatidx + 2)).substring(5); // 2: -x 5: chat>
           currentChatPayload = longID + "," + shortID + "," + chatmsg;
           Serial.print(currentChatPayload);
           Serial.println("");
@@ -207,7 +224,7 @@ void otCOAPListen() {
           pixels.show();
 #endif
         } else if (textMsg.length() != 1 || (textMsg[0] != '0' && textMsg[0] != '1')) {
-          Serial.println("Ignoring non-chat/non-lamp: " + textMsg);
+          Serial.println("Ignoring non-chat/non-lamp: " + textMsg + " of length " + textMsg.length());
         }
       }
     } else {
@@ -490,8 +507,12 @@ void checkUserButton() {
       pixels.show();
       // rgbLedWrite(RGB_BUILTIN, 255, 0, 0);
 #endif
+      Serial.println("problem sending lamp command");
+      // XXX This is wrong way to handle this
+      /* 
       Serial.println("Resetting the Node as Switch... wait.");
       setupChildNode();
+      */
     }
     lastPress = millis();
   }
@@ -597,6 +618,7 @@ pixels.begin();
   Serial.println("Or type @IPv6_address message to send directly to a peer.");
   Serial.println("Example: @fdde:ad00:beef::1 Hello Bob!");
 }
+
 void loop() {
   checkUserButton();
   otCOAPListen();
@@ -607,27 +629,39 @@ void loop() {
     if (input.length() > 0) {
       bool isDirect = input.startsWith("@");
       String addr, payload, confirmType;
-      payload = "chat>" + input;  // Prefix for chat messages
+      String displayMsg = input;  // Full user input for echo/debug
       confirmType = isDirect ? "con" : "non";
       if (isDirect) {
-        size_t spacePos = input.indexOf(' ', 1);  // Space after @addr for reliable parsing
+        size_t spacePos = input.indexOf(' ', 1);  // Space after @addr
         if (spacePos != -1) {
           addr = input.substring(1, spacePos);
-          // Note: payload already includes full original input with prefix
+          payload = input.substring(spacePos + 1);  // Everything after space (prefix + message)
+          payload.trim();
         } else {
-          Serial.println("Invalid direct format. Use @addr message (space separator)");
+          Serial.println("Invalid direct format. Use @addr prefixed_message (space after address)");
           return;
         }
       } else {
         addr = String(OT_MCAST_ADDR);
+        payload = input;  // Full input (user provides prefix like chat>)
       }
       if (payload.length() > 0) {
-        String fullcmd = "coap put " + addr + " " + OT_COAP_CHAT_RESOURCE_NAME + " " + confirmType + " " + payload;
+        String fullcmd;
+        if (payload.startsWith("chat>")) {
+          // Use hex encoding ONLY for chat> prefixed messages (preserves spaces/special chars reliably)
+          String hexPayload = stringToHex(payload);
+          fullcmd = "coap put " + addr + " " + OT_COAP_CHAT_RESOURCE_NAME + " " + confirmType + " -x" + hexPayload;
+        } else {
+          // For future non-chat prefixed commands (e.g., short "lamp>1"), use quoted plain text
+          String quotedPayload = "\"" + payload + "\"";
+          fullcmd = "coap put " + addr + " " + OT_COAP_CHAT_RESOURCE_NAME + " " + confirmType + " " + quotedPayload;
+        }
+        Serial.print("Sending command: ");
+        Serial.println(fullcmd);  // Debug: exact CLI command
         if (otExecCommandMulti(fullcmd.c_str())) {
-          Serial.println("Sent to " + (isDirect ? addr : "multicast") + ": " + input);
-          // Local echo (original message without prefix)
-          Serial.println("Me [" + eui64 + "]: " + input);
-          // Blue flash for sent chat
+          Serial.println("Sent to " + (isDirect ? addr : "multicast") + ": " + displayMsg);
+          Serial.println("Me [" + eui64 + "]: " + displayMsg);
+          // Blue flash on send
 #if ( defined(ARDUINO_M5STACK_NANOC6) )
           pixels.setPixelColor(0, pixels.Color(0, 0, 255));
           pixels.show();
@@ -648,13 +682,6 @@ void loop() {
             pixels.setPixelColor(0, pixels.Color(0, 0, 255));
           }
           pixels.show();
-          /* rgbLedWrite(RGB_BUILTIN, 0, 0, 255);
-          delay(100);
-          if (isLeader) {
-            rgbLedWrite(RGB_BUILTIN, 0, 64, 8);
-          } else {
-            rgbLedWrite(RGB_BUILTIN, 0, 0, 64);
-          } */
 #endif
         } else {
           Serial.println("Failed to send message.");
