@@ -2,6 +2,10 @@
 
 P2P chat use case on top of Thread.  It uses multicast and IPv6.  It attempts to allow all nodes to receive all comms or use direct 1-1 messaging.
 
+<img width="1409" height="354" alt="Image" src="https://github.com/user-attachments/assets/cba88407-7927-40db-8ccb-4cedbc4e3356" />
+
+![Image](https://github.com/user-attachments/assets/6f3f04e0-5c9c-4770-a8f7-028827a047b4)
+
 ## Use Cases
 
 - IoT lighting control
