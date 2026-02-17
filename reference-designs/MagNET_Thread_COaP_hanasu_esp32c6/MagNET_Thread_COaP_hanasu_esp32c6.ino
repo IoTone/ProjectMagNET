@@ -616,7 +616,7 @@ pixels.begin();
   Serial.println("P2P CoAP Chat ready!");
   Serial.println("Type messages to send multicast to all nodes (chat).");
   Serial.println("Or type @IPv6_address message to send directly to a peer.");
-  Serial.println("Example: @fdde:ad00:beef::1 Hello Bob!");
+  Serial.println("Example: @fdde:ad00:beef::1 chat> Hello Bob!");
 }
 
 void loop() {

@@ -94,6 +94,7 @@ NOT STARTED
 - The current scale of this network isn't known, but expected to be limited to 256 nodes in theory.  
 - Sometimes the XIAO ESP32C6 will crash 3 times in a row on boot before starting up
 - No scalability testing for a busy communication network (not clear if the current parser will handle this properly if multiple messages are incoming)
+- Devices don't handle falling back to become leader cleanly if the leader goes offline
 
 ## Support
 
