@@ -1,6 +1,6 @@
 # Overview
 
-The "Internet Of Things", popularly known as IoT, presented a unique way of looking at the nature of data, connectivity, secruity, and standards around small low power compute devices as they relate to people and the larger world.  "The WebXR of things" as a phrase expresses the ability to explore devices and places and even people,  in a spatial mixed reality sense.  This concept is expressed as a desire to allow XR to become the default interface to devices, places, people, and data.  The caveat to this statement, is, the user should have the option to "own" this tech stack, as opposed to the past 20+ years of computing, which largely operated through a gatekeepers deciding matters of privacy, ownership of copyright over data, collaboration with government (or not) and the right to monestize data.  Open standards are desired as an approach to deliver a stack owned by the consumer, self hosted, paid SaaS hosted, or free with rights granted to the owner of the stack.  This paper will also address the caveats and challenges in the current tech stacks for deliverying the "WebXR of Things".  In this discussion, we will focus on the "hyperlocal" scale.  This implies the immediate area, within sight of the a user, within short range, within walking distance, and not larger scale.
+The "Internet Of Things", popularly known as IoT, presented a unique way of looking at the nature of data, connectivity, secruity, and standards around small low power compute devices as they relate to people and the larger world.  "The WebXR of things" as a phrase expresses the ability to explore devices and places and even people,  in a spatial mixed reality sense.  This concept is expressed as a desire to allow XR to become the default interface to devices, places, people, and data.  The caveat to this statement, is, the user should have the option to "own" this tech stack, as opposed to the past 20+ years of computing, which largely operated through a gatekeepers deciding matters of privacy, ownership of copyright over data, collaboration with government (or not) and the right to monestize data.  Open standards are desired as an approach to deliver a stack owned by the consumer, self hosted, paid SaaS hosted, or free with rights granted to the owner of the stack.  This paper will also address the caveats and challenges in the current tech stacks for delivering the "WebXR of Things".  In this discussion, we will focus on the "hyperlocal" scale.  This implies the immediate area, within sight of the a user, within short range, within walking distance, and not larger scale.
 
 ## The Problem 
 
@@ -56,7 +56,8 @@ We propose to build a standard open source platform to allow WebXR users to expl
 - R29: Shared experiences are possible in WebXR
 - R30: Devices must define their own security (outside of the scope of this PoC)
 - R31: Devices must define their capabilities to allow simultaneous control
-- R32: At least 2 HMD/Mixed Reality Glasses are supported by the PoC
+- R32: Device comissioning is left to be an implementation detail, but assumed devices will be able to handle comissioning automatically if allowed to do so
+- R33: At least 2 HMD/Mixed Reality Glasses are supported by the PoC
 
 ### Proposal A - locally hosted server behind proxy for hyperlocal context
 
@@ -77,15 +78,15 @@ A pure native approach that explores the proposed solution using native APIs ins
 
 ## Language Considerations / Localization
 
-This is a huge topic.  TODO.
+This is a huge topic, and a pure English centric approach creates problems down the road.  This PoC will focus on a reference implementation available in English and Japanese languages.  The author is a native English speaker.
 
 ## Accessibility Considerations
 
-TODO
+Accessibility is extremely important and a challenge and an opportunity.  We consider WebXR as a mechanism to improve lives, however, more research is needed in this area.  This proposal won't address accessbility considersations and collaborators are desired.
 
 ## Prior Work
 
-- TODO
+- Content Centric Networking : https://en.wikipedia.org/wiki/Content_centric_networking
 
 ## POC
 
