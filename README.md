@@ -6,7 +6,7 @@ This goal is to make it possible to avoid using proprietary clouds or services, 
 
 ## Documentation 
 
-Please check the [Documentation](https://projectmagnet.github.io) for more details.
+Please check the [Documentation](https://projectmagnet-github-docs.pages.dev/) for more details.
 
 ## Getting Started
 
@@ -25,18 +25,8 @@ This building block is for making a restful service.  We can consider adding an 
 
 #### Notes
 
-OLD NOTES
 
-This was created using the following command: 
-```
-git subtree add --prefix datasink-proto git@github.com:truedat101/expresscpp.git master --squash
-```
 
-To edit from upstream: 
-```
-git subtree pull --prefix datasink-proto git@github.com:truedat101/expresscpp.git master --squash 
-```
+## License
 
-We don't expect to push upstream so no instructions for that.
-
-## License 
+Apache (see License.txt)

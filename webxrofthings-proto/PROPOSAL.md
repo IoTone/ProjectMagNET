@@ -1,6 +1,6 @@
 # Overview
 
-The "Internet Of Things", popularly known as IoT, presented a unique way of looking at the nature of data, connectivity, secruity, and standards around small low power compute devices as they relate to people and the larger world.  "The WebXR of things" as a phrase expresses the ability to explore devices and places and even people,  in a spatial mixed reality sense.  This concept is expressed as a desire to allow XR to become the default interface to devices, places, people, and data.  The caveat to this statement, is, the user should have the option to "own" this tech stack, as opposed to the past 20+ years of computing, which largely operated through a gatekeepers deciding matters of privacy, ownership of copyright over data, collaboration with government (or not) and the right to monetize data.  Open standards are desired as an approach to deliver a stack owned by the consumer, self hosted, paid SaaS hosted, or free with rights granted to the owner of the stack.  This paper will also address the caveats and challenges in the current tech stacks for delivering the "WebXR of Things".  In this discussion, we will focus on the "hyperlocal" scale.  This implies the immediate area, within sight of the a user, within short range, within walking distance, and not larger scale.
+The "Internet Of Things", popularly known as IoT, presented a unique way of looking at the nature of data, connectivity, security, and standards around small low power compute devices as they relate to people and the larger world.  "The WebXR of things" as a phrase expresses the ability to explore devices and places and even people,  in a spatial mixed reality sense.  This concept is expressed as a desire to allow XR to become the default interface to devices, places, people, and data.  The caveat to this statement, is, the user should have the option to "own" this tech stack, as opposed to the past 20+ years of computing, which largely operated through a gatekeepers deciding matters of privacy, ownership of copyright over data, collaboration with government (or not) and the right to monetize data.  Open standards are desired as an approach to deliver a stack owned by the consumer, self hosted, paid SaaS hosted, or free with rights granted to the owner of the stack.  This paper will also address the caveats and challenges in the current tech stacks for delivering the "WebXR of Things".  In this discussion, we will focus on the "hyperlocal" scale.  This implies the immediate area, within sight of the a user, within short range, within walking distance, and not larger scale.
 
 ## The Problem 
 
@@ -90,8 +90,8 @@ Accessibility is extremely important and a challenge and an opportunity.  We con
 
 ## POC
 
-- A working example will be available for demonstration at this URL: TBD
-- Open Source Software: Available Here TBD
+- A working example will be available for demonstration at this URL: Work in progress coming soon
+- Open Source Software: Workin progress
 
 ### UI Spec V1
 
@@ -113,7 +113,7 @@ Proposal A.  The other solutions have significant compromises.  The goal is to g
 
 ## Call To Action
 
-Write a letter to your local XR Browser vendor.  Seriously, we need to actually break the stranglehold of a few companies owning the data available to app developers in WebXR.  A few companies are promising to let you do anything on their platforms (but these platforms are not global or are vaporware at this point).  We need a well funded Linux Platform with good pass through and access to the front facing cameras.  This requires a deep platform integration in the OS, and a proper browser that doesn't limit things to be worse than native mobile apps.  
+Write a letter to your local XR Browser vendor.  Seriously, we need to actually break the stranglehold of a few companies owning the data available to app developers in WebXR.  There are new device makers promising to let you do anything on their platforms (but these platforms are not global or are vaporware at this point).  We need a well funded Linux/BSD XR Platform with good pass through and access to the front facing cameras.  This requires a deep platform integration in the OS, and a proper browser that doesn't limit things to be worse than the capability of native mobile apps.  
 
 We also need browsers that support interesting features related to IoT:
 
