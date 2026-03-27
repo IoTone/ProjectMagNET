@@ -40,7 +40,7 @@
 #endif
 
 #include <Regexp.h>
-#define SWVERSION "0.0.6"
+#define SWVERSION "0.0.7"
 #define BUTTON 9 // C6/H2 Boot button
 #define USER_BUTTON BUTTON
 #define OT_CHANNEL "24" // TODO: let the device "agent" choose the channel
@@ -69,6 +69,7 @@
 #endif
 static String eui64 = "0x0000";
 static bool isLeader = false;
+static bool lampOn = false;  // Tracks local lamp state from received commands
 static String currentChatPayload = "";
 String getThreadEui64() {
   // Execute CLI command to get EUI-64
@@ -135,49 +136,26 @@ void otCOAPListen() {
         // First, check if it's a lamp control command (single '0' or '1')
         if (textMsg.length() == 1 && (textMsg[0] == '0' || textMsg[0] == '1')) {
           char payload = textMsg[0];
-          log_i("CoAP PUT [%s]\r\n", payload == '0' ? "OFF" : "ON");
-          if (isLeader) {  // Only leader controls the RGB LED for lamp
-            if (payload == '0') {
-              for (int16_t c = 248; c > 16; c -= 8) {
-#if ( defined(ARDUINO_M5STACK_NANOC6) )
-                pixels.setPixelColor(0, pixels.Color(c, c, c));
-                pixels.show();
-#else
-                pixels.setPixelColor(0, pixels.Color(c, c, c));
-                pixels.show();
-                // rgbLedWrite(RGB_BUILTIN, c, c, c); // ramp down
-#endif
-                delay(5);
-              }
-#if ( defined(ARDUINO_M5STACK_NANOC6) )
-              pixels.clear();
+          lampOn = (payload == '1');
+          log_i("CoAP PUT Lamp [%s] from %s\r\n", lampOn ? "ON" : "OFF", shortID.c_str());
+          Serial.println("Lamp " + String(lampOn ? "ON" : "OFF") + " from " + shortID + " (" + longID + ")");
+          // All nodes toggle their LED on lamp commands
+          if (!lampOn) {
+            for (int16_t c = 248; c > 16; c -= 8) {
+              pixels.setPixelColor(0, pixels.Color(c, c, c));
               pixels.show();
-#else
-              pixels.clear();
-              pixels.show();
-              // rgbLedWrite(RGB_BUILTIN, 0, 0, 0); // Lamp Off
-#endif
-            } else {
-              for (int16_t c = 16; c < 248; c += 8) {
-#if ( defined(ARDUINO_M5STACK_NANOC6) )
-                pixels.setPixelColor(0, pixels.Color(c, c, c));
-                pixels.show();
-#else
-                pixels.setPixelColor(0, pixels.Color(c, c, c));
-                pixels.show();
-                // rgbLedWrite(RGB_BUILTIN, c, c, c); // ramp up
-#endif
-                delay(5);
-              }
-#if ( defined(ARDUINO_M5STACK_NANOC6) )
-              pixels.setPixelColor(0, pixels.Color(255, 255, 255));
-              pixels.show();
-#else
-              pixels.setPixelColor(0, pixels.Color(255, 255, 255));
-              pixels.show();
-              // rgbLedWrite(RGB_BUILTIN, 255, 255, 255); // Lamp On
-#endif
+              delay(5);
             }
+            pixels.clear();
+            pixels.show();
+          } else {
+            for (int16_t c = 16; c < 248; c += 8) {
+              pixels.setPixelColor(0, pixels.Color(c, c, c));
+              pixels.show();
+              delay(5);
+            }
+            pixels.setPixelColor(0, pixels.Color(255, 255, 255));
+            pixels.show();
           }
         }
         // Then, check if it's a chat message
@@ -312,8 +290,10 @@ const char *otSetupLeader[] = {
 const char *otCoapSwitch[] = {
   // -- create a multicast IPv6 Address for this device
   "ipmaddr add", OT_MCAST_ADDR,
-  // -- start CoAP as client
+  // -- start CoAP as client+server
   "coap", "start",
+  // create Lamp resource (all nodes can receive lamp toggle)
+  "coap resource", OT_COAP_RESOURCE_NAME,
   // create a CoAP resource (unified chat for P2P)
   "coap resource", OT_COAP_CHAT_RESOURCE_NAME
 };
@@ -450,70 +430,51 @@ void setupLeaderNode() {
     }
   }
 }
-// Sends the CoAP frame to the Lamp node
+// Sends the CoAP lamp toggle to all nodes via multicast (non-confirmable)
 bool otLampCoapPUT(bool lampState) {
-  bool gotDone = false, gotConfirmation = false;
   String coapMsg = "coap put ";
   coapMsg += OT_MCAST_ADDR;
   coapMsg += " ";
   coapMsg += OT_COAP_RESOURCE_NAME;
-  coapMsg += " con ";
+  coapMsg += " non ";  // multicast must use non-confirmable
   coapMsg += lampState ? "1" : "0";
   Serial.print("otLampCoapPUT(): ");
   Serial.println(coapMsg);
-  OThreadCLI.println(coapMsg.c_str());
-  log_d("Send CLI CMD:[%s]", coapMsg.c_str());
-  char cliResp[256];
-  uint8_t tries = 5;
-  *cliResp = '\0';
-  while (tries && !(gotDone && gotConfirmation)) {
-    size_t len = OThreadCLI.readBytesUntil('\n', cliResp, sizeof(cliResp));
-    cliResp[len - 1] = '\0';
-    log_d("Try[%d]::MSG[%s]", tries, cliResp);
-    if (strlen(cliResp)) {
-      if (!strncmp(cliResp, "coap response from", 18)) {
-        gotConfirmation = true;
-      }
-      if (!strncmp(cliResp, "Done", 4)) {
-        gotDone = true;
-      }
-    }
-    tries--;
-  }
-  if (gotDone && gotConfirmation) {
-    return true;
-  }
-  return false;
+  return otExecCommandMulti(coapMsg.c_str());
 }
-// this function is used by the Switch mode to check the BOOT Button and send the user action to the Lamp node
+// Any node can press its button to toggle lamps on all other nodes in the channel
 void checkUserButton() {
-  static long unsigned int lastPress = 0;
-  const long unsigned int debounceTime = 500;
-  static bool lastLampState = true;
+  static unsigned long lastPress = 0;
+  const unsigned long debounceTime = 500;
+  static bool sendLampState = true;  // Next state to send (toggles each press)
+  bool pressed = false;
 #if ( defined(ARDUINO_M5STACK_NANOC6) )
   if (M5.BtnA.wasReleased()) {
+    pressed = true;
     Serial.println("Button Released");
+  }
 #else
-  pinMode(USER_BUTTON, INPUT_PULLUP);
   if (millis() > lastPress + debounceTime && digitalRead(USER_BUTTON) == LOW) {
+    pressed = true;
+    Serial.println("Button Pressed");
+  }
 #endif
-    lastLampState = !lastLampState;
-    if (!otLampCoapPUT(lastLampState)) {
-#if ( defined(ARDUINO_M5STACK_NANOC6) )
+  if (pressed) {
+    Serial.println("Sending lamp " + String(sendLampState ? "ON" : "OFF") + " to all nodes");
+    if (!otLampCoapPUT(sendLampState)) {
       pixels.setPixelColor(0, pixels.Color(255, 0, 0));
       pixels.show();
-#else
-      pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+      Serial.println("Problem sending lamp command");
+    } else {
+      // Brief purple flash to confirm send (distinct from blue=chat, white=lamp)
+      pixels.setPixelColor(0, pixels.Color(128, 0, 128));
       pixels.show();
-      // rgbLedWrite(RGB_BUILTIN, 255, 0, 0);
-#endif
-      Serial.println("problem sending lamp command");
-      // XXX This is wrong way to handle this
-      /* 
-      Serial.println("Resetting the Node as Switch... wait.");
-      setupChildNode();
-      */
+      delay(100);
+      // Restore to role-based idle color
+      pixels.setPixelColor(0, isLeader ? pixels.Color(0, 255, 0) : pixels.Color(0, 0, 255));
+      pixels.show();
     }
+    sendLampState = !sendLampState;
     lastPress = millis();
   }
 }
@@ -550,12 +511,12 @@ void setup() {
   pixels.setPixelColor(0, pixels.Color(255, 0, 0));
   pixels.show();
 #else
-pixels.begin();
+  pixels.begin();
   pinMode(BUTTON, INPUT_PULLUP);
+  pinMode(USER_BUTTON, INPUT_PULLUP);
   delay(200);
   pixels.setPixelColor(0, pixels.Color(255, 0, 0));
   pixels.show();
-  // rgbLedWrite(RGB_BUILTIN, 64, 0, 0);
 #endif
   OThreadCLI.begin(false);
   OThreadCLI.setTimeout(250);
@@ -623,19 +584,37 @@ void loop() {
   checkUserButton();
   otCOAPListen();
   if (Serial.available()) {
-    Serial.println("Sending chat message");
     String input = Serial.readStringUntil('\n');
     input.trim();
     if (input.length() > 0) {
+      // Handle "lights switch 0/1" UART command
+      if (input.startsWith("lights switch ")) {
+        String val = input.substring(14);
+        val.trim();
+        if (val == "0" || val == "1") {
+          bool state = (val == "1");
+          Serial.println("UART: Sending lamp " + String(state ? "ON" : "OFF") + " to all nodes");
+          if (otLampCoapPUT(state)) {
+            Serial.println("Lamp command sent OK");
+          } else {
+            Serial.println("Failed to send lamp command");
+          }
+        } else {
+          Serial.println("Usage: lights switch 0  or  lights switch 1");
+        }
+        return;
+      }
+
+      Serial.println("Sending chat message");
       bool isDirect = input.startsWith("@");
       String addr, payload, confirmType;
-      String displayMsg = input;  // Full user input for echo/debug
+      String displayMsg = input;
       confirmType = isDirect ? "con" : "non";
       if (isDirect) {
-        size_t spacePos = input.indexOf(' ', 1);  // Space after @addr
+        size_t spacePos = input.indexOf(' ', 1);
         if (spacePos != -1) {
           addr = input.substring(1, spacePos);
-          payload = input.substring(spacePos + 1);  // Everything after space (prefix + message)
+          payload = input.substring(spacePos + 1);
           payload.trim();
         } else {
           Serial.println("Invalid direct format. Use @addr prefixed_message (space after address)");
@@ -643,46 +622,28 @@ void loop() {
         }
       } else {
         addr = String(OT_MCAST_ADDR);
-        payload = input;  // Full input (user provides prefix like chat>)
+        payload = input;
       }
       if (payload.length() > 0) {
         String fullcmd;
         if (payload.startsWith("chat>")) {
-          // Use hex encoding ONLY for chat> prefixed messages (preserves spaces/special chars reliably)
           String hexPayload = stringToHex(payload);
           fullcmd = "coap put " + addr + " " + OT_COAP_CHAT_RESOURCE_NAME + " " + confirmType + " -x" + hexPayload;
         } else {
-          // For future non-chat prefixed commands (e.g., short "lamp>1"), use quoted plain text
           String quotedPayload = "\"" + payload + "\"";
           fullcmd = "coap put " + addr + " " + OT_COAP_CHAT_RESOURCE_NAME + " " + confirmType + " " + quotedPayload;
         }
         Serial.print("Sending command: ");
-        Serial.println(fullcmd);  // Debug: exact CLI command
+        Serial.println(fullcmd);
         if (otExecCommandMulti(fullcmd.c_str())) {
           Serial.println("Sent to " + (isDirect ? addr : "multicast") + ": " + displayMsg);
           Serial.println("Me [" + eui64 + "]: " + displayMsg);
           // Blue flash on send
-#if ( defined(ARDUINO_M5STACK_NANOC6) )
           pixels.setPixelColor(0, pixels.Color(0, 0, 255));
           pixels.show();
           delay(100);
-          if (isLeader) {
-            pixels.setPixelColor(0, pixels.Color(0, 255, 0));
-          } else {
-            pixels.setPixelColor(0, pixels.Color(0, 0, 255));
-          }
+          pixels.setPixelColor(0, isLeader ? pixels.Color(0, 255, 0) : pixels.Color(0, 0, 255));
           pixels.show();
-#else
-          pixels.setPixelColor(0, pixels.Color(0, 0, 255));
-          pixels.show();
-          delay(100);
-          if (isLeader) {
-            pixels.setPixelColor(0, pixels.Color(0, 255, 0));
-          } else {
-            pixels.setPixelColor(0, pixels.Color(0, 0, 255));
-          }
-          pixels.show();
-#endif
         } else {
           Serial.println("Failed to send message.");
         }
