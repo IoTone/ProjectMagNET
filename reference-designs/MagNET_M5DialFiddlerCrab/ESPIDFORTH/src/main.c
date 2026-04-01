@@ -22,21 +22,36 @@ static const char *TAG = "espidforth";
 /* Default Forth dictionary heap size (100 KB) */
 #define FORTH_HEAP_SIZE (100 * 1024)
 
+/* Write a string via the USB-serial-JTAG driver */
+static void usb_print(const char *s) {
+    usb_serial_jtag_write_bytes((const uint8_t *)s, strlen(s), pdMS_TO_TICKS(500));
+}
+
+/* snprintf + usb_print helper */
+static void usb_printf(const char *fmt, ...) {
+    char buf[160];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    usb_print(buf);
+}
+
 static void print_memory_stats(const char *label) {
-    printf("\n=== Memory Stats: %s ===\n", label);
-    printf("  Free heap (internal): %lu bytes\n",
-           (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-    printf("  Largest free block:   %lu bytes\n",
-           (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-    printf("  Min free ever:        %lu bytes\n",
-           (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    usb_printf("\r\n=== Memory Stats: %s ===\r\n", label);
+    usb_printf("  Free heap (internal): %lu bytes\r\n",
+               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    usb_printf("  Largest free block:   %lu bytes\r\n",
+               (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    usb_printf("  Min free ever:        %lu bytes\r\n",
+               (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
 #if CONFIG_SPIRAM
-    printf("  Free PSRAM:           %lu bytes\n",
-           (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    printf("  Largest PSRAM block:  %lu bytes\n",
-           (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    usb_printf("  Free PSRAM:           %lu bytes\r\n",
+               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    usb_printf("  Largest PSRAM block:  %lu bytes\r\n",
+               (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
 #endif
-    printf("===========================\n\n");
+    usb_print("===========================\r\n\r\n");
 }
 
 /* Direct USB-serial-JTAG character I/O — bypasses VFS line buffering */
@@ -60,26 +75,20 @@ static void setup_usb_serial(void) {
     usb_serial_jtag_driver_install(&cfg);
 }
 
-static void forth_repl_task(void *arg) {
-
-    /* Run the Forth REPL (blocking) */
-    forth_repl(uart_getchar, uart_putchar);
-
-    forth_deinit();
-    vTaskDelete(NULL);
-}
 
 void app_main(void) {
     /* Set up USB-serial-JTAG driver for raw char I/O */
     setup_usb_serial();
 
-    printf("\n\n");
-    printf("============================================\n");
-    printf("  ESPIDFORTH v%s\n", ESPIDFORTH_VERSION_STRING);
-    printf("  Build: %s %s\n", ESPIDFORTH_BUILD_DATE, ESPIDFORTH_BUILD_TIME);
-    printf("  Phase 2: MagNET Hive AI Prototype\n");
-    printf("============================================\n");
-    fflush(stdout);
+    /* Small delay to let USB host enumerate before sending */
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    usb_print("\r\n\r\n");
+    usb_print("============================================\r\n");
+    usb_printf("  ESPIDFORTH v%s\r\n", ESPIDFORTH_VERSION_STRING);
+    usb_printf("  Build: %s %s\r\n", ESPIDFORTH_BUILD_DATE, ESPIDFORTH_BUILD_TIME);
+    usb_print("  Phase 2: MagNET Hive AI Prototype\r\n");
+    usb_print("============================================\r\n");
 
     print_memory_stats("Before Forth init");
 
@@ -87,21 +96,24 @@ void app_main(void) {
     int heap_size = FORTH_HEAP_SIZE;
 #if CONFIG_SPIRAM
     heap_size = 512 * 1024;  /* 512 KB when PSRAM available */
-    ESP_LOGI(TAG, "PSRAM detected, using %d KB Forth heap", heap_size / 1024);
+    usb_printf("PSRAM detected, using %d KB Forth heap\r\n", heap_size / 1024);
 #else
-    ESP_LOGI(TAG, "No PSRAM, using %d KB Forth heap", heap_size / 1024);
+    usb_printf("No PSRAM, using %d KB Forth heap\r\n", heap_size / 1024);
 #endif
 
-    ESP_LOGI(TAG, "Initializing Forth engine...");
+    usb_print("Initializing Forth engine...\r\n");
     int rc = forth_init(heap_size);
     if (rc != 0) {
-        ESP_LOGE(TAG, "Failed to initialize Forth engine (rc=%d)", rc);
+        usb_printf("Failed to initialize Forth engine (rc=%d)\r\n", rc);
         return;
     }
-    ESP_LOGI(TAG, "Forth engine initialized.");
+    usb_print("Forth engine initialized.\r\n");
 
     print_memory_stats("After Forth init");
 
-    /* Launch REPL on a task with adequate stack */
-    xTaskCreate(forth_repl_task, "forth_repl", 8192, NULL, 5, NULL);
+    /* Run REPL directly in app_main (blocks forever) */
+    forth_repl(uart_getchar, uart_putchar);
+
+    /* Only reached if user types 'bye' */
+    forth_deinit();
 }
