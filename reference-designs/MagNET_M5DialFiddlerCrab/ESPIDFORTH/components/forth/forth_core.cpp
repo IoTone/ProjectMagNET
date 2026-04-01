@@ -33,6 +33,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cinttypes>
+#include "esp_timer.h"
 
 // ----- Configuration -----
 #define MAX_STACK     256
@@ -643,6 +644,163 @@ static void interpret_line(const char *line) {
 static void w_i(void) { if (rsp >= 0) push(rstack[rsp]); }
 static void w_j(void) { if (rsp >= 2) push(rstack[rsp - 2]); }
 
+// ----- Built-in Test Suite -----
+
+static int test_pass = 0;
+static int test_fail = 0;
+
+static void test_assert(const char *name, const char *input, cell_t expected) {
+    dsp = -1;
+    int64_t t0 = esp_timer_get_time();
+    interpret_line(input);
+    int64_t elapsed = esp_timer_get_time() - t0;
+    cell_t got = (dsp >= 0) ? dstack[dsp] : 0xDEAD;
+    char buf[96];
+    if (got == expected) {
+        test_pass++;
+        snprintf(buf, sizeof(buf), "  PASS: %-20s %6lld us\r\n", name, (long long)elapsed);
+    } else {
+        test_fail++;
+        snprintf(buf, sizeof(buf), "  FAIL: %-20s %6lld us  expected %" PRIdPTR " got %" PRIdPTR "\r\n",
+                 name, (long long)elapsed, expected, got);
+    }
+    put_string(buf);
+    dsp = -1;
+}
+
+static void test_assert_depth(const char *name, const char *input, int expected_depth) {
+    dsp = -1;
+    int64_t t0 = esp_timer_get_time();
+    interpret_line(input);
+    int64_t elapsed = esp_timer_get_time() - t0;
+    int got = dsp + 1;
+    char buf[96];
+    if (got == expected_depth) {
+        test_pass++;
+        snprintf(buf, sizeof(buf), "  PASS: %-20s %6lld us\r\n", name, (long long)elapsed);
+    } else {
+        test_fail++;
+        snprintf(buf, sizeof(buf), "  FAIL: %-20s %6lld us  depth expected %d got %d\r\n",
+                 name, (long long)elapsed, expected_depth, got);
+    }
+    put_string(buf);
+    dsp = -1;
+}
+
+static void w_test(void) {
+    test_pass = 0;
+    test_fail = 0;
+    int64_t suite_start = esp_timer_get_time();
+
+    put_string("=== ESPIDFORTH Test Suite ===\r\n");
+
+    // --- Arithmetic ---
+    put_string("Arithmetic...\r\n");
+    test_assert("add",       "2 3 +", 5);
+    test_assert("sub",       "10 3 -", 7);
+    test_assert("mul",       "4 5 *", 20);
+    test_assert("div",       "20 4 /", 5);
+    test_assert("mod",       "17 5 mod", 2);
+    test_assert("negate",    "7 negate", -7);
+    test_assert("abs+",      "5 abs", 5);
+    test_assert("abs-",      "-5 abs", 5);
+    test_assert("min",       "3 7 min", 3);
+    test_assert("max",       "3 7 max", 7);
+    test_assert("neg+neg",   "-3 -4 +", -7);
+    test_assert("zero add",  "0 5 +", 5);
+    test_assert("mul zero",  "5 0 *", 0);
+    test_assert("neg mul",   "-3 4 *", -12);
+
+    // --- Stack Operations ---
+    put_string("Stack ops...\r\n");
+    test_assert("dup",       "5 dup +", 10);
+    test_assert("swap",      "1 2 swap", 1);
+    test_assert("over",      "1 2 over", 1);
+    test_assert("rot",       "1 2 3 rot", 1);
+    test_assert("nip",       "1 2 nip", 2);
+    test_assert("tuck",      "1 2 tuck", 2);
+    test_assert_depth("drop depth", "1 2 3 drop", 2);
+    test_assert_depth("2drop depth", "1 2 3 4 2drop", 2);
+    test_assert_depth("2dup depth",  "1 2 2dup", 4);
+    test_assert_depth("depth word",  "1 2 3 depth", 4); // depth pushes count before itself
+
+    // --- Comparisons ---
+    put_string("Comparisons...\r\n");
+    test_assert("eq true",   "5 5 =", -1);
+    test_assert("eq false",  "5 6 =", 0);
+    test_assert("neq true",  "5 6 <>", -1);
+    test_assert("neq false", "5 5 <>", 0);
+    test_assert("lt true",   "3 5 <", -1);
+    test_assert("lt false",  "5 3 <", 0);
+    test_assert("gt true",   "5 3 >", -1);
+    test_assert("gt false",  "3 5 >", 0);
+    test_assert("le true1",  "3 5 <=", -1);
+    test_assert("le true2",  "5 5 <=", -1);
+    test_assert("le false",  "6 5 <=", 0);
+    test_assert("ge true1",  "5 3 >=", -1);
+    test_assert("ge true2",  "5 5 >=", -1);
+    test_assert("ge false",  "3 5 >=", 0);
+    test_assert("0= true",   "0 0=", -1);
+    test_assert("0= false",  "1 0=", 0);
+    test_assert("0< true",   "-1 0<", -1);
+    test_assert("0< false",  "1 0<", 0);
+    test_assert("0> true",   "1 0>", -1);
+    test_assert("0> false",  "-1 0>", 0);
+
+    // --- Logic ---
+    put_string("Logic...\r\n");
+    test_assert("and",       "0xFF 0x0F and", 0x0F);
+    test_assert("or",        "0xF0 0x0F or", 0xFF);
+    test_assert("xor",       "0xFF 0xFF xor", 0);
+    test_assert("invert",    "0 invert", -1);
+
+    // --- Colon Definitions ---
+    put_string("Colon defs...\r\n");
+    interpret_line(": square dup * ;");
+    test_assert("square 5",  "5 square", 25);
+    test_assert("square 3",  "3 square", 9);
+
+    interpret_line(": add3 1 + 1 + 1 + ;");
+    test_assert("add3",      "7 add3", 10);
+
+    // --- Variables and Constants ---
+    put_string("Vars/consts...\r\n");
+    interpret_line("variable myvar");
+    interpret_line("42 myvar !");
+    test_assert("var store/fetch", "myvar @", 42);
+    interpret_line("99 myvar !");
+    test_assert("var update", "myvar @", 99);
+
+    interpret_line("123 constant myconst");
+    test_assert("constant",  "myconst", 123);
+
+    // --- Control Flow: IF/ELSE/THEN ---
+    put_string("Control flow...\r\n");
+    interpret_line(": test-if 0 > if 1 else -1 then ;");
+    test_assert("if true",   "5 test-if", 1);
+    test_assert("if false",  "-3 test-if", -1);
+
+    // --- Control Flow: DO/LOOP ---
+    interpret_line(": sum5 0 5 0 do i + loop ;");
+    test_assert("do/loop",   "sum5", 10);  // 0+1+2+3+4 = 10
+
+    // --- Control Flow: BEGIN/UNTIL ---
+    interpret_line(": count-down 5 begin dup 1 - dup 0= until ;");
+    test_assert("begin/until", "count-down", 0);
+
+    // --- Summary ---
+    int64_t suite_elapsed = esp_timer_get_time() - suite_start;
+    char summary[128];
+    snprintf(summary, sizeof(summary),
+        "\r\n=== Results: %d passed, %d failed, %d total in %lld us (%.1f ms) ===\r\n",
+        test_pass, test_fail, test_pass + test_fail,
+        (long long)suite_elapsed, suite_elapsed / 1000.0);
+    put_string(summary);
+
+    // Push total failures so caller can inspect
+    push(test_fail);
+}
+
 // ----- Public API -----
 
 extern "C" {
@@ -724,6 +882,8 @@ int forth_init(int heap_size_bytes) {
     add_primitive("@", w_fetch);
     add_primitive("c!", w_cstore);
     add_primitive("c@", w_cfetch);
+
+    add_primitive("test", w_test);
 
     return 0;
 }
