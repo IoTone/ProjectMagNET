@@ -1,0 +1,12 @@
+# Common defaults for ESPIDFORTH
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+
+# Optimization for size
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Partition table - single factory app
+CONFIG_PARTITION_TABLE_SINGLE_APP=y
+
+# Flash - 4MB default
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
