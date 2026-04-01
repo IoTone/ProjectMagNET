@@ -18,8 +18,11 @@ This is a Forth interpreter running natively on ESP-IDF (not Arduino), targeting
 Requires PlatformIO. Select the environment matching your board:
 
 ```bash
-# ESP32-C3 (default USB-serial-JTAG console)
+# ESP32-C3 dev build (with test suites)
 pio run -e esp32c3 -t upload -t monitor
+
+# ESP32-C3 release build (tests stripped)
+pio run -e esp32c3_release -t upload -t monitor
 
 # ESP32-S3
 pio run -e esp32s3 -t upload -t monitor
@@ -28,9 +31,40 @@ pio run -e esp32s3 -t upload -t monitor
 pio run -e esp32 -t upload -t monitor
 ```
 
+### Build Configurations
+
+| Environment | Tests | Binary Size (C3) | Usage |
+|-------------|-------|-------------------|-------|
+| `esp32c3` | Included | 184 KB | Development |
+| `esp32c3_release` | Stripped | 178 KB | Production |
+| `esp32s3` | Included | — | Development |
+| `esp32s3_release` | Stripped | — | Production |
+
+Test suites are controlled by the `ESPIDFORTH_ENABLE_TESTS` flag (defined in `build_flags` in `platformio.ini`, defaults to `1`). Set to `0` in any env to strip test code. The `_release` environments do this automatically.
+
+### Versioning
+
+Version and build info are defined in `components/forth/forth_version.h`. The build date/time are captured at compile time via `__DATE__` and `__TIME__`.
+
 ## REPL Usage
 
-On boot you'll see a banner with memory stats, then a `ok>` prompt. Type Forth expressions and press Enter.
+On boot you'll see a versioned banner with build info and memory stats, then a `ok>` prompt:
+
+```
+============================================
+  ESPIDFORTH v0.1.0
+  Build: Apr  1 2026 12:31:45
+  Phase 2: MagNET Hive AI Prototype
+============================================
+
+ESPIDFORTH v0.1.0 (build Apr  1 2026 12:31:45)
+Type 'words' for vocabulary, 'bye' to exit
+Test suites available: 'test', 'test-ffi'
+
+ok>
+```
+
+Type Forth expressions and press Enter:
 
 ```
 ok> 2 3 + .
@@ -105,10 +139,14 @@ ok>
 - `mac-addr` push MAC address as two cells (lo hi)
 - `chip-info` print full chip info summary (model, cores, features, MAC, IDF version, free heap)
 
+### Memory Inspection
+- `mem` print full memory report (heap, Forth dict usage, stack depth, word count)
+- `free-heap` push free heap size in bytes onto the stack (e.g. `free-heap .`)
+
 ### System
 - `words` list all defined words
-- `test` run the built-in Forth test suite (47 assertions with timing)
-- `test-ffi` run the FFI test suite (8 assertions verifying ESP-IDF API calls)
+- `test` run the built-in Forth test suite — 47 assertions with timing (dev builds only)
+- `test-ffi` run the FFI test suite — 8 assertions verifying ESP-IDF API calls (dev builds only)
 - `bye` exit the REPL
 
 ## ESP-IDF FFI
@@ -143,6 +181,8 @@ ok>
 ```
 
 ## Test Suites
+
+> Test suites are only available in dev builds (`ESPIDFORTH_ENABLE_TESTS=1`). Release builds strip all test code to save ~5.4 KB of flash. The boot banner indicates whether tests are available.
 
 ### Forth Core Tests (`test`)
 
@@ -203,7 +243,8 @@ ESPIDFORTH/
     forth/
       CMakeLists.txt          # Forth component registration
       forth_core.h            # Public C API
-      forth_core.cpp          # Stub Forth interpreter (~500 lines)
+      forth_core.cpp          # Stub Forth interpreter
+      forth_version.h         # Version, build info, and feature flags
       ESP32forth.ino          # Original ESP32forth v7.0.8.0 (reference)
       ESP32forth_README.txt   # Upstream readme
       optional/               # Optional ESP32forth modules
@@ -211,12 +252,50 @@ ESPIDFORTH/
 
 ## Memory Usage (ESP32-C3, no PSRAM)
 
-| Metric | Value |
-|--------|-------|
-| Flash | 178 KB (17% of 1 MB partition) |
-| Static RAM | 66 KB (20% of 328 KB) |
-| Forth dictionary heap | 100 KB (allocated at runtime) |
-| Free heap after init | ~160 KB |
+### Static Budget (at build time)
+
+| Layer | Size | Notes |
+|-------|------|-------|
+| Flash (firmware) | 183 KB | 17% of 1 MB app partition |
+| Static RAM (BSS/data) | 66 KB | ESP-IDF framework + Forth globals |
+| Total SRAM available | 328 KB | ESP32-C3 total |
+
+### Runtime Budget (after boot)
+
+| Layer | Size | Notes |
+|-------|------|-------|
+| Forth dictionary heap | 100 KB | `malloc`'d at boot, configurable via `FORTH_HEAP_SIZE` |
+| Forth data stack | 1 KB | 256 cells x 4 bytes |
+| Forth return stack | 1 KB | 256 cells x 4 bytes |
+| REPL task stack | 8 KB | FreeRTOS task stack |
+| Free heap remaining | ~160 KB | Available for scripts, future WiFi/BLE |
+
+### Runtime Inspection
+
+Use the `mem` word at any time to see current memory state:
+
+```
+ok> mem
+=== Memory Report ===
+  Free heap (internal): 198432 bytes
+  Largest free block:   131072 bytes
+  Min free ever:        195200 bytes
+  Forth dict used:      1024 / 102400 bytes (1%)
+  Forth stack depth:    0 / 256 cells
+  Dictionary entries:   58 / 512 words
+=====================
+ok>
+```
+
+Other memory inspection words:
+- `free-heap .` — print just the free heap bytes
+- `chip-info` — includes free heap plus chip/MAC/IDF version
+
+### Memory Notes
+
+- On **ESP32-S3 with PSRAM**, the Forth dictionary heap is increased to 512 KB (configurable) and allocated from PSRAM, leaving internal SRAM free for WiFi/BLE stacks.
+- On **ESP32-C3/C6 (no PSRAM)**, all memory comes from the 328-512 KB internal SRAM. With WiFi/BLE disabled (current config), ~160 KB remains free after the Forth engine initializes. Enabling WiFi would reduce this by ~80-100 KB.
+- The "Min free ever" value in the `mem` report tracks the heap low-water mark since boot — useful for detecting if you're close to running out of memory during script execution.
 
 ## Next Steps
 

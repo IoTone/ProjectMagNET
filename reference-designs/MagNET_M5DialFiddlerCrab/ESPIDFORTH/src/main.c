@@ -15,6 +15,7 @@
 #include "esp_heap_caps.h"
 #include "driver/usb_serial_jtag.h"
 #include "forth_core.h"
+#include "forth_version.h"
 
 static const char *TAG = "espidforth";
 
@@ -60,11 +61,6 @@ static void setup_usb_serial(void) {
 }
 
 static void forth_repl_task(void *arg) {
-    /* Print via USB driver now */
-    const char *banner =
-        "\nESPIDFORTH REPL v0.1 (Forth on ESP-IDF)\n"
-        "Type Forth words. :mem for memory stats, :quit to exit.\n\n";
-    usb_serial_jtag_write_bytes((const uint8_t *)banner, strlen(banner), pdMS_TO_TICKS(500));
 
     /* Run the Forth REPL (blocking) */
     forth_repl(uart_getchar, uart_putchar);
@@ -79,7 +75,8 @@ void app_main(void) {
 
     printf("\n\n");
     printf("============================================\n");
-    printf("  ESPIDFORTH - Forth Language on ESP-IDF\n");
+    printf("  ESPIDFORTH v%s\n", ESPIDFORTH_VERSION_STRING);
+    printf("  Build: %s %s\n", ESPIDFORTH_BUILD_DATE, ESPIDFORTH_BUILD_TIME);
     printf("  Phase 2: MagNET Hive AI Prototype\n");
     printf("============================================\n");
     fflush(stdout);

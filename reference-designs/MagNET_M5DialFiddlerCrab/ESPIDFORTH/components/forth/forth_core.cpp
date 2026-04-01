@@ -26,6 +26,7 @@
  */
 
 #include "forth_core.h"
+#include "forth_version.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -38,6 +39,7 @@
 #include "esp_chip_info.h"
 #include "esp_mac.h"
 #include "esp_idf_version.h"
+#include "esp_heap_caps.h"
 
 // ----- Configuration -----
 #define MAX_STACK     256
@@ -648,6 +650,36 @@ static void interpret_line(const char *line) {
 static void w_i(void) { if (rsp >= 0) push(rstack[rsp]); }
 static void w_j(void) { if (rsp >= 2) push(rstack[rsp - 2]); }
 
+// ( -- ) Print full memory report
+static void w_mem(void) {
+    char buf[128];
+    put_string("=== Memory Report ===\r\n");
+    snprintf(buf, sizeof(buf), "  Free heap (internal): %lu bytes\r\n",
+        (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    put_string(buf);
+    snprintf(buf, sizeof(buf), "  Largest free block:   %lu bytes\r\n",
+        (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    put_string(buf);
+    snprintf(buf, sizeof(buf), "  Min free ever:        %lu bytes\r\n",
+        (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    put_string(buf);
+    snprintf(buf, sizeof(buf), "  Forth dict used:      %d / %d bytes (%d%%)\r\n",
+        heap_used_bytes, heap_total, heap_total ? (heap_used_bytes * 100 / heap_total) : 0);
+    put_string(buf);
+    snprintf(buf, sizeof(buf), "  Forth stack depth:    %d / %d cells\r\n",
+        dsp + 1, MAX_STACK);
+    put_string(buf);
+    snprintf(buf, sizeof(buf), "  Dictionary entries:   %d / %d words\r\n",
+        dict_count, MAX_WORDS);
+    put_string(buf);
+    put_string("=====================\r\n");
+}
+
+// ( -- bytes ) Push free heap size onto stack
+static void w_free_heap(void) {
+    push((cell_t)esp_get_free_heap_size());
+}
+
 // ----- ESP-IDF FFI Words -----
 
 // ( -- model ) Push chip model enum onto stack
@@ -875,7 +907,9 @@ static void w_test_ffi(void) {
     push(fail);
 }
 
-// ----- Built-in Test Suite -----
+// ----- Built-in Test Suite (optional, gated by ESPIDFORTH_ENABLE_TESTS) -----
+
+#if ESPIDFORTH_ENABLE_TESTS
 
 static int test_pass = 0;
 static int test_fail = 0;
@@ -1032,6 +1066,8 @@ static void w_test(void) {
     push(test_fail);
 }
 
+#endif /* ESPIDFORTH_ENABLE_TESTS */
+
 // ----- Public API -----
 
 extern "C" {
@@ -1114,6 +1150,9 @@ int forth_init(int heap_size_bytes) {
     add_primitive("c!", w_cstore);
     add_primitive("c@", w_cfetch);
 
+    add_primitive("mem", w_mem);
+    add_primitive("free-heap", w_free_heap);
+
     add_primitive("chip-model", w_chip_model);
     add_primitive("chip-cores", w_chip_cores);
     add_primitive("chip-rev", w_chip_revision);
@@ -1121,8 +1160,10 @@ int forth_init(int heap_size_bytes) {
     add_primitive("mac-addr", w_mac_addr);
     add_primitive("chip-info", w_chip_info);
 
+#if ESPIDFORTH_ENABLE_TESTS
     add_primitive("test", w_test);
     add_primitive("test-ffi", w_test_ffi);
+#endif
 
     return 0;
 }
@@ -1131,7 +1172,15 @@ void forth_repl(int (*get_char)(void), void (*put_char)(int)) {
     io_getchar = get_char;
     io_putchar = put_char;
 
-    put_string("ESP-IDF Forth (stub v0.1) - Type 'words' for vocabulary, 'bye' to exit\n");
+    char banner[160];
+    snprintf(banner, sizeof(banner),
+        "ESPIDFORTH v%s (build %s %s)\r\n"
+        "Type 'words' for vocabulary, 'bye' to exit\r\n",
+        ESPIDFORTH_VERSION_STRING, ESPIDFORTH_BUILD_DATE, ESPIDFORTH_BUILD_TIME);
+    put_string(banner);
+#if ESPIDFORTH_ENABLE_TESTS
+    put_string("Test suites available: 'test', 'test-ffi'\r\n");
+#endif
 
     char line[MAX_INPUT];
     int pos = 0;
