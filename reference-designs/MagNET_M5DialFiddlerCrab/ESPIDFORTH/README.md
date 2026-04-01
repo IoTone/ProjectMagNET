@@ -238,17 +238,137 @@ ESPIDFORTH/
   sdkconfig.defaults.esp32c6  # C6-specific
   src/
     CMakeLists.txt            # Main component registration
-    main.c                    # App entry, USB driver setup, REPL task
+    main.c                    # App entry, USB driver setup, REPL
   components/
-    forth/
-      CMakeLists.txt          # Forth component registration
+    forth/                    # <-- Distributable component (self-contained)
+      CMakeLists.txt          # ESP-IDF component registration
+      idf_component.yml       # ESP Component Manager manifest
+      README.md               # Component integration guide
       forth_core.h            # Public C API
-      forth_core.cpp          # Stub Forth interpreter
+      forth_core.cpp          # Forth interpreter
       forth_version.h         # Version, build info, and feature flags
       ESP32forth.ino          # Original ESP32forth v7.0.8.0 (reference)
       ESP32forth_README.txt   # Upstream readme
       optional/               # Optional ESP32forth modules
 ```
+
+## Using ESPIDFORTH as a Component in Other Projects
+
+The `components/forth/` directory is a **self-contained ESP-IDF component** that can be added to any ESP-IDF or PlatformIO project. It has no dependencies outside of standard ESP-IDF and requires only that the consuming project provide character I/O callbacks.
+
+### Option 1: Copy the Component
+
+Copy the `components/forth/` directory into your project:
+
+```
+your_project/
+  components/
+    forth/          # <-- copy this entire directory
+  main/
+    main.c
+  CMakeLists.txt
+  platformio.ini    # (if using PlatformIO)
+```
+
+### Option 2: Git Submodule
+
+```bash
+cd your_project
+git submodule add <repo-url> components/forth
+```
+
+### Option 3: ESP Component Manager
+
+Add to your project's `main/idf_component.yml`:
+
+```yaml
+dependencies:
+  espidforth:
+    path: ../path/to/ESPIDFORTH/components/forth
+```
+
+Or once published to the [ESP Component Registry](https://components.espressif.com/):
+
+```yaml
+dependencies:
+  espidforth:
+    version: ">=0.1.0"
+```
+
+### Minimal Integration Example
+
+```c
+#include "forth_core.h"
+
+/* Provide your own character I/O — UART, USB, BLE, TCP, etc. */
+static int my_getchar(void) {
+    // Return a character, or -1 if none available
+}
+
+static void my_putchar(int c) {
+    // Output a single character
+}
+
+void app_main(void) {
+    /* Initialize with desired dictionary heap size */
+    forth_init(100 * 1024);  /* 100 KB */
+
+    /* Start interactive REPL (blocks forever until 'bye') */
+    forth_repl(my_getchar, my_putchar);
+
+    forth_deinit();
+}
+```
+
+### Headless / Programmatic Usage
+
+You can also use the Forth engine without the interactive REPL:
+
+```c
+#include "forth_core.h"
+
+void app_main(void) {
+    forth_init(100 * 1024);
+
+    /* Evaluate Forth code programmatically */
+    forth_eval(": blink 1 over gpio-set 500 ms 0 over gpio-set 500 ms ;");
+    forth_eval("2 gpio-output");
+    forth_eval("10 0 do 2 blink loop");
+
+    /* Query engine state */
+    int used = forth_heap_used();
+    int free = forth_heap_free();
+
+    forth_deinit();
+}
+```
+
+### C API Reference
+
+| Function | Description |
+|----------|-------------|
+| `forth_init(int heap_size)` | Initialize engine with dictionary heap of given size in bytes. Returns 0 on success. |
+| `forth_repl(getchar, putchar)` | Run interactive REPL. Blocks until user types `bye`. Provide char I/O callbacks. |
+| `forth_eval(const char *text)` | Evaluate a Forth expression string. Returns 0 on success. |
+| `forth_heap_used()` | Returns bytes used in the Forth dictionary heap. |
+| `forth_heap_free()` | Returns bytes free in the Forth dictionary heap. |
+| `forth_deinit()` | Free all engine resources. |
+
+### Component Files
+
+| File | Size | Purpose |
+|------|------|---------|
+| `forth_core.h` | 0.9 KB | Public C API header — the only file you `#include` |
+| `forth_core.cpp` | ~25 KB | Forth interpreter, FFI words, and optional test suites |
+| `forth_version.h` | 0.4 KB | Version string, build date/time, feature flags |
+| `idf_component.yml` | 0.2 KB | ESP Component Manager manifest |
+| `CMakeLists.txt` | 0.3 KB | ESP-IDF component registration with dependencies |
+
+### Requirements
+
+- ESP-IDF >= 5.0 (tested with 5.1.1 and 5.3.1)
+- Targets: ESP32, ESP32-S3, ESP32-C3, ESP32-C6
+- ~183 KB flash, ~66 KB static RAM, ~100 KB heap (configurable)
 
 ## Memory Usage (ESP32-C3, no PSRAM)
 

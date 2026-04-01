@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "forth_core.cpp"
     INCLUDE_DIRS "."
-    REQUIRES esp_timer driver
+    REQUIRES esp_timer esp_system esp_hw_support driver heap
 )
 
 # Suppress warnings in third-party code
