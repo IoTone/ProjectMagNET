@@ -1,0 +1,17 @@
+#ifndef FORTH_VERSION_H
+#define FORTH_VERSION_H
+
+#define ESPIDFORTH_VERSION_MAJOR 0
+#define ESPIDFORTH_VERSION_MINOR 1
+#define ESPIDFORTH_VERSION_PATCH 0
+#define ESPIDFORTH_VERSION_STRING "0.1.0"
+
+/* Build number: auto-incremented via __DATE__ and __TIME__ */
+#define ESPIDFORTH_BUILD_DATE __DATE__
+#define ESPIDFORTH_BUILD_TIME __TIME__
+
+#ifndef ESPIDFORTH_ENABLE_TESTS
+#define ESPIDFORTH_ENABLE_TESTS 1
+#endif
+
+#endif /* FORTH_VERSION_H */

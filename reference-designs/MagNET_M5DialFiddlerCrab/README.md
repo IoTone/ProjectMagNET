@@ -68,6 +68,8 @@ To get comfortable with understanding how to integrate Janet language https://ja
 
 ### Phase 1 : Janet Language Port of the existing source
 
+**Status**: SKIPPING because Janet won't work on most of the existing small targets.
+
 The existing project that exists in this repository, in the subfolder M5StackDial-m5gfx-demo, is a nice implementation of touch interface with graphics, and utilizes nearly all of the features of an M5Stack Dial, other than networking.  Take the work from phase 0, and re-implement M5StackDial-m5gfx-demo in the Jan.  Let's call the new application M5StackDial-m5gfx-demo-ESPJanet.  Put it in a new project directory.  The validation will be that it compiles and is successfully installed, and that it runs in the roughly the same manner as the original C++ code.  The expectation is this will be using the FFI via Janet.
 
 ### Phase 2: ESP32FORTH Port to ESP-IDF
