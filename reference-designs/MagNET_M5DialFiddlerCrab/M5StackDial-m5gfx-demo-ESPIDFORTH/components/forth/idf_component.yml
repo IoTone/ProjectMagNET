@@ -1,0 +1,11 @@
+version: "0.1.0"
+description: "ESPIDFORTH - Forth interpreter for ESP-IDF with FFI to ESP-IDF APIs"
+url: "https://github.com/iotone/ProjectMagNET"
+targets:
+  - esp32
+  - esp32s3
+  - esp32c3
+  - esp32c6
+dependencies:
+  idf:
+    version: ">=5.0.0"
