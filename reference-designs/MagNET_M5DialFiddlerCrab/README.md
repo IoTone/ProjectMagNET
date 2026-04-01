@@ -62,7 +62,9 @@ Roles for Nodes in this demo design concept will be 10 different roles:
 
 ### Phase 0 : Janet Language Port to ESP-IDF
 
-To get comfortable with understanding how to integrate Janet language https://janet-lang.org/, which is an embeddable Lisp style language, into the ESP-IDF for targets ESP32, ESP32-S3, and ESP32-C3U, as well as ESP32-C6.  We would need the new version to build taking an embedded scripting approach.  The goal will be to install on any of these targets, and re-run the full test suite from the REPL as a sample test application.  We will call this port EspJanet
+To get comfortable with understanding how to integrate Janet language https://janet-lang.org/, which is an embeddable Lisp style language, into the ESP-IDF for targets ESP32, ESP32-S3, ESP32-C3, as well as ESP32-C6.  We would need the new version to build taking an embedded scripting approach.  The goal will be to install on any of these targets, and re-run the full test suite from the REPL as a sample test application.  We will call this port EspJanet.
+
+**Status**: The EspJanet project lives in the `EspJanet/` subdirectory.  It builds for ESP32-S3, ESP32-C3, and ESP32 classic via PlatformIO with the `espidf` framework.  Janet v1.41.2 amalgamation is compiled as an ESP-IDF component with embedded-friendly config (single-threaded, no EV/net/FFI/threads, reduced OS).  A REPL over UART is implemented with memory stats reporting.  This is the first known port of Janet to ESP32.  See `EspJanet/` for details.
 
 ### Phase 1 : Janet Language Port of the existing source
 
@@ -70,12 +72,14 @@ The existing project that exists in this repository, in the subfolder M5StackDia
 
 ### Phase 2: ESP32FORTH Port to ESP-IDF
 
-To get comfortable with FORTH as an alternative language, please see: https://esp32forth.appspot.com/ESP32forth.html and evaluate this as a porting candidate into the ESP-IDF for targets ESP32, ESP32-S3, and ESP32-C3U, as well as ESP32-C6.  We would need the new version to build taking an embedded scripting approach.  The goal will be to install on any of these targets, and re-run the full test suite from the REPL as a sample test application.  We will call this port ESPIDFORTH.
+To get comfortable with FORTH as an alternative language, please see: https://esp32forth.appspot.com/ESP32forth.html and evaluate this as a porting candidate into the ESP-IDF for targets ESP32, ESP32-S3, ESP32-C3, as well as ESP32-C6.  We would need the new version to build taking an embedded scripting approach.  The goal will be to install on any of these targets, and re-run the full test suite from the REPL as a sample test application.  We will call this port ESPIDFORTH.
 
-### Phase 4 : Janet Language Port of the existing source
+**Status**: The ESPIDFORTH project lives in the `ESPIDFORTH/` subdirectory.  It builds and runs on ESP32-S3, ESP32-C3 (tested on hardware), ESP32-C6, and ESP32 classic via PlatformIO with the `espidf` framework.  A stub Forth interpreter implements the core ANS Forth word set (arithmetic, stack ops, comparisons, logic, colon definitions, variables, constants, and control flow).  A built-in test suite of 47 assertions with per-test microsecond timing is available via the `test` word at the REPL.  The full ESP32forth v7.0.8.0 source is preserved for the next phase of porting.  See `ESPIDFORTH/README.md` for full details.
 
-The existing project that exists in this repository, in the subfolder M5StackDial-m5gfx-demo, is a nice implementation of touch interface with graphics, and utilizes nearly all of the features of an M5Stack Dial, other than networking.  Take the work from phase 3, and re-implement M5StackDial-m5gfx-demo in the Jan.  Let's call the new application M5StackDial-m5gfx-demo-ESPIDFORTH.  Put it in a new project directory.  The validation will be that it compiles and is successfully installed, and that it runs in the roughly the same manner as the original C++ code.  The expectation is this will be using an FFI to interact with ESP-IDF libraries in C.
+### Phase 3: ESPIDFORTH Port of the existing source
 
-### Phase 5: Implementation of Design section
+The existing project that exists in this repository, in the subfolder M5StackDial-m5gfx-demo, is a nice implementation of touch interface with graphics, and utilizes nearly all of the features of an M5Stack Dial, other than networking.  Take the work from Phase 2, and re-implement M5StackDial-m5gfx-demo in FORTH.  Let's call the new application M5StackDial-m5gfx-demo-ESPIDFORTH.  Put it in a new project directory.  The validation will be that it compiles and is successfully installed, and that it runs in the roughly the same manner as the original C++ code.  The expectation is this will be using an FFI to interact with ESP-IDF libraries in C.
+
+### Phase 4: Implementation of Design section
 
 TODO.

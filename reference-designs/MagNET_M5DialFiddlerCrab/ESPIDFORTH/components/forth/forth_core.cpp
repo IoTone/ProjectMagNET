@@ -34,6 +34,10 @@
 #include <cstdint>
 #include <cinttypes>
 #include "esp_timer.h"
+#include "esp_system.h"
+#include "esp_chip_info.h"
+#include "esp_mac.h"
+#include "esp_idf_version.h"
 
 // ----- Configuration -----
 #define MAX_STACK     256
@@ -644,6 +648,233 @@ static void interpret_line(const char *line) {
 static void w_i(void) { if (rsp >= 0) push(rstack[rsp]); }
 static void w_j(void) { if (rsp >= 2) push(rstack[rsp - 2]); }
 
+// ----- ESP-IDF FFI Words -----
+
+// ( -- model ) Push chip model enum onto stack
+static void w_chip_model(void) {
+    esp_chip_info_t info;
+    esp_chip_info(&info);
+    push((cell_t)info.model);
+}
+
+// ( -- cores ) Push number of CPU cores
+static void w_chip_cores(void) {
+    esp_chip_info_t info;
+    esp_chip_info(&info);
+    push((cell_t)info.cores);
+}
+
+// ( -- revision ) Push chip revision
+static void w_chip_revision(void) {
+    esp_chip_info_t info;
+    esp_chip_info(&info);
+    push((cell_t)info.revision);
+}
+
+// ( -- features ) Push chip feature bitmask
+static void w_chip_features(void) {
+    esp_chip_info_t info;
+    esp_chip_info(&info);
+    push((cell_t)info.features);
+}
+
+// ( -- lo hi ) Push MAC address as two cells (lo=bytes 0-3, hi=bytes 4-5)
+static void w_mac_addr(void) {
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+    cell_t lo = (cell_t)mac[0] | ((cell_t)mac[1] << 8) |
+                ((cell_t)mac[2] << 16) | ((cell_t)mac[3] << 24);
+    cell_t hi = (cell_t)mac[4] | ((cell_t)mac[5] << 8);
+    push(lo);
+    push(hi);
+}
+
+// ( -- ) Print chip info summary
+static void w_chip_info(void) {
+    esp_chip_info_t info;
+    esp_chip_info(&info);
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+
+    const char *model_name;
+    switch (info.model) {
+        case CHIP_ESP32:   model_name = "ESP32"; break;
+        case CHIP_ESP32S2: model_name = "ESP32-S2"; break;
+        case CHIP_ESP32S3: model_name = "ESP32-S3"; break;
+        case CHIP_ESP32C3: model_name = "ESP32-C3"; break;
+        case CHIP_ESP32C6: model_name = "ESP32-C6"; break;
+        case CHIP_ESP32H2: model_name = "ESP32-H2"; break;
+        default:           model_name = "Unknown"; break;
+    }
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "Chip: %s rev %d, %d core(s)\r\n", model_name, info.revision, info.cores);
+    put_string(buf);
+    snprintf(buf, sizeof(buf), "Features:%s%s%s%s\r\n",
+        (info.features & CHIP_FEATURE_WIFI_BGN) ? " WiFi" : "",
+        (info.features & CHIP_FEATURE_BLE)      ? " BLE"  : "",
+        (info.features & CHIP_FEATURE_BT)       ? " BT"   : "",
+        (info.features & CHIP_FEATURE_IEEE802154)? " 802.15.4" : "");
+    put_string(buf);
+    snprintf(buf, sizeof(buf), "MAC: %02x:%02x:%02x:%02x:%02x:%02x\r\n",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    put_string(buf);
+    snprintf(buf, sizeof(buf), "ESP-IDF: %s\r\n", esp_get_idf_version());
+    put_string(buf);
+    snprintf(buf, sizeof(buf), "Free heap: %lu bytes\r\n",
+        (unsigned long)esp_get_free_heap_size());
+    put_string(buf);
+}
+
+// ( -- ) Run FFI test: call ESP-IDF APIs and verify they return sane values
+static void w_test_ffi(void) {
+    int pass = 0, fail = 0;
+    char buf[128];
+    int64_t t_start = esp_timer_get_time();
+
+    put_string("=== FFI Test Suite ===\r\n");
+
+    // Test 1: esp_chip_info returns valid model
+    {
+        int64_t t0 = esp_timer_get_time();
+        esp_chip_info_t info;
+        esp_chip_info(&info);
+        int64_t dt = esp_timer_get_time() - t0;
+        if (info.model >= CHIP_ESP32 && info.model <= CHIP_ESP32H2) {
+            pass++;
+            snprintf(buf, sizeof(buf), "  PASS: chip-model valid (%d)     %6lld us\r\n", info.model, (long long)dt);
+        } else {
+            fail++;
+            snprintf(buf, sizeof(buf), "  FAIL: chip-model invalid (%d)   %6lld us\r\n", info.model, (long long)dt);
+        }
+        put_string(buf);
+    }
+
+    // Test 2: cores >= 1
+    {
+        int64_t t0 = esp_timer_get_time();
+        esp_chip_info_t info;
+        esp_chip_info(&info);
+        int64_t dt = esp_timer_get_time() - t0;
+        if (info.cores >= 1 && info.cores <= 2) {
+            pass++;
+            snprintf(buf, sizeof(buf), "  PASS: chip-cores (%d)           %6lld us\r\n", info.cores, (long long)dt);
+        } else {
+            fail++;
+            snprintf(buf, sizeof(buf), "  FAIL: chip-cores (%d)           %6lld us\r\n", info.cores, (long long)dt);
+        }
+        put_string(buf);
+    }
+
+    // Test 3: MAC address is not all zeros
+    {
+        int64_t t0 = esp_timer_get_time();
+        uint8_t mac[6];
+        esp_efuse_mac_get_default(mac);
+        int64_t dt = esp_timer_get_time() - t0;
+        int all_zero = (mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]) == 0;
+        if (!all_zero) {
+            pass++;
+            snprintf(buf, sizeof(buf), "  PASS: mac-addr %02x:%02x:%02x:%02x:%02x:%02x  %6lld us\r\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (long long)dt);
+        } else {
+            fail++;
+            snprintf(buf, sizeof(buf), "  FAIL: mac-addr all zeros        %6lld us\r\n", (long long)dt);
+        }
+        put_string(buf);
+    }
+
+    // Test 4: free heap > 0
+    {
+        int64_t t0 = esp_timer_get_time();
+        uint32_t free_heap = esp_get_free_heap_size();
+        int64_t dt = esp_timer_get_time() - t0;
+        if (free_heap > 0) {
+            pass++;
+            snprintf(buf, sizeof(buf), "  PASS: free-heap %lu bytes      %6lld us\r\n",
+                (unsigned long)free_heap, (long long)dt);
+        } else {
+            fail++;
+            snprintf(buf, sizeof(buf), "  FAIL: free-heap zero            %6lld us\r\n", (long long)dt);
+        }
+        put_string(buf);
+    }
+
+    // Test 5: esp_get_idf_version returns non-null
+    {
+        int64_t t0 = esp_timer_get_time();
+        const char *ver = esp_get_idf_version();
+        int64_t dt = esp_timer_get_time() - t0;
+        if (ver && ver[0] != '\0') {
+            pass++;
+            snprintf(buf, sizeof(buf), "  PASS: idf-version \"%s\"  %6lld us\r\n", ver, (long long)dt);
+        } else {
+            fail++;
+            snprintf(buf, sizeof(buf), "  FAIL: idf-version null          %6lld us\r\n", (long long)dt);
+        }
+        put_string(buf);
+    }
+
+    // Test 6: esp_timer_get_time is monotonic
+    {
+        int64_t t0 = esp_timer_get_time();
+        int64_t t1 = esp_timer_get_time();
+        int64_t dt = t1 - t0;
+        if (t1 > t0) {
+            pass++;
+            snprintf(buf, sizeof(buf), "  PASS: timer-monotonic (delta %lld us)\r\n", (long long)dt);
+        } else {
+            fail++;
+            snprintf(buf, sizeof(buf), "  FAIL: timer not monotonic\r\n");
+        }
+        put_string(buf);
+    }
+
+    // Test 7: Forth word calling FFI - chip-model pushes valid value
+    {
+        int64_t t0 = esp_timer_get_time();
+        dsp = -1;
+        interpret_line("chip-model");
+        int64_t dt = esp_timer_get_time() - t0;
+        cell_t model = (dsp >= 0) ? dstack[dsp] : -1;
+        dsp = -1;
+        if (model >= CHIP_ESP32 && model <= CHIP_ESP32H2) {
+            pass++;
+            snprintf(buf, sizeof(buf), "  PASS: forth>chip-model (%ld)    %6lld us\r\n", (long)model, (long long)dt);
+        } else {
+            fail++;
+            snprintf(buf, sizeof(buf), "  FAIL: forth>chip-model (%ld)    %6lld us\r\n", (long)model, (long long)dt);
+        }
+        put_string(buf);
+    }
+
+    // Test 8: Forth word calling FFI - chip-cores pushes valid value
+    {
+        int64_t t0 = esp_timer_get_time();
+        dsp = -1;
+        interpret_line("chip-cores");
+        int64_t dt = esp_timer_get_time() - t0;
+        cell_t cores = (dsp >= 0) ? dstack[dsp] : 0;
+        dsp = -1;
+        if (cores >= 1 && cores <= 2) {
+            pass++;
+            snprintf(buf, sizeof(buf), "  PASS: forth>chip-cores (%ld)    %6lld us\r\n", (long)cores, (long long)dt);
+        } else {
+            fail++;
+            snprintf(buf, sizeof(buf), "  FAIL: forth>chip-cores (%ld)    %6lld us\r\n", (long)cores, (long long)dt);
+        }
+        put_string(buf);
+    }
+
+    int64_t t_total = esp_timer_get_time() - t_start;
+    snprintf(buf, sizeof(buf),
+        "\r\n=== FFI Results: %d passed, %d failed, %d total in %lld us (%.1f ms) ===\r\n",
+        pass, fail, pass + fail, (long long)t_total, t_total / 1000.0);
+    put_string(buf);
+
+    push(fail);
+}
+
 // ----- Built-in Test Suite -----
 
 static int test_pass = 0;
@@ -883,7 +1114,15 @@ int forth_init(int heap_size_bytes) {
     add_primitive("c!", w_cstore);
     add_primitive("c@", w_cfetch);
 
+    add_primitive("chip-model", w_chip_model);
+    add_primitive("chip-cores", w_chip_cores);
+    add_primitive("chip-rev", w_chip_revision);
+    add_primitive("chip-features", w_chip_features);
+    add_primitive("mac-addr", w_mac_addr);
+    add_primitive("chip-info", w_chip_info);
+
     add_primitive("test", w_test);
+    add_primitive("test-ffi", w_test_ffi);
 
     return 0;
 }
