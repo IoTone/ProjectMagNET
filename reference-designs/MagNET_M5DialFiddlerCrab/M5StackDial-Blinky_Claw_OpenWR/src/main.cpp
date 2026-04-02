@@ -1,0 +1,1655 @@
+// M5StackDial-Blinky_Claw_OpenWR — Synthwave Claude Code Status Display
+// Merges M5Dial demo (display, encoder, speaker, Forth REPL) with
+// Claw OpenWR (WiFi, MQTT, HTTP, NVS). Shows a fiddler crab mascot,
+// Claude CLI state, model name, session/weekly usage rings, WiFi status.
+
+#include <M5GFX.h>
+#include <lgfx/v1/panel/Panel_GC9A01.hpp>
+#include <lgfx/v1/touch/Touch_FT5x06.hpp>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/event_groups.h"
+#include "esp_timer.h"
+#include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
+#include "esp_random.h"
+#include "esp_mac.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "esp_http_server.h"
+#include "mdns.h"
+#include "mqtt_client.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "driver/gpio.h"
+#include "driver/ledc.h"
+#include "driver/pulse_cnt.h"
+#include "driver/usb_serial_jtag.h"
+#include "forth_core.h"
+#include "forth_version.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <cstdarg>
+#include <cmath>
+
+static const char *TAG = "claw_dial";
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+#define FORTH_HEAP_SIZE     (48 * 1024)
+#define NVS_NAMESPACE       "claw_config"
+#define NVS_KEY_SSID        "ssid"
+#define NVS_KEY_PASS        "pass"
+#define NVS_KEY_MQTT_BROKER "mqtt_url"
+#define NVS_KEY_SOUND       "sound"
+#define HOSTNAME_PREFIX     "FiddlerCrab"
+#define WIFI_MAX_RETRY      5
+#define MQTT_DEFAULT_BROKER "mqtt://broker.hivemq.com:1883"
+
+// ---------------------------------------------------------------------------
+// millis() helper
+// ---------------------------------------------------------------------------
+static inline uint32_t millis() { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+// ---------------------------------------------------------------------------
+// USB Serial I/O
+// ---------------------------------------------------------------------------
+static void usb_print(const char *s) {
+    usb_serial_jtag_write_bytes((const uint8_t *)s, strlen(s), pdMS_TO_TICKS(500));
+}
+
+static void usb_printf(const char *fmt, ...) {
+    char buf[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    usb_print(buf);
+}
+
+static int uart_getchar(void) {
+    uint8_t c;
+    int n = usb_serial_jtag_read_bytes(&c, 1, pdMS_TO_TICKS(10));
+    if (n <= 0) return -1;
+    return c;
+}
+
+static void uart_putchar(int c) {
+    uint8_t ch = (uint8_t)c;
+    usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(100));
+}
+
+static void setup_usb_serial(void) {
+    usb_serial_jtag_driver_config_t cfg = {
+        .tx_buffer_size = 256,
+        .rx_buffer_size = 256,
+    };
+    usb_serial_jtag_driver_install(&cfg);
+}
+
+static void read_line_from_serial(char *buf, int maxlen, bool echo, bool allow_empty) {
+    vTaskDelay(pdMS_TO_TICKS(50));
+    while (1) {
+        int drain = uart_getchar();
+        if (drain < 0) break;
+    }
+
+    bool first_enter_skipped = false;
+    int pos = 0;
+    while (pos < maxlen - 1) {
+        int ch = uart_getchar();
+        if (ch < 0) continue;
+        if (ch == '\r' || ch == '\n') {
+            if (!first_enter_skipped) { first_enter_skipped = true; continue; }
+            if (pos == 0 && !allow_empty) continue;
+            break;
+        }
+        first_enter_skipped = true;
+        if (ch == 8 || ch == 127) {
+            if (pos > 0) { pos--; if (echo) usb_print("\b \b"); }
+            continue;
+        }
+        if (ch >= 32) {
+            buf[pos++] = (char)ch;
+            if (echo) uart_putchar(ch); else uart_putchar('*');
+        }
+    }
+    buf[pos] = '\0';
+    usb_print("\r\n");
+}
+
+// ---------------------------------------------------------------------------
+// LGFX display driver for M5Dial (GC9A01 240x240 round)
+// ---------------------------------------------------------------------------
+class LGFX_M5Dial : public lgfx::LGFX_Device {
+    lgfx::Panel_GC9A01 _panel_instance;
+    lgfx::Bus_SPI       _bus_instance;
+    lgfx::Light_PWM     _light_instance;
+    lgfx::Touch_FT5x06  _touch_instance;
+public:
+    LGFX_M5Dial(void) {
+        auto bus_cfg        = _bus_instance.config();
+        bus_cfg.spi_host    = SPI2_HOST;
+        bus_cfg.freq_write  = 80000000;
+        bus_cfg.pin_mosi    = 5;
+        bus_cfg.pin_sclk    = 6;
+        bus_cfg.pin_dc      = 4;
+        _bus_instance.config(bus_cfg);
+        _panel_instance.setBus(&_bus_instance);
+
+        auto panel_cfg          = _panel_instance.config();
+        panel_cfg.pin_cs        = 7;
+        panel_cfg.pin_rst       = 8;
+        panel_cfg.panel_width   = 240;
+        panel_cfg.panel_height  = 240;
+        panel_cfg.offset_rotation = 0;
+        panel_cfg.invert        = true;
+        _panel_instance.config(panel_cfg);
+
+        auto light_cfg      = _light_instance.config();
+        light_cfg.pin_bl    = 9;
+        light_cfg.freq      = 44100;
+        light_cfg.invert    = false;
+        _light_instance.config(light_cfg);
+        _panel_instance.setLight(&_light_instance);
+
+        auto touch_cfg      = _touch_instance.config();
+        touch_cfg.i2c_port  = 1;
+        touch_cfg.i2c_addr  = 0x38;
+        touch_cfg.pin_sda   = 11;
+        touch_cfg.pin_scl   = 12;
+        touch_cfg.pin_int   = 14;
+        touch_cfg.freq      = 400000;
+        touch_cfg.x_min     = 0;
+        touch_cfg.x_max     = 239;
+        touch_cfg.y_min     = 0;
+        touch_cfg.y_max     = 239;
+        _touch_instance.config(touch_cfg);
+        _panel_instance.setTouch(&_touch_instance);
+
+        setPanel(&_panel_instance);
+    }
+};
+
+static LGFX_M5Dial display;
+
+// ---------------------------------------------------------------------------
+// Rotary Encoder (GPIO 40, 41) via ESP-IDF PCNT
+// ---------------------------------------------------------------------------
+static pcnt_unit_handle_t pcnt_unit = NULL;
+static int enc_last_count = 0;
+
+static void encoder_init() {
+    pcnt_unit_config_t unit_config = {
+        .low_limit  = -32768,
+        .high_limit =  32767,
+    };
+    pcnt_new_unit(&unit_config, &pcnt_unit);
+
+    pcnt_chan_config_t chan_a_config = {
+        .edge_gpio_num  = 41,
+        .level_gpio_num = 40,
+    };
+    pcnt_channel_handle_t pcnt_chan_a = NULL;
+    pcnt_new_channel(pcnt_unit, &chan_a_config, &pcnt_chan_a);
+    pcnt_channel_set_edge_action(pcnt_chan_a,
+        PCNT_CHANNEL_EDGE_ACTION_DECREASE, PCNT_CHANNEL_EDGE_ACTION_INCREASE);
+    pcnt_channel_set_level_action(pcnt_chan_a,
+        PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
+
+    pcnt_chan_config_t chan_b_config = {
+        .edge_gpio_num  = 40,
+        .level_gpio_num = 41,
+    };
+    pcnt_channel_handle_t pcnt_chan_b = NULL;
+    pcnt_new_channel(pcnt_unit, &chan_b_config, &pcnt_chan_b);
+    pcnt_channel_set_edge_action(pcnt_chan_b,
+        PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_DECREASE);
+    pcnt_channel_set_level_action(pcnt_chan_b,
+        PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
+
+    pcnt_unit_enable(pcnt_unit);
+    pcnt_unit_clear_count(pcnt_unit);
+    pcnt_unit_start(pcnt_unit);
+}
+
+static int32_t encoder_read_and_reset() {
+    int count;
+    pcnt_unit_get_count(pcnt_unit, &count);
+    int32_t delta = count - enc_last_count;
+    enc_last_count = count;
+    return delta;
+}
+
+// ---------------------------------------------------------------------------
+// Speaker / Buzzer (GPIO 3) via LEDC
+// ---------------------------------------------------------------------------
+#define SPEAKER_GPIO          3
+#define SPEAKER_LEDC_CHANNEL  LEDC_CHANNEL_0
+#define SPEAKER_LEDC_TIMER    LEDC_TIMER_0
+static uint8_t speaker_volume = 180;
+
+static uint32_t speaker_stop_at = 0;
+
+static void speaker_init() {
+    ledc_timer_config_t timer_conf = {
+        .speed_mode      = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .timer_num       = SPEAKER_LEDC_TIMER,
+        .freq_hz         = 1000,
+        .clk_cfg         = LEDC_AUTO_CLK,
+    };
+    ledc_timer_config(&timer_conf);
+
+    ledc_channel_config_t chan_conf = {
+        .gpio_num   = SPEAKER_GPIO,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel    = SPEAKER_LEDC_CHANNEL,
+        .intr_type  = LEDC_INTR_DISABLE,
+        .timer_sel  = SPEAKER_LEDC_TIMER,
+        .duty       = 0,
+        .hpoint     = 0,
+    };
+    ledc_channel_config(&chan_conf);
+}
+
+static void speaker_tone_nb(uint16_t freq, uint16_t duration_ms) {
+    if (freq == 0) return;
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, SPEAKER_LEDC_TIMER, freq);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, SPEAKER_LEDC_CHANNEL, speaker_volume / 2);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, SPEAKER_LEDC_CHANNEL);
+    speaker_stop_at = millis() + duration_ms;
+}
+
+static void speaker_update() {
+    if (speaker_stop_at && millis() >= speaker_stop_at) {
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, SPEAKER_LEDC_CHANNEL, 0);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, SPEAKER_LEDC_CHANNEL);
+        speaker_stop_at = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Button A (GPIO 42, active low with pullup)
+// ---------------------------------------------------------------------------
+#define BTN_A_GPIO 42
+static bool btn_prev = true;
+static bool btn_was_pressed = false;
+static uint32_t btn_press_start = 0;
+
+static void button_init() {
+    gpio_config_t io_conf = {
+        .pin_bit_mask   = (1ULL << BTN_A_GPIO),
+        .mode           = GPIO_MODE_INPUT,
+        .pull_up_en     = GPIO_PULLUP_ENABLE,
+        .pull_down_en   = GPIO_PULLDOWN_DISABLE,
+        .intr_type      = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+}
+
+static void button_update() {
+    bool cur = gpio_get_level((gpio_num_t)BTN_A_GPIO);
+    btn_was_pressed = false;
+    if (!cur && btn_prev) {
+        btn_press_start = millis();
+    }
+    if (cur && !btn_prev) {
+        uint32_t dur = millis() - btn_press_start;
+        if (dur > 30) {
+            btn_was_pressed = true;
+        }
+    }
+    btn_prev = cur;
+}
+
+// ---------------------------------------------------------------------------
+// Color utilities
+// ---------------------------------------------------------------------------
+static inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b)
+{
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+static inline uint16_t dim_color(uint16_t c, float k)
+{
+    uint8_t r5 = (c >> 11) & 0x1F; uint8_t g6 = (c >> 5) & 0x3F; uint8_t b5 = c & 0x1F;
+    uint8_t r8 = r5 << 3; uint8_t g8 = g6 << 2; uint8_t b8 = b5 << 3;
+    r8 = (uint8_t)(r8 * k); g8 = (uint8_t)(g8 * k); b8 = (uint8_t)(b8 * k);
+    return rgb(r8, g8, b8);
+}
+
+// ---------------------------------------------------------------------------
+// Synthwave color palette
+// ---------------------------------------------------------------------------
+namespace Synth {
+    static const uint16_t BG        = rgb(12, 4, 20);
+    static const uint16_t CYAN      = rgb(0, 255, 255);
+    static const uint16_t MAGENTA   = rgb(255, 0, 255);
+    static const uint16_t HOT_PINK  = rgb(255, 105, 180);
+    static const uint16_t NEON_GREEN= rgb(57, 255, 20);
+    static const uint16_t YELLOW    = rgb(255, 255, 0);
+    static const uint16_t RED       = rgb(255, 40, 40);
+    static const uint16_t DIM_CYAN  = rgb(0, 60, 60);
+    static const uint16_t DIM_GRAY  = rgb(30, 20, 40);
+    static const uint16_t GRID      = rgb(40, 20, 60);
+    static const uint16_t WHITE     = rgb(255, 255, 255);
+    static const uint16_t TEXT_DIM  = rgb(100, 80, 120);
+}
+
+// ---------------------------------------------------------------------------
+// Configuration constants
+// ---------------------------------------------------------------------------
+namespace Config {
+    static constexpr int BrightMax  = 100;
+    static constexpr int BrightStep = 10;
+    static constexpr int EncDiv     = 4;
+
+    static constexpr uint16_t ClickUpFreq   = 1800;
+    static constexpr uint16_t ClickDownFreq = 1000;
+    static constexpr uint16_t ClickMs       = 40;
+}
+
+// ---------------------------------------------------------------------------
+// State variables
+// ---------------------------------------------------------------------------
+
+// Claw state: 0=IDLE, 2=WORKING, 3=NEED_INPUT, 5=FINISHED, 7=ERROR
+static volatile int claw_state = 0;
+static char model_name[32] = "---";
+static volatile int session_pct = -1;     // -1=unknown, 0-100
+static volatile int weekly_pct = -1;
+static volatile uint32_t reset_epoch = 0;
+static char client_host[32] = "";
+
+// Dirty flags
+static volatile bool dirty_status = true;
+static volatile bool dirty_rings = true;
+static volatile bool dirty_wifi = true;
+static volatile bool dirty_full = true;
+
+// Sound
+static volatile bool sound_enabled = false;
+
+// Session work timer — tracks active working time, pauses when waiting
+static uint32_t timer_accumulated_ms = 0;  // Total working time accumulated
+static uint32_t timer_segment_start = 0;   // millis() when current working segment started
+static bool timer_running = false;          // true when actively counting (state == WORKING)
+static volatile bool dirty_timer = true;
+
+// Display layout
+static int cx = 120, cy = 120;
+static int brightness_pct = 80;
+static int enc_accum = 0;
+
+// Tone scheduling
+static uint32_t tone2_at = 0;
+static uint16_t tone2_freq = 0;
+static uint16_t tone2_dur = 0;
+
+// Previous state for chime detection
+static int prev_claw_state = -1;
+
+// WiFi
+static char wifi_ssid[33] = {0};
+static char wifi_pass[65] = {0};
+static char hostname[32] = {0};
+static char hostname_mdns[32] = {0};
+static char mac_suffix[5] = {0};   // Last 4 hex chars of MAC, for display
+static volatile bool wifi_connected = false;
+static esp_netif_t *sta_netif = NULL;
+static httpd_handle_t http_server = NULL;
+static int wifi_retry_count = 0;
+
+// MQTT
+static char mqtt_broker_uri[128] = MQTT_DEFAULT_BROKER;
+static char mqtt_topic[80] = {0};
+static esp_mqtt_client_handle_t mqtt_client = NULL;
+static volatile bool mqtt_connected = false;
+
+// ---------------------------------------------------------------------------
+// State name helper
+// ---------------------------------------------------------------------------
+static const char *state_label(int state) {
+    switch (state) {
+        case 0: return "IDLE";
+        case 2: return "WORKING";
+        case 3: return "NEED INPUT";
+        case 5: return "FINISHED";
+        case 7: return "ERROR";
+        default: return "UNKNOWN";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chime functions
+// ---------------------------------------------------------------------------
+static void chime_working() {
+    if (!sound_enabled) return;
+    speaker_tone_nb(800, 50);
+}
+
+static void chime_finished() {
+    if (!sound_enabled) return;
+    speaker_tone_nb(1200, 80);
+    tone2_at = millis() + 120;
+    tone2_freq = 1800;
+    tone2_dur = 100;
+}
+
+static void chime_need_input() {
+    if (!sound_enabled) return;
+    speaker_tone_nb(2000, 100);
+}
+
+static void chime_error() {
+    if (!sound_enabled) return;
+    speaker_tone_nb(1000, 80);
+    tone2_at = millis() + 120;
+    tone2_freq = 600;
+    tone2_dur = 100;
+}
+
+// ---------------------------------------------------------------------------
+// NVS
+// ---------------------------------------------------------------------------
+static void nvs_init_flash(void) {
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+}
+
+static bool nvs_load_wifi_creds(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
+
+    size_t len = sizeof(wifi_ssid);
+    esp_err_t err = nvs_get_str(h, NVS_KEY_SSID, wifi_ssid, &len);
+    if (err != ESP_OK) { nvs_close(h); return false; }
+
+    len = sizeof(wifi_pass);
+    err = nvs_get_str(h, NVS_KEY_PASS, wifi_pass, &len);
+    if (err != ESP_OK) {
+        wifi_pass[0] = '\0';
+    }
+
+    nvs_close(h);
+    return (strlen(wifi_ssid) > 0);
+}
+
+static void nvs_save_wifi_creds(void) {
+    nvs_handle_t h;
+    ESP_ERROR_CHECK(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h));
+    ESP_ERROR_CHECK(nvs_set_str(h, NVS_KEY_SSID, wifi_ssid));
+    ESP_ERROR_CHECK(nvs_set_str(h, NVS_KEY_PASS, wifi_pass));
+    ESP_ERROR_CHECK(nvs_commit(h));
+    nvs_close(h);
+}
+
+static void nvs_clear_wifi_creds(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, NVS_KEY_SSID);
+        nvs_erase_key(h, NVS_KEY_PASS);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    wifi_ssid[0] = '\0';
+    wifi_pass[0] = '\0';
+}
+
+static void nvs_load_mqtt_broker(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(mqtt_broker_uri);
+        if (nvs_get_str(h, NVS_KEY_MQTT_BROKER, mqtt_broker_uri, &len) != ESP_OK) {
+            strncpy(mqtt_broker_uri, MQTT_DEFAULT_BROKER, sizeof(mqtt_broker_uri) - 1);
+        }
+        nvs_close(h);
+    }
+}
+
+static void nvs_save_mqtt_broker(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, NVS_KEY_MQTT_BROKER, mqtt_broker_uri);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static void nvs_load_sound_pref(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t val = 0;
+        if (nvs_get_u8(h, NVS_KEY_SOUND, &val) == ESP_OK) {
+            sound_enabled = (val != 0);
+        }
+        nvs_close(h);
+    }
+}
+
+static void nvs_save_sound_pref(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, NVS_KEY_SOUND, sound_enabled ? 1 : 0);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hostname
+// ---------------------------------------------------------------------------
+static void derive_hostname(void) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(hostname, sizeof(hostname), "%s_%02x%02x", HOSTNAME_PREFIX, mac[4], mac[5]);
+    snprintf(hostname_mdns, sizeof(hostname_mdns), "fiddlercrab-%02x%02x", mac[4], mac[5]);
+    snprintf(mac_suffix, sizeof(mac_suffix), "%02x%02x", mac[4], mac[5]);
+}
+
+// ---------------------------------------------------------------------------
+// HTTP Server
+// ---------------------------------------------------------------------------
+static esp_err_t handler_notify(httpd_req_t *req) {
+    char query[256] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char param[64] = {0};
+        if (httpd_query_key_value(query, "state", param, sizeof(param)) == ESP_OK) {
+            int state = atoi(param);
+            claw_state = state;
+            dirty_status = true;
+        }
+        if (httpd_query_key_value(query, "model", param, sizeof(param)) == ESP_OK) {
+            strncpy(model_name, param, sizeof(model_name) - 1);
+            model_name[sizeof(model_name) - 1] = '\0';
+            dirty_status = true;
+        }
+        if (httpd_query_key_value(query, "session", param, sizeof(param)) == ESP_OK) {
+            session_pct = atoi(param);
+            dirty_rings = true;
+        }
+        if (httpd_query_key_value(query, "weekly", param, sizeof(param)) == ESP_OK) {
+            weekly_pct = atoi(param);
+            dirty_rings = true;
+        }
+        if (httpd_query_key_value(query, "host", param, sizeof(param)) == ESP_OK) {
+            strncpy(client_host, param, sizeof(client_host) - 1);
+            client_host[sizeof(client_host) - 1] = '\0';
+            dirty_status = true;
+        }
+        ESP_LOGI(TAG, "HTTP notify: state=%d model=%s sess=%d wkly=%d",
+                 claw_state, model_name, session_pct, weekly_pct);
+    }
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "ok");
+    return ESP_OK;
+}
+
+static esp_err_t handler_status(httpd_req_t *req) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    esp_netif_ip_info_t ip_info = {0};
+    if (sta_netif) esp_netif_get_ip_info(sta_netif, &ip_info);
+
+    char json[400];
+    snprintf(json, sizeof(json),
+        "{\"state\":%d,\"state_name\":\"%s\",\"model\":\"%s\","
+        "\"session_pct\":%d,\"weekly_pct\":%d,"
+        "\"ip\":\"" IPSTR "\","
+        "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+        "\"hostname\":\"%s.local\",\"uptime_s\":%lu,\"free_heap\":%lu,"
+        "\"sound\":%s}",
+        claw_state, state_label(claw_state), model_name,
+        session_pct, weekly_pct,
+        IP2STR(&ip_info.ip),
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+        hostname_mdns,
+        (unsigned long)(esp_timer_get_time() / 1000000),
+        (unsigned long)esp_get_free_heap_size(),
+        sound_enabled ? "true" : "false");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+static esp_err_t handler_ping(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "pong");
+    return ESP_OK;
+}
+
+static void start_http_server(void) {
+    if (http_server) return;
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.stack_size = 4096;
+
+    if (httpd_start(&http_server, &config) == ESP_OK) {
+        httpd_uri_t uri_notify = { .uri = "/notify", .method = HTTP_GET, .handler = handler_notify, .user_ctx = NULL };
+        httpd_uri_t uri_status = { .uri = "/status", .method = HTTP_GET, .handler = handler_status, .user_ctx = NULL };
+        httpd_uri_t uri_ping   = { .uri = "/ping",   .method = HTTP_GET, .handler = handler_ping,   .user_ctx = NULL };
+        httpd_register_uri_handler(http_server, &uri_notify);
+        httpd_register_uri_handler(http_server, &uri_status);
+        httpd_register_uri_handler(http_server, &uri_ping);
+        ESP_LOGI(TAG, "HTTP server started on port 80");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// mDNS
+// ---------------------------------------------------------------------------
+static void start_mdns_service(void) {
+    ESP_ERROR_CHECK(mdns_init());
+    mdns_hostname_set(hostname_mdns);
+    mdns_instance_name_set("FiddlerCrab Status Display");
+    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    ESP_LOGI(TAG, "mDNS: %s.local", hostname_mdns);
+}
+
+// ---------------------------------------------------------------------------
+// MQTT
+// ---------------------------------------------------------------------------
+static void mqtt_event_handler(void *args, esp_event_base_t base,
+                                int32_t event_id, void *event_data) {
+    esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
+    switch (event_id) {
+        case MQTT_EVENT_CONNECTED:
+            mqtt_connected = true;
+            esp_mqtt_client_subscribe(mqtt_client, mqtt_topic, 1);
+            ESP_LOGI(TAG, "MQTT connected, subscribed to: %s", mqtt_topic);
+            usb_printf("\r\n[MQTT] Connected, topic: %s\r\n", mqtt_topic);
+            break;
+        case MQTT_EVENT_DISCONNECTED:
+            mqtt_connected = false;
+            ESP_LOGW(TAG, "MQTT disconnected");
+            break;
+        case MQTT_EVENT_DATA:
+            if (event->data_len > 0 && event->data_len < 200) {
+                char buf[200] = {0};
+                int copy_len = event->data_len < (int)sizeof(buf) - 1 ? event->data_len : (int)sizeof(buf) - 1;
+                memcpy(buf, event->data, copy_len);
+                buf[copy_len] = '\0';
+
+                // Check if pipe-delimited extended format
+                if (strchr(buf, '|') != NULL) {
+                    int state = 0;
+                    char model[32] = {0};
+                    int sess = -1;
+                    int wkly = -1;
+                    unsigned int reset_e = 0;
+                    char host[32] = {0};
+                    int parsed = sscanf(buf, "%d|%31[^|]|%d|%d|%u|%31[^|]",
+                                        &state, model, &sess, &wkly, &reset_e, host);
+                    if (parsed >= 1) {
+                        claw_state = state;
+                        dirty_status = true;
+                    }
+                    if (parsed >= 2 && strlen(model) > 0) {
+                        strncpy(model_name, model, sizeof(model_name) - 1);
+                        model_name[sizeof(model_name) - 1] = '\0';
+                    }
+                    if (parsed >= 3) {
+                        session_pct = sess;
+                        dirty_rings = true;
+                    }
+                    if (parsed >= 4) {
+                        weekly_pct = wkly;
+                        dirty_rings = true;
+                    }
+                    if (parsed >= 5) {
+                        reset_epoch = reset_e;
+                    }
+                    if (parsed >= 6 && strlen(host) > 0) {
+                        strncpy(client_host, host, sizeof(client_host) - 1);
+                        client_host[sizeof(client_host) - 1] = '\0';
+                        dirty_status = true;
+                    }
+                    ESP_LOGI(TAG, "MQTT: state=%d model=%s sess=%d wkly=%d host=%s",
+                             claw_state, model_name, session_pct, weekly_pct, client_host);
+                } else {
+                    // Backward compat: plain integer
+                    int state = atoi(buf);
+                    claw_state = state;
+                    dirty_status = true;
+                    ESP_LOGI(TAG, "MQTT: state=%d (plain)", state);
+                }
+            }
+            break;
+        case MQTT_EVENT_ERROR:
+            ESP_LOGE(TAG, "MQTT error");
+            break;
+        default:
+            break;
+    }
+}
+
+static void derive_mqtt_topic(void) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(mqtt_topic, sizeof(mqtt_topic),
+             "iotj/cl/openwr/updates/%02x%02x", mac[4], mac[5]);
+}
+
+static void start_mqtt(void) {
+    if (mqtt_client) return;
+    derive_mqtt_topic();
+
+    esp_mqtt_client_config_t cfg = {};
+    cfg.broker.address.uri = mqtt_broker_uri;
+
+    mqtt_client = esp_mqtt_client_init(&cfg);
+    if (!mqtt_client) {
+        ESP_LOGE(TAG, "MQTT client init failed");
+        return;
+    }
+    esp_mqtt_client_register_event(mqtt_client, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(mqtt_client);
+    ESP_LOGI(TAG, "MQTT started, broker: %s", mqtt_broker_uri);
+}
+
+// ---------------------------------------------------------------------------
+// WiFi
+// ---------------------------------------------------------------------------
+static void wifi_retry_task(void *arg) {
+    while (wifi_retry_count < WIFI_MAX_RETRY && !wifi_connected) {
+        wifi_retry_count++;
+        usb_printf("\r\n[WiFi] Retry %d/%d...\r\n", wifi_retry_count, WIFI_MAX_RETRY);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (!wifi_connected) esp_wifi_connect();
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+    if (!wifi_connected) {
+        usb_print("\r\n[WiFi] Connect failed.\r\n");
+    }
+    vTaskDelete(NULL);
+}
+
+static void wifi_event_handler(void *arg, esp_event_base_t event_base,
+                                int32_t event_id, void *event_data) {
+    if (event_base == WIFI_EVENT) {
+        if (event_id == WIFI_EVENT_STA_START) {
+            esp_wifi_connect();
+        } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+            ESP_LOGW(TAG, "WiFi disconnected, reason=%d", disc->reason);
+            usb_printf("\r\n[WiFi] Disconnected (reason %d)\r\n", disc->reason);
+            wifi_connected = false;
+            dirty_wifi = true;
+            if (wifi_retry_count == 0) {
+                xTaskCreate(wifi_retry_task, "wifi_retry", 3072, NULL, 3, NULL);
+            }
+        }
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "Connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        wifi_connected = true;
+        wifi_retry_count = 0;
+        dirty_wifi = true;
+
+        start_http_server();
+        start_mdns_service();
+        start_mqtt();
+    }
+}
+
+static void wifi_init_sta(void) {
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    sta_netif = esp_netif_create_default_wifi_sta();
+
+    esp_netif_set_hostname(sta_netif, hostname);
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(
+        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(
+        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+}
+
+static void wifi_connect_with_creds(void) {
+    wifi_config_t wifi_config = {};
+    strncpy((char *)wifi_config.sta.ssid, wifi_ssid, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, wifi_pass, sizeof(wifi_config.sta.password) - 1);
+
+    if (strlen(wifi_pass) == 0) {
+        wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+        wifi_config.sta.password[0] = '\0';
+    } else {
+        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    }
+    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+
+    wifi_retry_count = 0;
+
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Synthwave background
+// ---------------------------------------------------------------------------
+static void draw_synthwave_bg() {
+    display.fillScreen(Synth::BG);
+
+    // Converging perspective lines from bottom center toward upper area
+    int bx = 120, by = 200; // vanishing convergence near bottom center
+    // Lines radiate upward and outward
+    display.drawLine(bx, by, 0,   0,   Synth::GRID);
+    display.drawLine(bx, by, 60,  0,   Synth::GRID);
+    display.drawLine(bx, by, 120, 0,   Synth::GRID);
+    display.drawLine(bx, by, 180, 0,   Synth::GRID);
+    display.drawLine(bx, by, 240, 0,   Synth::GRID);
+    display.drawLine(bx, by, 0,   80,  Synth::GRID);
+    display.drawLine(bx, by, 240, 80,  Synth::GRID);
+    display.drawLine(bx, by, 0,   160, Synth::GRID);
+    display.drawLine(bx, by, 240, 160, Synth::GRID);
+
+    // Horizontal grid lines in lower half with increasing spacing
+    display.drawLine(0, 170, 240, 170, Synth::GRID);
+    display.drawLine(0, 185, 240, 185, Synth::GRID);
+    display.drawLine(0, 200, 240, 200, Synth::GRID);
+    display.drawLine(0, 218, 240, 218, Synth::GRID);
+    display.drawLine(0, 238, 240, 238, Synth::GRID);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Fiddler Crab
+// ---------------------------------------------------------------------------
+static void draw_crab(int ccx, int ccy) {
+    // Body: overlapping filled circles in CYAN
+    display.fillCircle(ccx, ccy, 16, Synth::CYAN);
+    display.fillCircle(ccx - 8, ccy + 2, 12, Synth::CYAN);
+    display.fillCircle(ccx + 8, ccy + 2, 12, Synth::CYAN);
+
+    // Shell accent lines
+    uint16_t light_cyan = rgb(100, 255, 255);
+    display.drawCircle(ccx, ccy - 2, 14, light_cyan);
+    display.drawLine(ccx - 12, ccy, ccx + 12, ccy, light_cyan);
+
+    // Big claw (RIGHT side) - fiddler crabs have one oversized claw
+    display.fillCircle(ccx + 30, ccy - 8, 10, Synth::MAGENTA);
+    display.fillCircle(ccx + 38, ccy - 14, 7, Synth::HOT_PINK);
+    display.fillCircle(ccx + 24, ccy - 14, 6, Synth::MAGENTA);
+    // Claw pincer lines
+    display.drawLine(ccx + 34, ccy - 20, ccx + 42, ccy - 28, Synth::HOT_PINK);
+    display.drawLine(ccx + 30, ccy - 20, ccx + 26, ccy - 28, Synth::MAGENTA);
+    // Arm connecting claw to body
+    display.drawLine(ccx + 16, ccy - 2, ccx + 24, ccy - 6, Synth::CYAN);
+
+    // Small claw (LEFT side)
+    display.fillCircle(ccx - 26, ccy - 6, 5, Synth::MAGENTA);
+    display.fillCircle(ccx - 30, ccy - 10, 3, Synth::HOT_PINK);
+    // Arm
+    display.drawLine(ccx - 16, ccy - 2, ccx - 22, ccy - 5, Synth::CYAN);
+
+    // Legs (3 per side) - angled lines
+    // Right legs
+    display.drawLine(ccx + 12, ccy + 8,  ccx + 28, ccy + 18, Synth::CYAN);
+    display.drawLine(ccx + 10, ccy + 10, ccx + 24, ccy + 24, Synth::CYAN);
+    display.drawLine(ccx + 8,  ccy + 12, ccx + 18, ccy + 28, Synth::CYAN);
+    // Left legs
+    display.drawLine(ccx - 12, ccy + 8,  ccx - 28, ccy + 18, Synth::CYAN);
+    display.drawLine(ccx - 10, ccy + 10, ccx - 24, ccy + 24, Synth::CYAN);
+    display.drawLine(ccx - 8,  ccy + 12, ccx - 18, ccy + 28, Synth::CYAN);
+
+    // Eye stalks: thin lines with filled circles at tips
+    display.drawLine(ccx - 6, ccy - 14, ccx - 10, ccy - 26, Synth::CYAN);
+    display.drawLine(ccx + 6, ccy - 14, ccx + 10, ccy - 26, Synth::CYAN);
+    display.fillCircle(ccx - 10, ccy - 27, 3, Synth::NEON_GREEN);
+    display.fillCircle(ccx + 10, ccy - 27, 3, Synth::NEON_GREEN);
+    // Eye pupils
+    display.fillCircle(ccx - 10, ccy - 28, 1, Synth::BG);
+    display.fillCircle(ccx + 10, ccy - 28, 1, Synth::BG);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Session ring (outer)
+// ---------------------------------------------------------------------------
+static void draw_session_ring() {
+    const int ticks = 100;
+    const float start_deg = -90.0f;
+    const float sweep_deg = 360.0f;
+    const int tick_len_major = 18;
+    const int tick_len_minor = 12;
+    const int major_every = 10;
+    int outer_r = cx - 6;
+
+    // Clear the ring area
+    display.fillCircle(cx, cy, outer_r + 2, Synth::BG);
+
+    // Draw all ticks dim first
+    for (int i = 0; i < ticks; ++i) {
+        float a = (start_deg + sweep_deg * (i / (float)ticks)) * (float)M_PI / 180.0f;
+        int len = (i % major_every == 0) ? tick_len_major : tick_len_minor;
+        int x1 = cx + (int)(cosf(a) * outer_r);
+        int y1 = cy + (int)(sinf(a) * outer_r);
+        int x0 = cx + (int)(cosf(a) * (outer_r - len));
+        int y0 = cy + (int)(sinf(a) * (outer_r - len));
+        display.drawLine(x0, y0, x1, y1, Synth::DIM_GRAY);
+    }
+
+    // Light up ticks based on session_pct
+    if (session_pct >= 0) {
+        int lit = (session_pct * ticks) / 100;
+        if (lit > ticks) lit = ticks;
+        for (int i = 0; i < lit; ++i) {
+            float a = (start_deg + sweep_deg * (i / (float)ticks)) * (float)M_PI / 180.0f;
+            int len = (i % major_every == 0) ? tick_len_major : tick_len_minor;
+            int x1 = cx + (int)(cosf(a) * outer_r);
+            int y1 = cy + (int)(sinf(a) * outer_r);
+            int x0 = cx + (int)(cosf(a) * (outer_r - len));
+            int y0 = cy + (int)(sinf(a) * (outer_r - len));
+            uint16_t color;
+            int pct_at = (i * 100) / ticks;
+            if (pct_at <= 70) color = Synth::CYAN;
+            else if (pct_at <= 90) color = Synth::YELLOW;
+            else color = Synth::RED;
+            display.drawLine(x0, y0, x1, y1, color);
+        }
+    }
+
+    // Label at top
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextSize(1);
+    display.setTextColor(Synth::TEXT_DIM, Synth::BG);
+    display.drawString("SESSION", cx, 14);
+
+    // Percentage or "?" at upper area
+    display.setTextSize(1);
+    display.setTextColor(Synth::CYAN, Synth::BG);
+    char sbuf[8];
+    if (session_pct >= 0) {
+        snprintf(sbuf, sizeof(sbuf), "%d%%", session_pct);
+    } else {
+        snprintf(sbuf, sizeof(sbuf), "?");
+    }
+    display.drawString(sbuf, cx, 26);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Weekly ring (inner)
+// ---------------------------------------------------------------------------
+static void draw_weekly_ring() {
+    const int ticks = 50;
+    const float start_deg = -90.0f;
+    const float sweep_deg = 360.0f;
+    const int tick_len_major = 10;
+    const int tick_len_minor = 6;
+    const int major_every = 5;
+    // Inner ring sits inside the session ring
+    int session_outer_r = cx - 6;
+    int session_inner_r = session_outer_r - 18; // major tick len
+    int outer_r = session_inner_r - 4;
+
+    // Draw all ticks dim
+    for (int i = 0; i < ticks; ++i) {
+        float a = (start_deg + sweep_deg * (i / (float)ticks)) * (float)M_PI / 180.0f;
+        int len = (i % major_every == 0) ? tick_len_major : tick_len_minor;
+        int x1 = cx + (int)(cosf(a) * outer_r);
+        int y1 = cy + (int)(sinf(a) * outer_r);
+        int x0 = cx + (int)(cosf(a) * (outer_r - len));
+        int y0 = cy + (int)(sinf(a) * (outer_r - len));
+        display.drawLine(x0, y0, x1, y1, Synth::DIM_GRAY);
+    }
+
+    // Light up ticks based on weekly_pct
+    if (weekly_pct >= 0) {
+        int lit = (weekly_pct * ticks) / 100;
+        if (lit > ticks) lit = ticks;
+        for (int i = 0; i < lit; ++i) {
+            float a = (start_deg + sweep_deg * (i / (float)ticks)) * (float)M_PI / 180.0f;
+            int len = (i % major_every == 0) ? tick_len_major : tick_len_minor;
+            int x1 = cx + (int)(cosf(a) * outer_r);
+            int y1 = cy + (int)(sinf(a) * outer_r);
+            int x0 = cx + (int)(cosf(a) * (outer_r - len));
+            int y0 = cy + (int)(sinf(a) * (outer_r - len));
+            uint16_t color;
+            int pct_at = (i * 100) / ticks;
+            if (pct_at <= 70) color = Synth::CYAN;
+            else if (pct_at <= 90) color = Synth::YELLOW;
+            else color = Synth::RED;
+            display.drawLine(x0, y0, x1, y1, color);
+        }
+    }
+
+    // Label at secondary position (bottom of inner ring area)
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextSize(1);
+    display.setTextColor(Synth::TEXT_DIM, Synth::BG);
+    display.drawString("WEEKLY", cx, 226);
+
+    // Percentage or "?"
+    display.setTextColor(Synth::CYAN, Synth::BG);
+    char wbuf[8];
+    if (weekly_pct >= 0) {
+        snprintf(wbuf, sizeof(wbuf), "%d%%", weekly_pct);
+    } else {
+        snprintf(wbuf, sizeof(wbuf), "?");
+    }
+    display.drawString(wbuf, cx, 216);
+}
+
+// ---------------------------------------------------------------------------
+// Session timer helpers
+// ---------------------------------------------------------------------------
+static uint32_t timer_get_elapsed_ms() {
+    uint32_t total = timer_accumulated_ms;
+    if (timer_running) {
+        total += millis() - timer_segment_start;
+    }
+    return total;
+}
+
+static void timer_start() {
+    if (!timer_running) {
+        timer_segment_start = millis();
+        timer_running = true;
+    }
+}
+
+static void timer_pause() {
+    if (timer_running) {
+        timer_accumulated_ms += millis() - timer_segment_start;
+        timer_running = false;
+    }
+}
+
+static void timer_reset() {
+    timer_accumulated_ms = 0;
+    timer_segment_start = millis();
+    timer_running = false;
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Timer ring (innermost, 3rd ring)
+// ---------------------------------------------------------------------------
+static void draw_timer_ring() {
+    const int ticks = 60;  // 60 ticks = one per minute for a 1-hour ring
+    const float start_deg = -90.0f;
+    const float sweep_deg = 360.0f;
+    const int tick_len_major = 8;
+    const int tick_len_minor = 4;
+    const int major_every = 5;  // Major tick every 5 minutes
+
+    // Innermost ring: inside weekly ring
+    int session_outer_r = cx - 6;
+    int session_inner_r = session_outer_r - 18;
+    int weekly_outer_r = session_inner_r - 4;
+    int weekly_inner_r = weekly_outer_r - 10;
+    int outer_r = weekly_inner_r - 3;
+
+    uint32_t elapsed_ms = timer_get_elapsed_ms();
+    uint32_t elapsed_s = elapsed_ms / 1000;
+    uint32_t elapsed_min = elapsed_s / 60;
+
+    // Ring represents 60 minutes (1 hour). Wraps after 60 min.
+    int lit_ticks = (int)(elapsed_min % 60);
+
+    // Draw all ticks dim
+    for (int i = 0; i < ticks; ++i) {
+        float a = (start_deg + sweep_deg * (i / (float)ticks)) * (float)M_PI / 180.0f;
+        int len = (i % major_every == 0) ? tick_len_major : tick_len_minor;
+        int x1 = cx + (int)(cosf(a) * outer_r);
+        int y1 = cy + (int)(sinf(a) * outer_r);
+        int x0 = cx + (int)(cosf(a) * (outer_r - len));
+        int y0 = cy + (int)(sinf(a) * (outer_r - len));
+        display.drawLine(x0, y0, x1, y1, Synth::DIM_GRAY);
+    }
+
+    // Light up elapsed ticks in orange/amber
+    static const uint16_t TIMER_COLOR = rgb(255, 165, 0);  // Orange
+    static const uint16_t TIMER_HOT   = rgb(255, 80, 0);   // Deep orange for >45 min
+    for (int i = 0; i < lit_ticks && i < ticks; ++i) {
+        float a = (start_deg + sweep_deg * (i / (float)ticks)) * (float)M_PI / 180.0f;
+        int len = (i % major_every == 0) ? tick_len_major : tick_len_minor;
+        int x1 = cx + (int)(cosf(a) * outer_r);
+        int y1 = cy + (int)(sinf(a) * outer_r);
+        int x0 = cx + (int)(cosf(a) * (outer_r - len));
+        int y0 = cy + (int)(sinf(a) * (outer_r - len));
+        display.drawLine(x0, y0, x1, y1, (i >= 45) ? TIMER_HOT : TIMER_COLOR);
+    }
+
+    // Time display: hh:mm:ss centered at bottom of inner area
+    uint32_t hh = elapsed_s / 3600;
+    uint32_t mm = (elapsed_s % 3600) / 60;
+    uint32_t ss = elapsed_s % 60;
+    char tbuf[12];
+    snprintf(tbuf, sizeof(tbuf), "%02lu:%02lu:%02lu", (unsigned long)hh, (unsigned long)mm, (unsigned long)ss);
+
+    // Draw timer text just inside the timer ring, bottom area
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextSize(1);
+
+    // Pulsing color when running, dim when paused
+    uint16_t timer_text_color;
+    if (timer_running) {
+        // Pulse between orange and bright orange
+        int pulse = (millis() / 500) % 2;
+        timer_text_color = pulse ? TIMER_COLOR : Synth::YELLOW;
+    } else if (elapsed_s > 0) {
+        timer_text_color = Synth::TEXT_DIM;  // Paused but has time
+    } else {
+        timer_text_color = Synth::DIM_GRAY;  // No time recorded
+    }
+    display.setTextColor(timer_text_color, Synth::BG);
+    display.drawString(tbuf, cx, cy - 62);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Status text
+// ---------------------------------------------------------------------------
+static void draw_status_text() {
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+
+    // Status label above crab
+    int status_y = cy - 48;
+    display.setTextSize(2);
+
+    uint16_t fg;
+    uint32_t now = millis();
+
+    switch (claw_state) {
+        case 0: // IDLE
+            fg = Synth::DIM_CYAN;
+            break;
+        case 2: { // WORKING - pulsing magenta
+            float pulse = (sinf(now * 0.004f) + 1.0f) * 0.5f; // 0.0 to 1.0
+            float k = 0.4f + pulse * 0.6f; // 0.4 to 1.0
+            fg = dim_color(Synth::MAGENTA, k);
+            break;
+        }
+        case 3: // NEED INPUT - alternating
+            fg = ((now / 500) % 2 == 0) ? Synth::HOT_PINK : Synth::YELLOW;
+            break;
+        case 5: // FINISHED
+            fg = Synth::NEON_GREEN;
+            break;
+        case 7: // ERROR - flashing
+            fg = ((now / 300) % 2 == 0) ? Synth::RED : Synth::BG;
+            break;
+        default:
+            fg = Synth::DIM_CYAN;
+            break;
+    }
+
+    display.setTextColor(fg, Synth::BG);
+    // Pad to fixed width to overwrite old text
+    char status_buf[20];
+    snprintf(status_buf, sizeof(status_buf), " %-12s", state_label(claw_state));
+    display.drawString(status_buf, cx, status_y);
+
+    // Client hostname in parens below status
+    display.setTextSize(1);
+    display.setTextColor(Synth::TEXT_DIM, Synth::BG);
+    char host_buf[40];
+    if (client_host[0] != '\0') {
+        snprintf(host_buf, sizeof(host_buf), "(%s)", client_host);
+    } else {
+        snprintf(host_buf, sizeof(host_buf), "            ");
+    }
+    display.drawString(host_buf, cx, status_y + 16);
+
+    // Model name below crab
+    int model_y = cy + 42;
+    display.setTextSize(1);
+    display.setTextColor(Synth::TEXT_DIM, Synth::BG);
+    char model_buf[36];
+    snprintf(model_buf, sizeof(model_buf), " %-16s", model_name);
+    display.drawString(model_buf, cx, model_y);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: WiFi icon
+// ---------------------------------------------------------------------------
+static void draw_wifi_icon() {
+    int wy = 208;
+    int wx = cx;
+
+    // Clear the full area: MAC label + WiFi icon + SSID
+    display.fillRect(wx - 55, wy - 30, 110, 46, Synth::BG);
+
+    // MAC suffix label well above WiFi arcs
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextSize(1);
+    display.setTextColor(Synth::TEXT_DIM, Synth::BG);
+    display.drawString(mac_suffix, wx, wy - 26);
+
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextSize(1);
+
+    if (wifi_connected) {
+        // WiFi fan: 3 concentric arcs
+        for (int i = 1; i <= 3; i++) {
+            int r = i * 4;
+            // Draw arc segments (approximate with short lines)
+            for (int a = -40; a <= 40; a += 5) {
+                float rad = a * (float)M_PI / 180.0f;
+                int x1 = wx + (int)(sinf(rad) * r);
+                int y1 = wy - 6 - (int)(cosf(rad) * r);
+                int x2 = wx + (int)(sinf((a + 5) * (float)M_PI / 180.0f) * r);
+                int y2 = wy - 6 - (int)(cosf((a + 5) * (float)M_PI / 180.0f) * r);
+                display.drawLine(x1, y1, x2, y2, Synth::CYAN);
+            }
+        }
+        // Dot at base
+        display.fillCircle(wx, wy - 5, 1, Synth::CYAN);
+
+        // SSID text
+        display.setTextColor(Synth::DIM_CYAN, Synth::BG);
+        char ssid_short[16];
+        strncpy(ssid_short, wifi_ssid, 12);
+        ssid_short[12] = '\0';
+        display.drawString(ssid_short, wx, wy + 8);
+    } else {
+        // X mark
+        display.drawLine(wx - 5, wy - 8, wx + 5, wy + 2, Synth::RED);
+        display.drawLine(wx + 5, wy - 8, wx - 5, wy + 2, Synth::RED);
+        display.setTextColor(Synth::RED, Synth::BG);
+        display.drawString("No WiFi", wx, wy + 8);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Full scene draw
+// ---------------------------------------------------------------------------
+static void draw_full_scene() {
+    draw_synthwave_bg();
+    draw_session_ring();
+    draw_weekly_ring();
+    draw_timer_ring();
+    draw_crab(cx, cy);
+    draw_status_text();
+    draw_wifi_icon();
+}
+
+// ---------------------------------------------------------------------------
+// Forth REPL task
+// ---------------------------------------------------------------------------
+static void forth_repl_task(void *arg) {
+    (void)arg;
+    forth_repl(uart_getchar, uart_putchar);
+    vTaskDelete(NULL);
+}
+
+// ---------------------------------------------------------------------------
+// Forth FFI Words
+// ---------------------------------------------------------------------------
+static void w_brightness(void) {
+    int n = (int)forth_pop();
+    if (n < 0) n = 0;
+    if (n > Config::BrightMax) n = Config::BrightMax;
+    brightness_pct = n;
+    int mapped = (brightness_pct * 255) / Config::BrightMax;
+    display.setBrightness(mapped);
+}
+
+static void w_bright_get(void) {
+    forth_push(brightness_pct);
+}
+
+static void w_invert(void) {
+    static bool inv = false;
+    inv = !inv;
+    display.invertDisplay(inv);
+}
+
+static void w_wifi_ssid(void) {
+    usb_print("SSID: ");
+    read_line_from_serial(wifi_ssid, sizeof(wifi_ssid), true, false);
+    usb_printf("SSID set to: '%s'\r\n", wifi_ssid);
+}
+
+static void w_wifi_pass(void) {
+    usb_print("Password (Enter for open): ");
+    read_line_from_serial(wifi_pass, sizeof(wifi_pass), false, true);
+    if (strlen(wifi_pass) == 0)
+        usb_print("No password (open network)\r\n");
+    else
+        usb_print("Password set.\r\n");
+}
+
+static void w_wifi_connect(void) {
+    if (strlen(wifi_ssid) == 0) {
+        usb_print("No SSID set. Use wifi-ssid first.\r\n");
+        return;
+    }
+    nvs_save_wifi_creds();
+    usb_printf("Saved. Connecting to '%s'...\r\n", wifi_ssid);
+    wifi_connect_with_creds();
+}
+
+static void w_wifi_status(void) {
+    usb_printf("SSID:      '%s'\r\n", wifi_ssid);
+    usb_printf("Connected: %s\r\n", wifi_connected ? "yes" : "no");
+    if (wifi_connected && sta_netif) {
+        esp_netif_ip_info_t ip_info;
+        esp_netif_get_ip_info(sta_netif, &ip_info);
+        usb_printf("IP:        " IPSTR "\r\n", IP2STR(&ip_info.ip));
+    }
+    usb_printf("Hostname:  %s.local\r\n", hostname_mdns);
+    usb_printf("Free heap: %lu bytes\r\n", (unsigned long)esp_get_free_heap_size());
+}
+
+static void w_wifi_clear(void) {
+    nvs_clear_wifi_creds();
+    usb_print("WiFi credentials cleared.\r\n");
+}
+
+static void w_mqtt_broker(void) {
+    usb_printf("Current: %s\r\n", mqtt_broker_uri);
+    usb_print("New broker URI (Enter to keep): ");
+    char buf[128] = {0};
+    read_line_from_serial(buf, sizeof(buf), true, true);
+    if (strlen(buf) > 0) {
+        strncpy(mqtt_broker_uri, buf, sizeof(mqtt_broker_uri) - 1);
+        nvs_save_mqtt_broker();
+        usb_printf("Broker set to: %s\r\n", mqtt_broker_uri);
+        if (mqtt_client) {
+            esp_mqtt_client_stop(mqtt_client);
+            esp_mqtt_client_destroy(mqtt_client);
+            mqtt_client = NULL;
+            mqtt_connected = false;
+            if (wifi_connected) start_mqtt();
+        }
+    } else {
+        usb_print("Unchanged.\r\n");
+    }
+}
+
+static void w_mqtt_status(void) {
+    usb_printf("Broker:    %s\r\n", mqtt_broker_uri);
+    usb_printf("Topic:     %s\r\n", mqtt_topic[0] ? mqtt_topic : "(not set)");
+    usb_printf("Connected: %s\r\n", mqtt_connected ? "yes" : "no");
+}
+
+static void w_mqtt_topic(void) {
+    if (mqtt_topic[0] == '\0') derive_mqtt_topic();
+    usb_printf("%s\r\n", mqtt_topic);
+}
+
+static void w_sound_on(void) {
+    sound_enabled = true;
+    nvs_save_sound_pref();
+    usb_print("Sound enabled.\r\n");
+    speaker_tone_nb(1200, 60);
+}
+
+static void w_sound_off(void) {
+    sound_enabled = false;
+    nvs_save_sound_pref();
+    usb_print("Sound disabled.\r\n");
+}
+
+static void w_status(void) {
+    usb_printf("State:   %d (%s)\r\n", claw_state, state_label(claw_state));
+    usb_printf("Model:   %s\r\n", model_name);
+    usb_printf("Session: %d%%\r\n", session_pct);
+    usb_printf("Weekly:  %d%%\r\n", weekly_pct);
+    usb_printf("Client:  %s\r\n", client_host[0] ? client_host : "(none)");
+    usb_printf("Sound:   %s\r\n", sound_enabled ? "on" : "off");
+    usb_printf("Bright:  %d%%\r\n", brightness_pct);
+}
+
+static void register_forth_words(void) {
+    forth_register_word("brightness", w_brightness);
+    forth_register_word("bright?",    w_bright_get);
+    forth_register_word("invert",     w_invert);
+    forth_register_word("wifi-ssid",    w_wifi_ssid);
+    forth_register_word("wifi-pass",    w_wifi_pass);
+    forth_register_word("wifi-connect", w_wifi_connect);
+    forth_register_word("wifi-status",  w_wifi_status);
+    forth_register_word("wifi-clear",   w_wifi_clear);
+    forth_register_word("mqtt-broker",  w_mqtt_broker);
+    forth_register_word("mqtt-status",  w_mqtt_status);
+    forth_register_word("mqtt-topic",   w_mqtt_topic);
+    forth_register_word("sound-on",     w_sound_on);
+    forth_register_word("sound-off",    w_sound_off);
+    forth_register_word("status",       w_status);
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+extern "C" void app_main(void)
+{
+    // 1. USB serial
+    setup_usb_serial();
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    // 2. Banner
+    usb_print("\r\n\r\n");
+    usb_print("============================================\r\n");
+    usb_printf("  FiddlerCrab Display v%s\r\n", ESPIDFORTH_VERSION_STRING);
+    usb_printf("  Build: %s %s\r\n", ESPIDFORTH_BUILD_DATE, ESPIDFORTH_BUILD_TIME);
+    usb_print("  Synthwave Claude Code Status Display\r\n");
+    usb_print("============================================\r\n");
+
+    // 3. Hardware init
+    display.init();
+    encoder_init();
+    speaker_init();
+    button_init();
+    nvs_init_flash();
+    usb_print("Hardware initialized.\r\n");
+
+    // 4. Layout
+    cx = display.width() / 2;
+    cy = display.height() / 2;
+
+    // Set initial brightness
+    int mapped = (brightness_pct * 255) / Config::BrightMax;
+    display.setBrightness(mapped);
+
+    // 5. Derive hostname BEFORE drawing (need mac_suffix for display)
+    derive_hostname();
+    usb_printf("Hostname: %s.local\r\n", hostname_mdns);
+    usb_printf("MAC suffix: %s\r\n", mac_suffix);
+
+    // 6. Initial draw
+    draw_full_scene();
+
+    wifi_init_sta();
+
+    nvs_load_mqtt_broker();
+    usb_printf("MQTT broker: %s\r\n", mqtt_broker_uri);
+
+    // Load sound preference
+    nvs_load_sound_pref();
+    usb_printf("Sound: %s\r\n", sound_enabled ? "on" : "off");
+
+    // 7. Forth init + register words
+    forth_init(FORTH_HEAP_SIZE);
+    register_forth_words();
+    usb_print("Forth engine initialized.\r\n");
+    usb_printf("Free heap: %lu bytes\r\n\r\n",
+        (unsigned long)esp_get_free_heap_size());
+
+    usb_print("Forth commands:\r\n");
+    usb_print("  N brightness  -- set brightness (0-100)\r\n");
+    usb_print("  bright?       -- show current brightness\r\n");
+    usb_print("  invert        -- toggle display inversion\r\n");
+    usb_print("  wifi-ssid     -- set WiFi SSID\r\n");
+    usb_print("  wifi-pass     -- set WiFi password\r\n");
+    usb_print("  wifi-connect  -- connect and save\r\n");
+    usb_print("  wifi-status   -- show connection info\r\n");
+    usb_print("  wifi-clear    -- erase credentials\r\n");
+    usb_print("  mqtt-broker   -- view/change MQTT broker\r\n");
+    usb_print("  mqtt-status   -- show MQTT state\r\n");
+    usb_print("  mqtt-topic    -- print subscription topic\r\n");
+    usb_print("  sound-on      -- enable chimes\r\n");
+    usb_print("  sound-off     -- disable chimes\r\n");
+    usb_print("  status        -- print current state/model/usage\r\n\r\n");
+
+    // 8. Start Forth REPL task
+    xTaskCreate(forth_repl_task, "forth_repl", 8192, NULL, 3, NULL);
+
+    // 9. Auto-connect WiFi from NVS
+    if (nvs_load_wifi_creds()) {
+        usb_printf("Stored WiFi: '%s' -- connecting...\r\n", wifi_ssid);
+        wifi_connect_with_creds();
+    } else {
+        usb_print("No stored WiFi. Configure via REPL.\r\n");
+    }
+
+    // Read and discard any initial encoder counts from boot
+    encoder_read_and_reset();
+
+    // 10. Main render loop
+    while (1)
+    {
+        uint32_t now = millis();
+
+        // --- Check state changes, play chimes, manage timer, set dirty flags ---
+        if (claw_state != prev_claw_state) {
+            switch (claw_state) {
+                case 2: chime_working();    break;
+                case 3: chime_need_input(); break;
+                case 5: chime_finished();   break;
+                case 7: chime_error();      break;
+                default: break;
+            }
+
+            // Timer management
+            switch (claw_state) {
+                case 2:  // WORKING — start or resume timer
+                    if (prev_claw_state == 0 || prev_claw_state == 5 || prev_claw_state == -1) {
+                        timer_reset();  // New session, reset
+                    }
+                    timer_start();
+                    break;
+                case 3:  // NEED INPUT — pause timer
+                case 0:  // IDLE — pause timer
+                    timer_pause();
+                    break;
+                case 5:  // FINISHED — pause timer (keep time visible)
+                    timer_pause();
+                    break;
+                case 7:  // ERROR — pause timer
+                    timer_pause();
+                    break;
+            }
+            dirty_timer = true;
+
+            prev_claw_state = claw_state;
+            dirty_status = true;
+        }
+
+        // --- Full redraw if needed ---
+        if (dirty_full) {
+            draw_full_scene();
+            dirty_full = false;
+            dirty_status = false;
+            dirty_rings = false;
+            dirty_wifi = false;
+            dirty_timer = false;
+        }
+
+        // --- Partial redraws ---
+        if (dirty_rings) {
+            draw_session_ring();
+            draw_weekly_ring();
+            draw_timer_ring();
+            draw_crab(cx, cy); // Redraw crab since rings clear center
+            draw_wifi_icon();  // Redraw WiFi since fillCircle clears everything
+            dirty_rings = false;
+            dirty_timer = false;
+            dirty_wifi = false;
+            dirty_status = true; // Need to redraw text on top
+        }
+
+        // --- Timer ring: update every second while running ---
+        if (timer_running) {
+            static uint32_t last_timer_draw = 0;
+            if (now - last_timer_draw >= 1000) {
+                draw_timer_ring();
+                last_timer_draw = now;
+            }
+        } else if (dirty_timer) {
+            draw_timer_ring();
+            dirty_timer = false;
+        }
+
+        if (dirty_wifi) {
+            draw_wifi_icon();
+            dirty_wifi = false;
+        }
+
+        // --- Animations: always redraw status text for animated states ---
+        // For WORKING, NEED_INPUT, ERROR: redraw every frame for animation
+        // For IDLE, FINISHED: only redraw when dirty
+        bool needs_anim = (claw_state == 2 || claw_state == 3 || claw_state == 7);
+        if (dirty_status || needs_anim) {
+            draw_status_text();
+            dirty_status = false;
+        }
+
+        // --- Encoder -> brightness ---
+        int32_t d = encoder_read_and_reset();
+        if (d)
+            enc_accum += d;
+        int logical = 0;
+        while (enc_accum >= Config::EncDiv) {
+            enc_accum -= Config::EncDiv;
+            ++logical;
+        }
+        while (enc_accum <= -Config::EncDiv) {
+            enc_accum += Config::EncDiv;
+            --logical;
+        }
+        if (logical) {
+            int prev_b = brightness_pct;
+            brightness_pct += logical * Config::BrightStep;
+            if (brightness_pct < 0) brightness_pct = 0;
+            if (brightness_pct > Config::BrightMax) brightness_pct = Config::BrightMax;
+            int mapped_b = (brightness_pct * 255) / Config::BrightMax;
+            display.setBrightness(mapped_b);
+            if (sound_enabled && brightness_pct != prev_b) {
+                speaker_tone_nb(
+                    (brightness_pct > prev_b) ? Config::ClickUpFreq : Config::ClickDownFreq,
+                    Config::ClickMs);
+            }
+        }
+
+        // --- Button -> sound toggle ---
+        button_update();
+        if (btn_was_pressed) {
+            sound_enabled = !sound_enabled;
+            nvs_save_sound_pref();
+            if (sound_enabled) {
+                speaker_tone_nb(1200, 60);
+            }
+            usb_printf("[BTN] Sound %s\r\n", sound_enabled ? "ON" : "OFF");
+        }
+
+        // --- Tone2 scheduling ---
+        if (tone2_at && now >= tone2_at) {
+            if (sound_enabled && tone2_freq)
+                speaker_tone_nb(tone2_freq, tone2_dur);
+            tone2_at = 0;
+            tone2_freq = 0;
+            tone2_dur = 0;
+        }
+
+        // --- Speaker auto-stop ---
+        speaker_update();
+
+        // --- Yield ---
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}

@@ -1,0 +1,5 @@
+dependencies:
+  m5stack/m5gfx:
+    version: ">=0.2.0"
+  espressif/mdns:
+    version: ">=1.0.0"
