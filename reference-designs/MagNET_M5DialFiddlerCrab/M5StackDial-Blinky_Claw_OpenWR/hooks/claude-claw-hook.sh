@@ -8,7 +8,7 @@
 #
 # Environment variables (set defaults, override as needed):
 #   CLAW_BROKER  — MQTT broker hostname (default: broker.hivemq.com)
-#   CLAW_TOPIC   — MQTT topic (default: must be set, e.g. iotj/cl/openwr/updates/b7a4)
+#   CLAW_TOPIC   — MQTT topic (required, e.g. iotj/cl/openwr/updates/b7a4)
 #   CLAW_PLAN    — Plan tier token limit per 5hr window (default: 80000)
 #                  Rough estimates: Pro=45000, Max5=80000, Max20=200000
 #
@@ -27,32 +27,27 @@ if [ -z "$CLAW_TOPIC" ]; then
     exit 0
 fi
 
-# Ensure cache directory exists
 mkdir -p "$CACHE_DIR"
 
 # Read hook JSON from stdin
 INPUT="$(cat)"
 
-# Extract fields from hook JSON
+# Extract fields
 HOOK_EVENT="$(echo "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)"
 MODEL_RAW="$(echo "$INPUT" | jq -r '.model // empty' 2>/dev/null)"
 TRANSCRIPT="$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)"
 
-# Model name: cache it when available (Stop and SessionStart include it,
-# PreToolUse and others don't). Read from cache when not in JSON.
+# --- Model name: cache when available ---
 if [ -n "$MODEL_RAW" ] && [ "$MODEL_RAW" != "null" ]; then
     SHORT_MODEL="${MODEL_RAW#claude-}"
     echo "$SHORT_MODEL" > "$CACHE_DIR/model"
+elif [ -f "$CACHE_DIR/model" ]; then
+    SHORT_MODEL="$(cat "$CACHE_DIR/model")"
 else
-    # Read from cache
-    if [ -f "$CACHE_DIR/model" ]; then
-        SHORT_MODEL="$(cat "$CACHE_DIR/model")"
-    else
-        SHORT_MODEL="unknown"
-    fi
+    SHORT_MODEL="unknown"
 fi
 
-# Map hook event to state
+# --- Map event to state ---
 case "${HOOK_EVENT}" in
     PreToolUse)        STATE=2 ;;
     PostToolUse)       STATE=2 ;;
@@ -63,31 +58,37 @@ case "${HOOK_EVENT}" in
     *)                 STATE=0 ;;
 esac
 
-# Compute session usage % from transcript (if available)
+# --- Session usage % ---
+# Only recompute on Stop (transcript has new data, and it's infrequent).
+# For all other hooks, use the cached value to stay fast.
 SESSION_PCT=-1
-if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
-    # Sum output tokens from assistant messages (output tokens are the primary billing metric)
-    TOTAL_OUTPUT="$(jq -s '[.[] | select(.type=="assistant") | .message.usage.output_tokens // 0] | add // 0' "$TRANSCRIPT" 2>/dev/null)" || TOTAL_OUTPUT=0
 
-    if [ "$CLAW_PLAN" -gt 0 ] && [ "$TOTAL_OUTPUT" -gt 0 ]; then
-        SESSION_PCT=$(( TOTAL_OUTPUT * 100 / CLAW_PLAN ))
-        if [ "$SESSION_PCT" -gt 100 ]; then
-            SESSION_PCT=100
+if [ "$HOOK_EVENT" = "Stop" ] || [ "$HOOK_EVENT" = "UserPromptSubmit" ]; then
+    if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+        TOTAL_OUTPUT="$(jq -s '[.[] | select(.type=="assistant") | .message.usage.output_tokens // 0] | add // 0' "$TRANSCRIPT" 2>/dev/null)" || TOTAL_OUTPUT=0
+
+        if [ "$CLAW_PLAN" -gt 0 ] && [ "$TOTAL_OUTPUT" -gt 0 ]; then
+            SESSION_PCT=$(( TOTAL_OUTPUT * 100 / CLAW_PLAN ))
+            # Cap at 100 for the ring display
+            if [ "$SESSION_PCT" -gt 100 ]; then
+                SESSION_PCT=100
+            fi
+        else
+            SESSION_PCT=0
         fi
+        echo "$SESSION_PCT" > "$CACHE_DIR/session_pct"
     fi
-    # Cache session_pct for hooks that don't have transcript_path
-    echo "$SESSION_PCT" > "$CACHE_DIR/session_pct"
 else
-    # Read cached session_pct
+    # Use cached value for fast hooks (PreToolUse fires often)
     if [ -f "$CACHE_DIR/session_pct" ]; then
         SESSION_PCT="$(cat "$CACHE_DIR/session_pct")"
     fi
 fi
 
-# Weekly usage: not available yet (-1)
+# Weekly usage: not available from Claude Code yet
 WEEKLY_PCT=-1
 RESET_EPOCH=0
 
-# Build and send MQTT message
+# --- Publish ---
 MSG="${STATE}|${SHORT_MODEL}|${SESSION_PCT}|${WEEKLY_PCT}|${RESET_EPOCH}|${CLIENT_HOST}"
 mosquitto_pub -h "$CLAW_BROKER" -t "$CLAW_TOPIC" -m "$MSG" 2>/dev/null || true
