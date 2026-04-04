@@ -405,6 +405,7 @@ static volatile bool wifi_connected = false;
 static esp_netif_t *sta_netif = NULL;
 static httpd_handle_t http_server = NULL;
 static int wifi_retry_count = 0;
+static volatile bool reconnect_pending = false;  // True during intentional reconnect
 
 // MQTT
 static char mqtt_broker_uri[128] = MQTT_DEFAULT_BROKER;
@@ -786,7 +787,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             usb_printf("\r\n[WiFi] Disconnected (reason %d)\r\n", disc->reason);
             wifi_connected = false;
             dirty_wifi = true;
-            if (wifi_retry_count == 0) {
+            // Skip retry task if this is an intentional reconnect (new credentials)
+            if (!reconnect_pending && wifi_retry_count == 0) {
                 xTaskCreate(wifi_retry_task, "wifi_retry", 3072, NULL, 3, NULL);
             }
         }
@@ -821,6 +823,8 @@ static void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 }
 
+static bool wifi_started = false;
+
 static void wifi_connect_with_creds(void) {
     wifi_config_t wifi_config = {};
     strncpy((char *)wifi_config.sta.ssid, wifi_ssid, sizeof(wifi_config.sta.ssid) - 1);
@@ -837,8 +841,26 @@ static void wifi_connect_with_creds(void) {
 
     wifi_retry_count = 0;
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    if (wifi_started) {
+        // Already started: disconnect from current AP, apply new config, reconnect.
+        // The disconnect event will NOT spawn a retry task because we set
+        // wifi_connected=false and wifi_retry_count=0 here, but we pass
+        // reconnect_pending to tell the handler we intended this disconnect.
+        reconnect_pending = true;
+        esp_wifi_disconnect();  // Fires STA_DISCONNECTED event
+        vTaskDelay(pdMS_TO_TICKS(200));  // Let disconnect settle
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            usb_printf("[WiFi] connect error: %d\r\n", err);
+        }
+        reconnect_pending = false;
+    } else {
+        // First-time start
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        ESP_ERROR_CHECK(esp_wifi_start());
+        wifi_started = true;
+    }
 }
 
 // ---------------------------------------------------------------------------
