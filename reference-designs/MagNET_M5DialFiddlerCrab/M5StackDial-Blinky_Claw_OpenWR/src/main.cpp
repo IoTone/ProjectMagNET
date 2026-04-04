@@ -42,14 +42,20 @@ static const char *TAG = "claw_dial";
 // Config
 // ---------------------------------------------------------------------------
 #define FORTH_HEAP_SIZE     (48 * 1024)
-#define NVS_NAMESPACE       "claw_config"
-#define NVS_KEY_SSID        "ssid"
-#define NVS_KEY_PASS        "pass"
-#define NVS_KEY_MQTT_BROKER "mqtt_url"
-#define NVS_KEY_SOUND       "sound"
-#define HOSTNAME_PREFIX     "FiddlerCrab"
-#define WIFI_MAX_RETRY      5
-#define MQTT_DEFAULT_BROKER "mqtt://broker.hivemq.com:1883"
+#define NVS_NAMESPACE          "claw_config"
+#define NVS_KEY_SSID           "ssid"         // Legacy — migrated to s_default
+#define NVS_KEY_PASS           "pass"         // Legacy — migrated to p_default
+#define NVS_KEY_MQTT_BROKER    "mqtt_url"
+#define NVS_KEY_SOUND          "sound"
+#define NVS_KEY_PROFILE_LIST   "prof_list"
+#define NVS_KEY_ACTIVE_PROFILE "active_prof"
+#define HOSTNAME_PREFIX        "FiddlerCrab"
+#define WIFI_MAX_RETRY         5
+#define MQTT_DEFAULT_BROKER    "mqtt://broker.hivemq.com:1883"
+
+#define PROFILE_NAME_MAX       12
+#define PROFILE_MAX_COUNT      5
+#define DEFAULT_PROFILE_NAME   "default"
 
 // ---------------------------------------------------------------------------
 // millis() helper
@@ -395,9 +401,14 @@ static uint16_t tone2_dur = 0;
 // Previous state for chime detection
 static int prev_claw_state = -1;
 
-// WiFi
+// WiFi (active profile mirror)
 static char wifi_ssid[33] = {0};
 static char wifi_pass[65] = {0};
+
+// WiFi profiles
+static char active_profile[PROFILE_NAME_MAX + 1] = DEFAULT_PROFILE_NAME;
+static char profile_names[PROFILE_MAX_COUNT][PROFILE_NAME_MAX + 1];
+static int  profile_count = 0;
 static char hostname[32] = {0};
 static char hostname_mdns[32] = {0};
 static char mac_suffix[5] = {0};   // Last 4 hex chars of MAC, for display
@@ -468,43 +479,283 @@ static void nvs_init_flash(void) {
     ESP_ERROR_CHECK(ret);
 }
 
-static bool nvs_load_wifi_creds(void) {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
+// ---------------------------------------------------------------------------
+// WiFi Profile helpers
+// ---------------------------------------------------------------------------
 
-    size_t len = sizeof(wifi_ssid);
-    esp_err_t err = nvs_get_str(h, NVS_KEY_SSID, wifi_ssid, &len);
-    if (err != ESP_OK) { nvs_close(h); return false; }
-
-    len = sizeof(wifi_pass);
-    err = nvs_get_str(h, NVS_KEY_PASS, wifi_pass, &len);
-    if (err != ESP_OK) {
-        wifi_pass[0] = '\0';
+// Build NVS key "s_<name>" or "p_<name>" into out (min 15 bytes)
+static void build_profile_key(char prefix, const char *name, char *out) {
+    out[0] = prefix;
+    out[1] = '_';
+    int i = 0;
+    while (i < PROFILE_NAME_MAX && name[i]) {
+        out[i + 2] = name[i];
+        i++;
     }
-
-    nvs_close(h);
-    return (strlen(wifi_ssid) > 0);
+    out[i + 2] = '\0';
 }
 
-static void nvs_save_wifi_creds(void) {
-    nvs_handle_t h;
-    ESP_ERROR_CHECK(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h));
-    ESP_ERROR_CHECK(nvs_set_str(h, NVS_KEY_SSID, wifi_ssid));
-    ESP_ERROR_CHECK(nvs_set_str(h, NVS_KEY_PASS, wifi_pass));
-    ESP_ERROR_CHECK(nvs_commit(h));
-    nvs_close(h);
+// Validate profile name: 1..PROFILE_NAME_MAX chars, [A-Za-z0-9_-]
+static bool profile_name_valid(const char *name) {
+    if (!name) return false;
+    int len = (int)strlen(name);
+    if (len < 1 || len > PROFILE_NAME_MAX) return false;
+    for (int i = 0; i < len; i++) {
+        char c = name[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-')) {
+            return false;
+        }
+    }
+    return true;
 }
 
-static void nvs_clear_wifi_creds(void) {
+// Lowercase a string in-place
+static void str_tolower(char *s) {
+    for (; *s; s++) {
+        if (*s >= 'A' && *s <= 'Z') *s = (char)(*s + 32);
+    }
+}
+
+// Parse comma-separated profile list into profile_names[]
+static void profile_list_parse(const char *list) {
+    profile_count = 0;
+    if (!list || !*list) return;
+    const char *p = list;
+    while (*p && profile_count < PROFILE_MAX_COUNT) {
+        // Skip leading commas/whitespace
+        while (*p == ',' || *p == ' ') p++;
+        if (!*p) break;
+        int n = 0;
+        while (*p && *p != ',' && n < PROFILE_NAME_MAX) {
+            profile_names[profile_count][n++] = *p++;
+        }
+        profile_names[profile_count][n] = '\0';
+        // Skip any overflow chars
+        while (*p && *p != ',') p++;
+        if (n > 0) profile_count++;
+    }
+}
+
+// Serialize profile_names[] to comma-separated string, write to NVS
+static void profile_list_save(void) {
+    char buf[PROFILE_MAX_COUNT * (PROFILE_NAME_MAX + 1) + 4] = {0};
+    int pos = 0;
+    for (int i = 0; i < profile_count; i++) {
+        if (i > 0 && pos < (int)sizeof(buf) - 1) buf[pos++] = ',';
+        int n = (int)strlen(profile_names[i]);
+        if (pos + n >= (int)sizeof(buf)) break;
+        memcpy(buf + pos, profile_names[i], n);
+        pos += n;
+    }
+    buf[pos] = '\0';
     nvs_handle_t h;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_erase_key(h, NVS_KEY_SSID);
-        nvs_erase_key(h, NVS_KEY_PASS);
+        nvs_set_str(h, NVS_KEY_PROFILE_LIST, buf);
         nvs_commit(h);
         nvs_close(h);
     }
+}
+
+// Find profile in profile_names[], return index or -1
+static int profile_find(const char *name) {
+    for (int i = 0; i < profile_count; i++) {
+        if (strcmp(profile_names[i], name) == 0) return i;
+    }
+    return -1;
+}
+
+// Add profile to profile_names[] (memory only). Returns false if full or duplicate.
+static bool profile_add(const char *name) {
+    if (profile_count >= PROFILE_MAX_COUNT) return false;
+    if (profile_find(name) >= 0) return false;
+    strncpy(profile_names[profile_count], name, PROFILE_NAME_MAX);
+    profile_names[profile_count][PROFILE_NAME_MAX] = '\0';
+    profile_count++;
+    return true;
+}
+
+// Remove profile from profile_names[] (memory only)
+static void profile_remove(const char *name) {
+    int idx = profile_find(name);
+    if (idx < 0) return;
+    for (int i = idx; i < profile_count - 1; i++) {
+        strncpy(profile_names[i], profile_names[i + 1], PROFILE_NAME_MAX + 1);
+    }
+    profile_count--;
+    profile_names[profile_count][0] = '\0';
+}
+
+// Load s_<name>+p_<name> into wifi_ssid/wifi_pass globals.
+// Returns true if SSID was found.
+static bool nvs_load_profile_creds(const char *name) {
     wifi_ssid[0] = '\0';
     wifi_pass[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
+    char key[16];
+    size_t len;
+    build_profile_key('s', name, key);
+    len = sizeof(wifi_ssid);
+    esp_err_t err = nvs_get_str(h, key, wifi_ssid, &len);
+    bool ok = (err == ESP_OK && strlen(wifi_ssid) > 0);
+    build_profile_key('p', name, key);
+    len = sizeof(wifi_pass);
+    if (nvs_get_str(h, key, wifi_pass, &len) != ESP_OK) {
+        wifi_pass[0] = '\0';
+    }
+    nvs_close(h);
+    return ok;
+}
+
+// Save wifi_ssid/wifi_pass to s_<name>+p_<name>
+static void nvs_save_profile_creds(const char *name) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
+        usb_print("[NVS] open failed\r\n");
+        return;
+    }
+    char key[16];
+    build_profile_key('s', name, key);
+    esp_err_t err = nvs_set_str(h, key, wifi_ssid);
+    if (err != ESP_OK) usb_printf("[NVS] write ssid err %d\r\n", err);
+    build_profile_key('p', name, key);
+    err = nvs_set_str(h, key, wifi_pass);
+    if (err != ESP_OK) usb_printf("[NVS] write pass err %d\r\n", err);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+// Erase s_<name>+p_<name> from NVS
+static void nvs_erase_profile_creds(const char *name) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return;
+    char key[16];
+    build_profile_key('s', name, key);
+    nvs_erase_key(h, key);
+    build_profile_key('p', name, key);
+    nvs_erase_key(h, key);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+// Write active_prof key and update in-memory active_profile
+static void nvs_set_active_profile(const char *name) {
+    strncpy(active_profile, name, PROFILE_NAME_MAX);
+    active_profile[PROFILE_NAME_MAX] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, NVS_KEY_ACTIVE_PROFILE, active_profile);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+// One-time migration from legacy ssid/pass schema to profile-based schema.
+// Idempotent: uses active_prof key as sentinel.
+static void nvs_migrate_wifi_profiles(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return;
+
+    // Check if already migrated
+    char buf[PROFILE_NAME_MAX + 1] = {0};
+    size_t len = sizeof(buf);
+    if (nvs_get_str(h, NVS_KEY_ACTIVE_PROFILE, buf, &len) == ESP_OK) {
+        nvs_close(h);
+        return; // Already migrated
+    }
+
+    // Check for legacy ssid/pass
+    char legacy_ssid[33] = {0};
+    char legacy_pass[65] = {0};
+    len = sizeof(legacy_ssid);
+    bool has_legacy = (nvs_get_str(h, NVS_KEY_SSID, legacy_ssid, &len) == ESP_OK);
+    if (has_legacy) {
+        len = sizeof(legacy_pass);
+        nvs_get_str(h, NVS_KEY_PASS, legacy_pass, &len);
+        // Write to s_default / p_default
+        nvs_set_str(h, "s_default", legacy_ssid);
+        nvs_set_str(h, "p_default", legacy_pass);
+        // Erase legacy keys
+        nvs_erase_key(h, NVS_KEY_SSID);
+        nvs_erase_key(h, NVS_KEY_PASS);
+    }
+
+    // Initialize prof_list and active_prof
+    nvs_set_str(h, NVS_KEY_PROFILE_LIST, DEFAULT_PROFILE_NAME);
+    nvs_set_str(h, NVS_KEY_ACTIVE_PROFILE, DEFAULT_PROFILE_NAME);
+    nvs_commit(h);
+    nvs_close(h);
+
+    if (has_legacy) {
+        usb_printf("[MIGRATE] Converted legacy creds to profile '%s'\r\n",
+                   DEFAULT_PROFILE_NAME);
+    }
+}
+
+// Load profile list and active profile from NVS into memory
+static void profiles_load_from_nvs(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) {
+        profile_count = 0;
+        strncpy(active_profile, DEFAULT_PROFILE_NAME, PROFILE_NAME_MAX);
+        return;
+    }
+    // Load profile list
+    char list_buf[PROFILE_MAX_COUNT * (PROFILE_NAME_MAX + 1) + 4] = {0};
+    size_t len = sizeof(list_buf);
+    if (nvs_get_str(h, NVS_KEY_PROFILE_LIST, list_buf, &len) == ESP_OK) {
+        profile_list_parse(list_buf);
+    }
+    // Ensure default always exists in list
+    if (profile_find(DEFAULT_PROFILE_NAME) < 0) {
+        profile_add(DEFAULT_PROFILE_NAME);
+    }
+    // Load active profile
+    len = sizeof(active_profile);
+    if (nvs_get_str(h, NVS_KEY_ACTIVE_PROFILE, active_profile, &len) != ESP_OK) {
+        strncpy(active_profile, DEFAULT_PROFILE_NAME, PROFILE_NAME_MAX);
+    }
+    nvs_close(h);
+    // If active not in list, fall back to default
+    if (profile_find(active_profile) < 0) {
+        strncpy(active_profile, DEFAULT_PROFILE_NAME, PROFILE_NAME_MAX);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WiFi credentials (thin wrappers around profile helpers)
+// ---------------------------------------------------------------------------
+
+// Load credentials for the currently active profile into wifi_ssid/wifi_pass.
+// Returns true if SSID is configured (non-empty).
+static bool nvs_load_wifi_creds(void) {
+    profiles_load_from_nvs();
+    return nvs_load_profile_creds(active_profile);
+}
+
+// Save current wifi_ssid/wifi_pass to the active profile.
+static void nvs_save_wifi_creds(void) {
+    nvs_save_profile_creds(active_profile);
+}
+
+// Clear credentials for the active profile. If non-default, also remove
+// the profile from the list and switch active back to default.
+static void nvs_clear_wifi_creds(void) {
+    bool was_default = (strcmp(active_profile, DEFAULT_PROFILE_NAME) == 0);
+    char cleared_name[PROFILE_NAME_MAX + 1];
+    strncpy(cleared_name, active_profile, PROFILE_NAME_MAX + 1);
+
+    nvs_erase_profile_creds(active_profile);
+    wifi_ssid[0] = '\0';
+    wifi_pass[0] = '\0';
+
+    if (!was_default) {
+        profile_remove(cleared_name);
+        profile_list_save();
+        nvs_set_active_profile(DEFAULT_PROFILE_NAME);
+        nvs_load_profile_creds(DEFAULT_PROFILE_NAME);
+    }
 }
 
 static void nvs_load_mqtt_broker(void) {
@@ -1331,13 +1582,54 @@ static void w_invert(void) {
     display.invertDisplay(inv);
 }
 
+// Check if a profile has an SSID configured in NVS (non-empty s_<name>)
+static bool profile_has_ssid(const char *name) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
+    char key[16];
+    build_profile_key('s', name, key);
+    char tmp[33] = {0};
+    size_t len = sizeof(tmp);
+    bool ok = (nvs_get_str(h, key, tmp, &len) == ESP_OK && strlen(tmp) > 0);
+    nvs_close(h);
+    return ok;
+}
+
+// Read SSID string for a profile (returns pointer to static buf, empty if none)
+static const char *profile_peek_ssid(const char *name) {
+    static char tmp[33];
+    tmp[0] = '\0';
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return tmp;
+    char key[16];
+    build_profile_key('s', name, key);
+    size_t len = sizeof(tmp);
+    nvs_get_str(h, key, tmp, &len);
+    nvs_close(h);
+    return tmp;
+}
+
+// Select a profile: set active, load creds, mark display dirty
+static void select_profile(const char *name) {
+    nvs_set_active_profile(name);
+    nvs_load_profile_creds(name);
+    dirty_wifi = true;
+    if (strlen(wifi_ssid) > 0) {
+        usb_printf("Selected profile '%s' (SSID: '%s')\r\n", name, wifi_ssid);
+    } else {
+        usb_printf("Selected profile '%s' (no SSID configured)\r\n", name);
+    }
+}
+
 static void w_wifi_ssid(void) {
+    usb_printf("Active profile: '%s'\r\n", active_profile);
     usb_print("SSID: ");
     read_line_from_serial(wifi_ssid, sizeof(wifi_ssid), true, false);
     usb_printf("SSID set to: '%s'\r\n", wifi_ssid);
 }
 
 static void w_wifi_pass(void) {
+    usb_printf("Active profile: '%s'\r\n", active_profile);
     usb_print("Password (Enter for open): ");
     read_line_from_serial(wifi_pass, sizeof(wifi_pass), false, true);
     if (strlen(wifi_pass) == 0)
@@ -1352,25 +1644,122 @@ static void w_wifi_connect(void) {
         return;
     }
     nvs_save_wifi_creds();
-    usb_printf("Saved. Connecting to '%s'...\r\n", wifi_ssid);
+    usb_printf("Saved to profile '%s'. Connecting to '%s'...\r\n",
+               active_profile, wifi_ssid);
     wifi_connect_with_creds();
 }
 
 static void w_wifi_status(void) {
-    usb_printf("SSID:      '%s'\r\n", wifi_ssid);
-    usb_printf("Connected: %s\r\n", wifi_connected ? "yes" : "no");
+    usb_printf("Profile:    '%s' (%d of %d)\r\n",
+               active_profile, profile_find(active_profile) + 1, profile_count);
+    // List all profiles with markers
+    usb_print("All:        ");
+    for (int i = 0; i < profile_count; i++) {
+        if (i > 0) usb_print(", ");
+        usb_print(profile_names[i]);
+        if (strcmp(profile_names[i], active_profile) == 0) usb_print("*");
+        if (profile_has_ssid(profile_names[i])) {
+            usb_print(" [x]");
+        } else {
+            usb_print(" [-]");
+        }
+    }
+    usb_print("\r\n");
+
+    usb_printf("SSID:       '%s'\r\n", wifi_ssid);
+    usb_printf("Connected:  %s\r\n", wifi_connected ? "yes" : "no");
     if (wifi_connected && sta_netif) {
         esp_netif_ip_info_t ip_info;
         esp_netif_get_ip_info(sta_netif, &ip_info);
-        usb_printf("IP:        " IPSTR "\r\n", IP2STR(&ip_info.ip));
+        usb_printf("IP:         " IPSTR "\r\n", IP2STR(&ip_info.ip));
     }
-    usb_printf("Hostname:  %s.local\r\n", hostname_mdns);
-    usb_printf("Free heap: %lu bytes\r\n", (unsigned long)esp_get_free_heap_size());
+    usb_printf("Hostname:   %s.local\r\n", hostname_mdns);
+    usb_printf("Free heap:  %lu bytes\r\n", (unsigned long)esp_get_free_heap_size());
 }
 
 static void w_wifi_clear(void) {
+    char cleared[PROFILE_NAME_MAX + 1];
+    strncpy(cleared, active_profile, PROFILE_NAME_MAX + 1);
+    bool was_default = (strcmp(cleared, DEFAULT_PROFILE_NAME) == 0);
     nvs_clear_wifi_creds();
-    usb_print("WiFi credentials cleared.\r\n");
+    dirty_wifi = true;
+    if (was_default) {
+        usb_print("Credentials cleared for profile 'default'.\r\n");
+    } else {
+        usb_printf("Credentials cleared for profile '%s'. Profile removed. Active profile is now 'default'.\r\n",
+                   cleared);
+    }
+}
+
+static void w_wifi_profiles(void) {
+    // List all profiles with markers
+    usb_print("WiFi Profiles:\r\n");
+    for (int i = 0; i < profile_count; i++) {
+        char line[96];
+        const char *ssid = profile_peek_ssid(profile_names[i]);
+        bool is_active = (strcmp(profile_names[i], active_profile) == 0);
+        if (strlen(ssid) > 0) {
+            snprintf(line, sizeof(line), "  %d) %-12s %s  [ssid: %s]\r\n",
+                     i + 1, profile_names[i], is_active ? "[*]" : "   ", ssid);
+        } else {
+            snprintf(line, sizeof(line), "  %d) %-12s %s  [no creds]\r\n",
+                     i + 1, profile_names[i], is_active ? "[*]" : "   ");
+        }
+        usb_print(line);
+    }
+    usb_printf("  (%d/%d profiles)\r\n\r\n", profile_count, PROFILE_MAX_COUNT);
+    usb_print("Enter number to select, name to select/create, or blank to cancel:\r\n");
+
+    char input[PROFILE_NAME_MAX + 4] = {0};
+    read_line_from_serial(input, sizeof(input), true, true);
+
+    if (strlen(input) == 0) {
+        usb_print("Cancelled.\r\n");
+        return;
+    }
+
+    // Check if it's numeric
+    bool is_num = true;
+    for (int i = 0; input[i]; i++) {
+        if (input[i] < '0' || input[i] > '9') { is_num = false; break; }
+    }
+
+    if (is_num) {
+        int n = atoi(input);
+        if (n < 1 || n > profile_count) {
+            usb_print("No such profile number.\r\n");
+            return;
+        }
+        select_profile(profile_names[n - 1]);
+        return;
+    }
+
+    // Name: normalize to lowercase and validate
+    str_tolower(input);
+    if (!profile_name_valid(input)) {
+        usb_print("Invalid profile name. Use 1-12 chars: letters, digits, - or _.\r\n");
+        return;
+    }
+
+    // Existing profile?
+    if (profile_find(input) >= 0) {
+        select_profile(input);
+        return;
+    }
+
+    // New profile
+    if (profile_count >= PROFILE_MAX_COUNT) {
+        usb_printf("Maximum profiles (%d) reached. Use wifi-clear on a non-default profile first.\r\n",
+                   PROFILE_MAX_COUNT);
+        return;
+    }
+    if (!profile_add(input)) {
+        usb_print("Failed to add profile.\r\n");
+        return;
+    }
+    profile_list_save();
+    select_profile(input);
+    usb_print("Created new profile. Use wifi-ssid / wifi-pass / wifi-connect to configure.\r\n");
 }
 
 static void w_mqtt_broker(void) {
@@ -1437,6 +1826,7 @@ static void register_forth_words(void) {
     forth_register_word("wifi-connect", w_wifi_connect);
     forth_register_word("wifi-status",  w_wifi_status);
     forth_register_word("wifi-clear",   w_wifi_clear);
+    forth_register_word("wifi-profiles", w_wifi_profiles);
     forth_register_word("mqtt-broker",  w_mqtt_broker);
     forth_register_word("mqtt-status",  w_mqtt_status);
     forth_register_word("mqtt-topic",   w_mqtt_topic);
@@ -1468,6 +1858,7 @@ extern "C" void app_main(void)
     speaker_init();
     button_init();
     nvs_init_flash();
+    nvs_migrate_wifi_profiles();
     usb_print("Hardware initialized.\r\n");
 
     // 4. Layout

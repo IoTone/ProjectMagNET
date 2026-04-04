@@ -176,7 +176,8 @@ Connect via USB-C (115200 baud) to access the Forth REPL.
 | `wifi-pass` | Set WiFi password (Enter for open network) |
 | `wifi-connect` | Save credentials and connect |
 | `wifi-status` | Show SSID, IP, hostname, connection state |
-| `wifi-clear` | Erase stored WiFi credentials |
+| `wifi-clear` | Erase credentials for the active profile (removes non-default profiles from list) |
+| `wifi-profiles` | List all profiles; select an existing one or create a new profile by name |
 
 ### MQTT
 | Command | Description |
@@ -287,8 +288,9 @@ M5StackDial-Blinky_Claw_OpenWR/
 ## Known Issues
 
 - ~~BUG1: "wifi-connect" command doesn't seem to reconnect if new credentials are added without clearing the credentials.~~ **FIXED**: `wifi_connect_with_creds` now tracks whether WiFi is already started. On subsequent calls it disconnects, applies the new config, and calls `esp_wifi_connect` (previously it called `esp_wifi_start` which aborts if WiFi is already running). A `reconnect_pending` flag prevents the auto-retry task from firing during the intentional disconnect.
-- RFE1: we don't have a "wifi-profiles" selector where we can support selection of different wifi networks.  This would require a change to how wifi-ssid and wifi-password to use the "default" profile wohich would always exist, or whatever currently selected profile is set.  So wifi-profiles command would need to support setting a new profile name, or choosing an existing name.  This information should show up in the "wifi-status" command.
+- ~~RFE1: we don't have a "wifi-profiles" selector where we can support selection of different wifi networks.~~ **DONE**: Added multi-profile WiFi support with up to 5 named profiles. New NVS schema (`s_<name>`, `p_<name>`, `prof_list`, `active_prof`) with one-time migration from the legacy single-profile schema. New `wifi-profiles` REPL command lists all profiles and lets you select an existing one or create a new one. `wifi-ssid`/`wifi-pass`/`wifi-connect` now operate on the active profile. `wifi-status` shows the active profile and a summary of all profiles with their credential state. `wifi-clear` empties the active profile (for `default` the profile is kept with empty creds; for others it's removed from the list and active reverts to `default`). Profile names are 1-12 chars `[A-Za-z0-9_-]` and lowercase-normalized on input. The "default" profile always exists.
 - RFE2: There is no indicator for a uart connection, it should print the uart name maybe below the fiddler crab icon.
 - RFE3: The button on the device should toggle between different views in the application.  The first view we need to support besides the existing "app" view, is a "settings" view.   This would have a place to toggle sound on and off via touch interface.
 - RFE4: There is no way to alternate between profiles in the UI on the device.  It would require RFE3 to be completed.  Then the user could spin the dial to change the profile when the current profile is clicked.  Hitting save would save the current profile and attempt to connect.
-- RFE5: There are sometimes needs to alterter wifi settings.  The easiest way to do this is to use an AP mode wifi, or via bluetooth.   We need a plan for this.
+- RFE5: There are sometimes needs to alter wifi settings.  The easiest way to do this is to use an AP mode wifi, or via bluetooth.   We need a plan for this.
+- RFE6: Because the USB port is placed at a particlar spot, the display orientation is set such that the north position is oposite the USB cable.  We need a setting to allow us to change the orientation and save it.  Users may desire to have the cable sitting in a position that would make the default display sideways or upside down.
