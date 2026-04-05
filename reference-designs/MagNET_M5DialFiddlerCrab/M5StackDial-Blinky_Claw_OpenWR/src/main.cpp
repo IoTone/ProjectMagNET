@@ -49,6 +49,7 @@ static const char *TAG = "claw_dial";
 #define NVS_KEY_SOUND          "sound"
 #define NVS_KEY_PROFILE_LIST   "prof_list"
 #define NVS_KEY_ACTIVE_PROFILE "active_prof"
+#define NVS_KEY_ROTATION       "display_rot"
 #define HOSTNAME_PREFIX        "FiddlerCrab"
 #define WIFI_MAX_RETRY         5
 #define MQTT_DEFAULT_BROKER    "mqtt://broker.hivemq.com:1883"
@@ -393,8 +394,8 @@ static volatile bool dirty_rings = true;
 static volatile bool dirty_wifi = true;
 static volatile bool dirty_full = true;
 
-// Views (RFE3) — button toggles between app view and settings view
-enum View : uint8_t { VIEW_APP = 0, VIEW_SETTINGS = 1 };
+// Views (RFE3, RFE6) — button cycles App -> Settings -> Settings Rot -> App
+enum View : uint8_t { VIEW_APP = 0, VIEW_SETTINGS = 1, VIEW_SETTINGS_ROT = 2 };
 static View current_view = VIEW_APP;
 static bool dirty_view = false;            // set on view change — wipe + redraw
 static bool dirty_settings_sound = false;  // set when sound toggle needs redraw
@@ -406,6 +407,11 @@ static bool     profile_edit_mode      = false;  // true = encoder cycles profil
 static int8_t   profile_edit_index     = -1;     // index into profile_names[] while editing
 static bool     profile_connecting     = false;  // brief "Connecting..." flash on save
 static uint32_t profile_connect_at     = 0;      // millis() when connect was triggered
+
+// Display rotation (RFE6) — persisted in NVS, changed via Settings screen 2
+static uint8_t display_rotation = 0;      // 0..3 for 0°/90°/180°/270°, loaded from NVS at boot
+static uint8_t rot_preview      = 0;      // live preview value while in VIEW_SETTINGS_ROT
+static bool    dirty_rot_screen = false;  // full redraw of rotation screen
 
 // Sound
 static volatile bool sound_enabled = false;
@@ -826,6 +832,27 @@ static void nvs_save_sound_pref(void) {
     }
 }
 
+// Display rotation (RFE6) — persisted as u8 (0..3)
+static void nvs_load_rotation(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t val = 0;
+        if (nvs_get_u8(h, NVS_KEY_ROTATION, &val) == ESP_OK) {
+            display_rotation = val & 3;
+        }
+        nvs_close(h);
+    }
+}
+
+static void nvs_save_rotation(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, NVS_KEY_ROTATION, display_rotation);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hostname
 // ---------------------------------------------------------------------------
@@ -1143,15 +1170,35 @@ static void wifi_connect_with_creds(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Views: switch between App view and Settings view (RFE3)
+// Views: cycle App -> Settings -> Settings Rot -> App (RFE3 + RFE6)
 // ---------------------------------------------------------------------------
+static View next_view(View v) {
+    switch (v) {
+        case VIEW_APP:          return VIEW_SETTINGS;
+        case VIEW_SETTINGS:     return VIEW_SETTINGS_ROT;
+        case VIEW_SETTINGS_ROT: return VIEW_APP;
+        default:                return VIEW_APP;
+    }
+}
+
 static void switch_view(View v) {
     if (v == current_view) return;
+
+    // Leaving VIEW_SETTINGS_ROT -> auto-save current preview (RFE6)
+    if (current_view == VIEW_SETTINGS_ROT) {
+        if (rot_preview != display_rotation) {
+            display_rotation = rot_preview;
+            nvs_save_rotation();
+            usb_printf("[ROT] Saved rotation = %d\r\n", (int)display_rotation);
+            if (sound_enabled) chime_finished();
+        }
+    }
+
     current_view = v;
     dirty_view = true;
     if (v == VIEW_APP) {
         dirty_full = true;   // reuses existing app redraw path
-    } else {
+    } else if (v == VIEW_SETTINGS) {
         // Entering settings — reset profile edit state so stale state
         // never persists across view transitions (RFE4).
         dirty_settings_sound   = true;
@@ -1159,6 +1206,10 @@ static void switch_view(View v) {
         profile_edit_mode      = false;
         profile_edit_index     = -1;
         profile_connecting     = false;
+    } else { // VIEW_SETTINGS_ROT
+        // Initialize live preview to the saved rotation (RFE6)
+        rot_preview = display_rotation;
+        dirty_rot_screen = true;
     }
     // View-switch chirp — gated on sound_enabled (honors "sound off = silent")
     if (sound_enabled) speaker_tone_nb(1500, 40);
@@ -1681,6 +1732,23 @@ static void w_invert(void) {
     display.invertDisplay(inv);
 }
 
+// Display rotation Forth words (RFE6)
+// Usage:  N rotation      set rotation to N (0..3)
+//         rotation? .     print current rotation
+static void w_rotation(void) {
+    int n = (int)forth_pop();
+    display_rotation = (uint8_t)(n & 3);
+    rot_preview = display_rotation;
+    display.setRotation(display_rotation);
+    nvs_save_rotation();
+    dirty_full = true;   // force app view redraw (harmless in other views)
+    usb_printf("Rotation = %d\r\n", (int)display_rotation);
+}
+
+static void w_rotation_get(void) {
+    forth_push((intptr_t)display_rotation);
+}
+
 // Check if a profile has an SSID configured in NVS (non-empty s_<name>)
 static bool profile_has_ssid(const char *name) {
     nvs_handle_t h;
@@ -1774,6 +1842,39 @@ static void draw_settings_profile_button() {
         display.setTextColor(Synth::TEXT_DIM, fill);
         display.drawString(line2, cxw, cyw + 7);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Settings screen 2 — display rotation (RFE6)
+// ---------------------------------------------------------------------------
+static void draw_settings_rot_view() {
+    draw_synthwave_bg();
+
+    // Title
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextColor(Synth::MAGENTA, Synth::BG);
+    display.setTextSize(2);
+    display.drawString("ROTATION", cx, 40);
+
+    // Big degree display in the center
+    static const char *labels[4] = { "0", "90", "180", "270" };
+    display.setTextColor(Synth::CYAN, Synth::BG);
+    display.setTextSize(5);
+    display.drawString(labels[rot_preview & 3], cx, cy);
+
+    // Degree unit
+    display.setTextColor(Synth::NEON_GREEN, Synth::BG);
+    display.setTextSize(2);
+    display.drawString("degrees", cx, cy + 40);
+
+    // Instructions
+    display.setTextColor(Synth::DIM_CYAN, Synth::BG);
+    display.setTextSize(1);
+    display.drawString("Rotate to adjust", cx, 200);
+
+    // Save hint
+    display.setTextColor(Synth::TEXT_DIM, Synth::BG);
+    display.drawString("Press btn to save & exit", cx, 222);
 }
 
 static void w_wifi_ssid(void) {
@@ -1976,6 +2077,8 @@ static void register_forth_words(void) {
     forth_register_word("brightness", w_brightness);
     forth_register_word("bright?",    w_bright_get);
     forth_register_word("invert",     w_invert);
+    forth_register_word("rotation",   w_rotation);
+    forth_register_word("rotation?",  w_rotation_get);
     forth_register_word("wifi-ssid",    w_wifi_ssid);
     forth_register_word("wifi-pass",    w_wifi_pass);
     forth_register_word("wifi-connect", w_wifi_connect);
@@ -2014,6 +2117,13 @@ extern "C" void app_main(void)
     button_init();
     nvs_init_flash();
     nvs_migrate_wifi_profiles();
+
+    // Load and apply saved display rotation (RFE6)
+    nvs_load_rotation();
+    display.setRotation(display_rotation);
+    rot_preview = display_rotation;
+    usb_printf("Display rotation = %d\r\n", (int)display_rotation);
+
     usb_print("Hardware initialized.\r\n");
 
     // 4. Layout
@@ -2118,13 +2228,18 @@ extern "C" void app_main(void)
             dirty_status = true;
         }
 
-        // --- View switch: full wipe + redraw for the new view (RFE3) ---
+        // --- View switch: full wipe + redraw for the new view (RFE3 + RFE6) ---
         if (dirty_view) {
             display.fillScreen(Synth::BG);
             if (current_view == VIEW_SETTINGS) {
                 draw_settings_view();
                 dirty_settings_sound = false;
+                dirty_settings_profile = false;
                 touch_was_down = false; // fresh rising-edge state on entry
+            } else if (current_view == VIEW_SETTINGS_ROT) {
+                draw_settings_rot_view();
+                dirty_rot_screen = false;
+                touch_was_down = false;
             }
             // VIEW_APP case: dirty_full was already set by switch_view(),
             // the app pipeline below will handle the redraw.
@@ -2183,9 +2298,9 @@ extern "C" void app_main(void)
             }
         }
         // ============================================================
-        // Settings view draw pipeline (RFE3)
+        // Settings view draw pipeline (RFE3 + RFE4)
         // ============================================================
-        else { // VIEW_SETTINGS
+        else if (current_view == VIEW_SETTINGS) {
             if (dirty_settings_sound) {
                 draw_settings_sound_button();
                 dirty_settings_sound = false;
@@ -2264,6 +2379,16 @@ extern "C" void app_main(void)
             }
             touch_was_down = down;
         }
+        // ============================================================
+        // Rotation view draw pipeline (RFE6)
+        // ============================================================
+        else { // VIEW_SETTINGS_ROT
+            if (dirty_rot_screen) {
+                draw_settings_rot_view();
+                dirty_rot_screen = false;
+            }
+            // No touch handling — only encoder + button drive this view
+        }
 
         // --- Encoder -> brightness ---
         int32_t d = encoder_read_and_reset();
@@ -2279,8 +2404,23 @@ extern "C" void app_main(void)
             --logical;
         }
         if (logical) {
+            // In rotation view, encoder live-previews display rotation (RFE6)
+            if (current_view == VIEW_SETTINGS_ROT) {
+                uint8_t prev = rot_preview;
+                int nxt = ((int)rot_preview + logical) & 3;
+                rot_preview = (uint8_t)nxt;
+                if (prev != rot_preview) {
+                    display.setRotation(rot_preview);   // LIVE apply
+                    dirty_rot_screen = true;            // full redraw in new orientation
+                    if (sound_enabled) {
+                        speaker_tone_nb(
+                            (logical > 0) ? Config::ClickUpFreq : Config::ClickDownFreq,
+                            Config::ClickMs);
+                    }
+                }
+            }
             // In profile edit mode, encoder cycles through profiles instead of brightness (RFE4)
-            if (current_view == VIEW_SETTINGS && profile_edit_mode && profile_count > 0) {
+            else if (current_view == VIEW_SETTINGS && profile_edit_mode && profile_count > 0) {
                 int prev_idx = profile_edit_index;
                 int n = (int)profile_count;
                 int idx = ((int)profile_edit_index + logical) % n;
@@ -2310,9 +2450,9 @@ extern "C" void app_main(void)
             }
         }
 
-        // --- Button -> cancel edit / toggle view (RFE3 + RFE4) ---
+        // --- Button -> cancel edit / cycle view (RFE3 + RFE4 + RFE6) ---
         // In profile edit mode, button cancels edit without leaving settings view.
-        // Otherwise, short press switches between App view and Settings view.
+        // Otherwise, short press cycles: App -> Settings -> Settings Rot -> App.
         button_update();
         if (btn_was_pressed) {
             if (current_view == VIEW_SETTINGS && profile_edit_mode) {
@@ -2323,9 +2463,12 @@ extern "C" void app_main(void)
                 if (sound_enabled) chime_error();
                 usb_print("[BTN] Profile edit cancelled\r\n");
             } else {
-                switch_view(current_view == VIEW_APP ? VIEW_SETTINGS : VIEW_APP);
-                usb_printf("[BTN] View = %s\r\n",
-                           current_view == VIEW_APP ? "APP" : "SETTINGS");
+                View v = next_view(current_view);
+                switch_view(v);
+                const char *name = (v == VIEW_APP)      ? "APP"
+                                  : (v == VIEW_SETTINGS) ? "SETTINGS"
+                                                         : "SETTINGS_ROT";
+                usb_printf("[BTN] View = %s\r\n", name);
             }
         }
 

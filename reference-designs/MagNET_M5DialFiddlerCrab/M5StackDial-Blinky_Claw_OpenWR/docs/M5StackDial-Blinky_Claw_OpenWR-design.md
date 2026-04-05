@@ -125,7 +125,7 @@ The 3rd innermost ring (orange) tracks active working time during a Claude Code 
 
 ## Views
 
-The device supports multiple views. The hardware button toggles between them.
+The device supports multiple views. The hardware button cycles through them: **App View → Settings View → Settings Rotation View → App View → ...**
 
 ### App View (default)
 The existing synthwave fiddler crab display: session/weekly/timer rings, crab mascot, status text, client hostname, model name, WiFi icon, MAC suffix. This is the default view on boot.
@@ -159,16 +159,38 @@ While in edit mode, the encoder **only** cycles profiles — brightness control 
 
 While in Settings view, MQTT/WiFi state-change events still fire chimes and set dirty flags; the dirty flags are acted on when the user returns to the App view, so the App view is always up-to-date on return.
 
+### Settings Rotation View (RFE6)
+
+A dedicated full-screen rotation picker. Reached from the Settings view by pressing the button again.
+
+Layout:
+- **Title** "ROTATION" at y=40 (magenta, size 2)
+- **Big degree indicator** at center: "0", "90", "180", or "270" in cyan, size 5
+- **Unit label** "degrees" at y=`cy+40` (neon green, size 2)
+- **Instruction** "Rotate to adjust" at y=200 (dim cyan, size 1)
+- **Save hint** "Press btn to save & exit" at y=222 (text dim, size 1)
+
+**Live preview flow**:
+1. Entering this view sets `rot_preview = display_rotation` (currently-saved value)
+2. Rotating the encoder increments/decrements `rot_preview` with wrap-around 0↔3 and immediately calls `display.setRotation(rot_preview)` — the entire screen (including the title and big degree label) instantly reorients. Each click plays a click chime if sound is enabled.
+3. Pressing the button advances to the next view (App). In `switch_view()`, when leaving VIEW_SETTINGS_ROT, if `rot_preview != display_rotation`, the new value is committed to NVS via `nvs_save_rotation()` and `chime_finished()` plays.
+4. If the user lands back on the original rotation before exiting, no NVS write happens and no save chime plays.
+
+No touch handling in the rotation view — only encoder and button. M5GFX's `setRotation()` automatically handles both display graphics and touch coordinate transformation via `convertRawXY()`, so bounding boxes in the other views remain valid after rotation changes.
+
+**Persistence**: The rotation is stored in NVS key `display_rot` (u8, values 0..3). On boot, `nvs_load_rotation()` is called right after `display.init()` and `display.setRotation(display_rotation)` is applied before the first scene is drawn.
+
 ## Inputs
 
 - **Encoder rotation**:
   - App view: display brightness
   - Settings view (normal): display brightness
   - Settings view (profile edit mode): cycles through WiFi profiles
+  - Settings rotation view: live-preview display orientation
 - **Button press**:
   - Profile edit mode active: cancels edit (stays in settings view)
-  - Otherwise: toggles between App view and Settings view
-- **Touch**: Active only in Settings view — sound toggle rect and profile widget
+  - Otherwise: cycles **App → Settings → Settings Rot → App**
+- **Touch**: Active only in Settings view — sound toggle rect and profile widget. Rotation view ignores touch.
 
 ## WiFi / MQTT / HTTP / mDNS
 
