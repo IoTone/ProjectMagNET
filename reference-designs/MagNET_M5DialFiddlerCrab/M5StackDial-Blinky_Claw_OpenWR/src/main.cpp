@@ -361,6 +361,20 @@ namespace Config {
     static constexpr uint16_t ClickMs       = 40;
 }
 
+// Settings view UI constants (RFE3)
+namespace Settings {
+    static constexpr int SoundBtnX = 40;   // top-left x
+    static constexpr int SoundBtnY = 96;   // top-left y
+    static constexpr int SoundBtnW = 160;  // width
+    static constexpr int SoundBtnH = 56;   // height
+
+    // Profile selector widget (RFE4)
+    static constexpr int ProfBtnX = 40;
+    static constexpr int ProfBtnY = 162;   // 10px gap below sound button (ends at 152)
+    static constexpr int ProfBtnW = 160;
+    static constexpr int ProfBtnH = 34;    // compact; fits 2 lines of size-1 text
+}
+
 // ---------------------------------------------------------------------------
 // State variables
 // ---------------------------------------------------------------------------
@@ -378,6 +392,20 @@ static volatile bool dirty_status = true;
 static volatile bool dirty_rings = true;
 static volatile bool dirty_wifi = true;
 static volatile bool dirty_full = true;
+
+// Views (RFE3) — button toggles between app view and settings view
+enum View : uint8_t { VIEW_APP = 0, VIEW_SETTINGS = 1 };
+static View current_view = VIEW_APP;
+static bool dirty_view = false;            // set on view change — wipe + redraw
+static bool dirty_settings_sound = false;  // set when sound toggle needs redraw
+static bool touch_was_down = false;        // rising-edge tap debounce
+
+// Settings view: profile selector (RFE4)
+static bool     dirty_settings_profile = false;  // redraw profile widget
+static bool     profile_edit_mode      = false;  // true = encoder cycles profiles
+static int8_t   profile_edit_index     = -1;     // index into profile_names[] while editing
+static bool     profile_connecting     = false;  // brief "Connecting..." flash on save
+static uint32_t profile_connect_at     = 0;      // millis() when connect was triggered
 
 // Sound
 static volatile bool sound_enabled = false;
@@ -1115,6 +1143,28 @@ static void wifi_connect_with_creds(void) {
 }
 
 // ---------------------------------------------------------------------------
+// Views: switch between App view and Settings view (RFE3)
+// ---------------------------------------------------------------------------
+static void switch_view(View v) {
+    if (v == current_view) return;
+    current_view = v;
+    dirty_view = true;
+    if (v == VIEW_APP) {
+        dirty_full = true;   // reuses existing app redraw path
+    } else {
+        // Entering settings — reset profile edit state so stale state
+        // never persists across view transitions (RFE4).
+        dirty_settings_sound   = true;
+        dirty_settings_profile = true;
+        profile_edit_mode      = false;
+        profile_edit_index     = -1;
+        profile_connecting     = false;
+    }
+    // View-switch chirp — gated on sound_enabled (honors "sound off = silent")
+    if (sound_enabled) speaker_tone_nb(1500, 40);
+}
+
+// ---------------------------------------------------------------------------
 // Drawing: Synthwave background
 // ---------------------------------------------------------------------------
 static void draw_synthwave_bg() {
@@ -1551,6 +1601,55 @@ static void draw_full_scene() {
     draw_wifi_icon();
 }
 
+// Forward declarations for helpers defined in the profile/forth sections below
+static bool profile_has_ssid(const char *name);
+static const char *profile_peek_ssid(const char *name);
+static int profile_find(const char *name);  // already defined earlier, but keep for safety
+static void select_profile(const char *name);
+static void draw_settings_profile_button();
+
+// ---------------------------------------------------------------------------
+// Drawing: Settings view (RFE3 + RFE4)
+// ---------------------------------------------------------------------------
+static void draw_settings_sound_button() {
+    using namespace Settings;
+    uint16_t border = sound_enabled ? Synth::NEON_GREEN : Synth::HOT_PINK;
+    uint16_t fill   = Synth::DIM_GRAY;
+    // Clear + fill
+    display.fillRect(SoundBtnX, SoundBtnY, SoundBtnW, SoundBtnH, fill);
+    // Double-line neon border for synthwave feel
+    display.drawRect(SoundBtnX, SoundBtnY, SoundBtnW, SoundBtnH, border);
+    display.drawRect(SoundBtnX + 2, SoundBtnY + 2, SoundBtnW - 4, SoundBtnH - 4, border);
+    // Label
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextColor(border, fill);
+    display.setTextSize(2);
+    display.drawString(sound_enabled ? "SOUND: ON" : "SOUND: OFF",
+                       SoundBtnX + SoundBtnW / 2,
+                       SoundBtnY + SoundBtnH / 2);
+}
+
+static void draw_settings_view() {
+    draw_synthwave_bg();
+
+    // Title
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextColor(Synth::MAGENTA, Synth::BG);
+    display.setTextSize(2);
+    display.drawString("SETTINGS", cx, 40);
+
+    // Sound toggle
+    draw_settings_sound_button();
+
+    // Profile selector (RFE4)
+    draw_settings_profile_button();
+
+    // Hint (moved to y=222 to make room for profile widget)
+    display.setTextColor(Synth::TEXT_DIM, Synth::BG);
+    display.setTextSize(1);
+    display.drawString("Press btn to exit", cx, 222);
+}
+
 // ---------------------------------------------------------------------------
 // Forth REPL task
 // ---------------------------------------------------------------------------
@@ -1618,6 +1717,62 @@ static void select_profile(const char *name) {
         usb_printf("Selected profile '%s' (SSID: '%s')\r\n", name, wifi_ssid);
     } else {
         usb_printf("Selected profile '%s' (no SSID configured)\r\n", name);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Drawing: Settings profile selector (RFE4)
+// ---------------------------------------------------------------------------
+static void draw_settings_profile_button() {
+    using namespace Settings;
+    uint16_t fill = Synth::DIM_GRAY;
+    uint16_t border;
+    if (profile_connecting)      border = Synth::HOT_PINK;
+    else if (profile_edit_mode)  border = Synth::CYAN;
+    else                         border = Synth::TEXT_DIM;
+
+    // Clear + fill
+    display.fillRect(ProfBtnX, ProfBtnY, ProfBtnW, ProfBtnH, fill);
+    // Double-line border for synthwave feel
+    display.drawRect(ProfBtnX, ProfBtnY, ProfBtnW, ProfBtnH, border);
+    display.drawRect(ProfBtnX + 2, ProfBtnY + 2, ProfBtnW - 4, ProfBtnH - 4, border);
+
+    display.setTextDatum(lgfx::textdatum_t::middle_center);
+    display.setTextSize(1);
+    int cxw = ProfBtnX + ProfBtnW / 2;
+    int cyw = ProfBtnY + ProfBtnH / 2;
+
+    if (profile_connecting) {
+        display.setTextColor(Synth::HOT_PINK, fill);
+        display.drawString("Connecting...", cxw, cyw);
+        return;
+    }
+
+    if (!profile_edit_mode) {
+        // View mode: show "PROFILE" / <active>
+        display.setTextColor(Synth::MAGENTA, fill);
+        display.drawString("PROFILE", cxw, cyw - 7);
+        display.setTextColor(Synth::NEON_GREEN, fill);
+        display.drawString(active_profile, cxw, cyw + 7);
+    } else {
+        // Edit mode: show "<name>  i/N" and SSID preview
+        const char *name = (profile_edit_index >= 0 && profile_edit_index < profile_count)
+                               ? profile_names[profile_edit_index] : "?";
+        char line1[24];
+        snprintf(line1, sizeof(line1), "%s  %d/%d",
+                 name, (int)profile_edit_index + 1, (int)profile_count);
+        display.setTextColor(Synth::CYAN, fill);
+        display.drawString(line1, cxw, cyw - 7);
+
+        const char *ssid = profile_peek_ssid(name);
+        char line2[24];
+        if (ssid && ssid[0]) {
+            snprintf(line2, sizeof(line2), "%.19s", ssid);
+        } else {
+            snprintf(line2, sizeof(line2), "(no creds)");
+        }
+        display.setTextColor(Synth::TEXT_DIM, fill);
+        display.drawString(line2, cxw, cyw + 7);
     }
 }
 
@@ -1963,53 +2118,151 @@ extern "C" void app_main(void)
             dirty_status = true;
         }
 
-        // --- Full redraw if needed ---
-        if (dirty_full) {
-            draw_full_scene();
-            dirty_full = false;
-            dirty_status = false;
-            dirty_rings = false;
-            dirty_wifi = false;
-            dirty_timer = false;
-        }
-
-        // --- Partial redraws ---
-        if (dirty_rings) {
-            draw_session_ring();
-            draw_weekly_ring();
-            draw_timer_ring();
-            draw_crab(cx, cy); // Redraw crab since rings clear center
-            draw_wifi_icon();  // Redraw WiFi since fillCircle clears everything
-            dirty_rings = false;
-            dirty_timer = false;
-            dirty_wifi = false;
-            dirty_status = true; // Need to redraw text on top
-        }
-
-        // --- Timer ring: update every second while running ---
-        if (timer_running) {
-            static uint32_t last_timer_draw = 0;
-            if (now - last_timer_draw >= 1000) {
-                draw_timer_ring();
-                last_timer_draw = now;
+        // --- View switch: full wipe + redraw for the new view (RFE3) ---
+        if (dirty_view) {
+            display.fillScreen(Synth::BG);
+            if (current_view == VIEW_SETTINGS) {
+                draw_settings_view();
+                dirty_settings_sound = false;
+                touch_was_down = false; // fresh rising-edge state on entry
             }
-        } else if (dirty_timer) {
-            draw_timer_ring();
-            dirty_timer = false;
+            // VIEW_APP case: dirty_full was already set by switch_view(),
+            // the app pipeline below will handle the redraw.
+            dirty_view = false;
         }
 
-        if (dirty_wifi) {
-            draw_wifi_icon();
-            dirty_wifi = false;
-        }
+        // ============================================================
+        // App view draw pipeline — gated on current_view == VIEW_APP
+        // ============================================================
+        if (current_view == VIEW_APP) {
+            // --- Full redraw if needed ---
+            if (dirty_full) {
+                draw_full_scene();
+                dirty_full = false;
+                dirty_status = false;
+                dirty_rings = false;
+                dirty_wifi = false;
+                dirty_timer = false;
+            }
 
-        // --- Animations: always redraw status text for animated states ---
-        // For WORKING, NEED_INPUT, ERROR: redraw every frame for animation
-        // For IDLE, FINISHED: only redraw when dirty
-        bool needs_anim = (claw_state == 2 || claw_state == 3 || claw_state == 7);
-        if (dirty_status || needs_anim) {
-            draw_status_text();
-            dirty_status = false;
+            // --- Partial redraws ---
+            if (dirty_rings) {
+                draw_session_ring();
+                draw_weekly_ring();
+                draw_timer_ring();
+                draw_crab(cx, cy); // Redraw crab since rings clear center
+                draw_wifi_icon();  // Redraw WiFi since fillCircle clears everything
+                dirty_rings = false;
+                dirty_timer = false;
+                dirty_wifi = false;
+                dirty_status = true; // Need to redraw text on top
+            }
+
+            // --- Timer ring: update every second while running ---
+            if (timer_running) {
+                static uint32_t last_timer_draw = 0;
+                if (now - last_timer_draw >= 1000) {
+                    draw_timer_ring();
+                    last_timer_draw = now;
+                }
+            } else if (dirty_timer) {
+                draw_timer_ring();
+                dirty_timer = false;
+            }
+
+            if (dirty_wifi) {
+                draw_wifi_icon();
+                dirty_wifi = false;
+            }
+
+            // --- Animations: always redraw status text for animated states ---
+            bool needs_anim = (claw_state == 2 || claw_state == 3 || claw_state == 7);
+            if (dirty_status || needs_anim) {
+                draw_status_text();
+                dirty_status = false;
+            }
+        }
+        // ============================================================
+        // Settings view draw pipeline (RFE3)
+        // ============================================================
+        else { // VIEW_SETTINGS
+            if (dirty_settings_sound) {
+                draw_settings_sound_button();
+                dirty_settings_sound = false;
+            }
+
+            // Auto-clear "Connecting..." flash after ~1500ms (RFE4)
+            if (profile_connecting && (millis() - profile_connect_at) > 1500) {
+                profile_connecting = false;
+                dirty_settings_profile = true;
+            }
+            if (dirty_settings_profile) {
+                draw_settings_profile_button();
+                dirty_settings_profile = false;
+            }
+
+            // Touch polling for settings view
+            lgfx::touch_point_t tp;
+            int tn = display.getTouch(&tp, 1);
+            bool down = (tn > 0);
+            if (down && !touch_was_down) {
+                using namespace Settings;
+                // Sound toggle
+                if (tp.x >= SoundBtnX && tp.x < SoundBtnX + SoundBtnW &&
+                    tp.y >= SoundBtnY && tp.y < SoundBtnY + SoundBtnH) {
+                    bool prev = sound_enabled;
+                    sound_enabled = !sound_enabled;
+                    nvs_save_sound_pref();
+                    dirty_settings_sound = true;
+                    usb_printf("[TOUCH] Sound %s\r\n", sound_enabled ? "ON" : "OFF");
+                    // Confirmation beep only when toggling from OFF -> ON
+                    if (sound_enabled && !prev) speaker_tone_nb(1200, 60);
+                }
+                // Profile widget (RFE4)
+                else if (tp.x >= ProfBtnX && tp.x < ProfBtnX + ProfBtnW &&
+                         tp.y >= ProfBtnY && tp.y < ProfBtnY + ProfBtnH) {
+                    if (profile_connecting) {
+                        // Ignore taps during connecting flash
+                    } else if (!profile_edit_mode) {
+                        // Enter edit mode
+                        if (profile_count <= 0) {
+                            if (sound_enabled) chime_error();
+                        } else {
+                            int idx = profile_find(active_profile);
+                            if (idx < 0) idx = 0;
+                            profile_edit_index = (int8_t)idx;
+                            profile_edit_mode = true;
+                            dirty_settings_profile = true;
+                            if (sound_enabled) chime_need_input();
+                            usb_printf("[TOUCH] Profile edit: idx=%d name=%s\r\n",
+                                       idx, profile_names[idx]);
+                        }
+                    } else {
+                        // Save / commit
+                        const char *chosen = profile_names[profile_edit_index];
+                        bool changed = (strcmp(chosen, active_profile) != 0);
+                        profile_edit_mode = false;
+                        if (changed) {
+                            select_profile(chosen);
+                            if (profile_has_ssid(chosen)) {
+                                wifi_connect_with_creds();
+                                profile_connecting = true;
+                                profile_connect_at = millis();
+                                if (sound_enabled) chime_working();
+                                usb_printf("[TOUCH] Profile saved: %s (connecting)\r\n", chosen);
+                            } else {
+                                if (sound_enabled) chime_error();
+                                usb_printf("[TOUCH] Profile saved: %s (no creds, not connecting)\r\n", chosen);
+                            }
+                        } else {
+                            if (sound_enabled) chime_finished();
+                            usb_printf("[TOUCH] Profile unchanged: %s\r\n", chosen);
+                        }
+                        dirty_settings_profile = true;
+                    }
+                }
+            }
+            touch_was_down = down;
         }
 
         // --- Encoder -> brightness ---
@@ -2026,28 +2279,54 @@ extern "C" void app_main(void)
             --logical;
         }
         if (logical) {
-            int prev_b = brightness_pct;
-            brightness_pct += logical * Config::BrightStep;
-            if (brightness_pct < 0) brightness_pct = 0;
-            if (brightness_pct > Config::BrightMax) brightness_pct = Config::BrightMax;
-            int mapped_b = (brightness_pct * 255) / Config::BrightMax;
-            display.setBrightness(mapped_b);
-            if (sound_enabled && brightness_pct != prev_b) {
-                speaker_tone_nb(
-                    (brightness_pct > prev_b) ? Config::ClickUpFreq : Config::ClickDownFreq,
-                    Config::ClickMs);
+            // In profile edit mode, encoder cycles through profiles instead of brightness (RFE4)
+            if (current_view == VIEW_SETTINGS && profile_edit_mode && profile_count > 0) {
+                int prev_idx = profile_edit_index;
+                int n = (int)profile_count;
+                int idx = ((int)profile_edit_index + logical) % n;
+                if (idx < 0) idx += n;
+                profile_edit_index = (int8_t)idx;
+                if (prev_idx != idx) {
+                    dirty_settings_profile = true;
+                    if (sound_enabled) {
+                        speaker_tone_nb(
+                            (logical > 0) ? Config::ClickUpFreq : Config::ClickDownFreq,
+                            Config::ClickMs);
+                    }
+                }
+            } else {
+                // Normal: encoder adjusts brightness
+                int prev_b = brightness_pct;
+                brightness_pct += logical * Config::BrightStep;
+                if (brightness_pct < 0) brightness_pct = 0;
+                if (brightness_pct > Config::BrightMax) brightness_pct = Config::BrightMax;
+                int mapped_b = (brightness_pct * 255) / Config::BrightMax;
+                display.setBrightness(mapped_b);
+                if (sound_enabled && brightness_pct != prev_b) {
+                    speaker_tone_nb(
+                        (brightness_pct > prev_b) ? Config::ClickUpFreq : Config::ClickDownFreq,
+                        Config::ClickMs);
+                }
             }
         }
 
-        // --- Button -> sound toggle ---
+        // --- Button -> cancel edit / toggle view (RFE3 + RFE4) ---
+        // In profile edit mode, button cancels edit without leaving settings view.
+        // Otherwise, short press switches between App view and Settings view.
         button_update();
         if (btn_was_pressed) {
-            sound_enabled = !sound_enabled;
-            nvs_save_sound_pref();
-            if (sound_enabled) {
-                speaker_tone_nb(1200, 60);
+            if (current_view == VIEW_SETTINGS && profile_edit_mode) {
+                // Cancel edit, stay in settings view
+                profile_edit_mode = false;
+                profile_edit_index = -1;
+                dirty_settings_profile = true;
+                if (sound_enabled) chime_error();
+                usb_print("[BTN] Profile edit cancelled\r\n");
+            } else {
+                switch_view(current_view == VIEW_APP ? VIEW_SETTINGS : VIEW_APP);
+                usb_printf("[BTN] View = %s\r\n",
+                           current_view == VIEW_APP ? "APP" : "SETTINGS");
             }
-            usb_printf("[BTN] Sound %s\r\n", sound_enabled ? "ON" : "OFF");
         }
 
         // --- Tone2 scheduling ---

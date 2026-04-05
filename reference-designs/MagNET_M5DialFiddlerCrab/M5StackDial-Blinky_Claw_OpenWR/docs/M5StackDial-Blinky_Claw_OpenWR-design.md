@@ -62,6 +62,13 @@ The `client_host` field is the short hostname of the machine running Claude Code
 
 Parser: if `|` found → sscanf extended format. Otherwise → atoi state only.
 
+### QoS
+
+- **Publisher** (`mosquitto_pub` in `hooks/claude-claw-hook.sh`): **QoS 1** — `-q 1` flag. Publisher waits for PUBACK from the broker, so transient network hiccups are retried at the mosquitto client level.
+- **Subscriber** (ESP-IDF MQTT client in `start_mqtt`): **QoS 1** — requested in `esp_mqtt_client_subscribe(mqtt_client, mqtt_topic, 1)`. Broker stores delivery state until the client acknowledges.
+- **Effective delivery**: QoS 1 end-to-end (at least once). Duplicate delivery is possible but harmless — replaying a state value just re-sets the same mode.
+- **Clean session**: ESP-IDF MQTT defaults to `clean_session = true`. Messages published while the device is offline (reboot, WiFi drop) are **not** queued by the broker and are lost. If cross-reboot persistence is ever required, set `cfg.session.disable_clean_session = true` in `start_mqtt()`.
+
 **Plan limits are aspirational** — Claude Code doesn't expose session/weekly % programmatically today (multiple open feature requests). The hook script sends `-1` for unknown values. The display shows "?" when values are -1. When Anthropic ships the data, only the hook script needs updating.
 
 ## Synthwave Color Palette
@@ -107,18 +114,61 @@ The 3rd innermost ring (orange) tracks active working time during a Claude Code 
 ## Sound System
 
 - **Default: OFF** — persisted in NVS key `"sound"`
-- **Toggle**: button press or `sound-on` / `sound-off` REPL commands
+- **Toggle**: tap the sound toggle in the **Settings view** (see Views below), or use the `sound-on` / `sound-off` REPL commands
 - **Chimes on state change**:
   - WORKING: soft 800Hz, 50ms
   - FINISHED: ascending 1200Hz→1800Hz
   - NEED INPUT: 2000Hz, 100ms
   - ERROR: descending 1000Hz→600Hz
+- **View-switch chirp**: 1500Hz, 40ms (gated on `sound_enabled` — honors "sound off = silent")
+- **Sound-enable confirmation**: 1200Hz, 60ms (plays only when toggling sound from OFF → ON)
+
+## Views
+
+The device supports multiple views. The hardware button toggles between them.
+
+### App View (default)
+The existing synthwave fiddler crab display: session/weekly/timer rings, crab mascot, status text, client hostname, model name, WiFi icon, MAC suffix. This is the default view on boot.
+
+### Settings View
+A settings screen for toggling sound via touch and switching WiFi profiles via touch + encoder.
+
+Layout:
+- **Title** "SETTINGS" at y=40 (centered, size 2, magenta)
+- **Sound toggle rect** (160×56 at y=96-152) — double-line neon border:
+  - Green border + "SOUND: ON" when enabled
+  - Hot-pink border + "SOUND: OFF" when disabled
+- **Profile selector widget** (160×34 at y=162-196) — double-line border:
+  - Dim border in view mode, showing `PROFILE` / `<active_profile>`
+  - Bright cyan border in edit mode, showing `<name>  i/N` on line 1 and SSID preview on line 2
+  - Hot-pink border with "Connecting..." during the 1.5s save flash
+- **Hint** "Press btn to exit" at y=222
+
+Tapping inside the sound rect flips the sound state and persists to NVS. Taps outside the widgets are ignored (avoids bezel false triggers). Holding a finger down toggles only once (rising-edge debounce). The FT5x06 capacitive touch driver (I2C1, SDA=11, SCL=12, INT=14) is polled only while in Settings view — touch events in the App view are ignored.
+
+**Profile switching flow (RFE4)**:
+1. Tap the profile widget → enters edit mode, border turns cyan, encoder now cycles profiles. `chime_need_input()` plays.
+2. Rotate encoder → `profile_edit_index` cycles through `profile_names[]` with wrap-around. Each detent plays a click chime. The SSID preview line updates live.
+3. Tap widget again (save):
+   - If selected profile differs from active + has creds → `select_profile()` + `wifi_connect_with_creds()`, "Connecting..." flash shown ~1.5s, `chime_working()` plays.
+   - If selected differs but has no creds → switches active profile but doesn't connect, `chime_error()` plays.
+   - If selection unchanged → no reconnect, `chime_finished()` plays.
+4. Hardware button while in edit mode → cancels edit without exiting the view, border dims back, `chime_error()` plays. Subsequent button press exits the view normally.
+
+While in edit mode, the encoder **only** cycles profiles — brightness control is suspended until the user exits edit mode (via save or cancel).
+
+While in Settings view, MQTT/WiFi state-change events still fire chimes and set dirty flags; the dirty flags are acted on when the user returns to the App view, so the App view is always up-to-date on return.
 
 ## Inputs
 
-- **Encoder rotation**: Display brightness (reuse existing pattern)
-- **Button press**: Toggle sound on/off
-- **Touch**: Unused (placeholder for future)
+- **Encoder rotation**:
+  - App view: display brightness
+  - Settings view (normal): display brightness
+  - Settings view (profile edit mode): cycles through WiFi profiles
+- **Button press**:
+  - Profile edit mode active: cancels edit (stays in settings view)
+  - Otherwise: toggles between App view and Settings view
+- **Touch**: Active only in Settings view — sound toggle rect and profile widget
 
 ## WiFi / MQTT / HTTP / mDNS
 

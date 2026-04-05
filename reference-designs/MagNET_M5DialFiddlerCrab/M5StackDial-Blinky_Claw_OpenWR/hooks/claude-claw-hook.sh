@@ -91,4 +91,4 @@ RESET_EPOCH=0
 
 # --- Publish ---
 MSG="${STATE}|${SHORT_MODEL}|${SESSION_PCT}|${WEEKLY_PCT}|${RESET_EPOCH}|${CLIENT_HOST}"
-mosquitto_pub -h "$CLAW_BROKER" -t "$CLAW_TOPIC" -m "$MSG" 2>/dev/null || true
+mosquitto_pub -h "$CLAW_BROKER" -t "$CLAW_TOPIC" -q 1 -m "$MSG" 2>/dev/null || true
