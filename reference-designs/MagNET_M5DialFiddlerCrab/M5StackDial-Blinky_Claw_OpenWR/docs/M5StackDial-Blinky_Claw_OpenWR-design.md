@@ -86,17 +86,26 @@ GRID       = rgb(40, 20, 60)     // Perspective grid lines
 TEXT_DIM   = rgb(100, 80, 120)
 ```
 
-## Fiddler Crab (Geometric Primitives)
+## Fiddler Crab (Animated, RFE7)
 
-~80x60 pixel area centered on display. Built from:
-- Body: overlapping filled circles (cyan)
-- Big claw (right): large circles (magenta/hot pink) — asymmetric!
-- Small claw (left): smaller circles
-- Legs: 3 angled lines per side (cyan)
-- Eye stalks: lines + small filled circles (neon green)
-- Shell accents: lighter cyan lines
+~78x64 pixel bounding box centered on display. Built from geometric primitives. The crab animates per Claude CLI state using a bounding-box clear + full redraw strategy.
 
-~50-70 lines of `fillCircle` / `drawLine` calls. Will need pixel-tuning on hardware.
+### Static parts (always drawn)
+- Body: 3 overlapping filled circles (cyan) + shell accent circle + line (light cyan)
+- Eye stalks: 2 lines from body to eye tops (cyan)
+
+### Animated parts per state
+
+| State | Part | Animation | Rate |
+|-------|------|-----------|------|
+| IDLE (0) | Eyes | Blink (squint lines for 150ms every 3s) + pupils look left/right (±2px shift, 800ms hold every 4.5s) | ~30fps |
+| WORKING (2) | Legs (6) | Foot endpoints shift ±3px horizontally, simulating sideways scurry | 150ms toggle |
+| NEED INPUT (3) | Big claw pincers | Open (spread) / closed (converge) snap | 400ms toggle |
+| FINISHED (5) | Small claw tip | Orbits base in 6px-radius circle via sinf/cosf | ~2s/revolution |
+| ERROR (7) | (none) | Static crab; status text already flashes red | — |
+
+### Animation timing constants (Config namespace)
+All timing values are configurable via `Config::Crab*` constants. Active states (2/3/5) redraw every frame (~1ms loop). IDLE redraws at ~30fps. The `fillRect` bounding-box clear is ~4560 pixels per frame — negligible overhead.
 
 ## Session Work Timer
 

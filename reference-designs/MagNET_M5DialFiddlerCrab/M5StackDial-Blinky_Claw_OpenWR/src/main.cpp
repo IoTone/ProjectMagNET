@@ -360,6 +360,18 @@ namespace Config {
     static constexpr uint16_t ClickUpFreq   = 1800;
     static constexpr uint16_t ClickDownFreq = 1000;
     static constexpr uint16_t ClickMs       = 40;
+
+    // Crab animation timing (RFE7)
+    static constexpr uint16_t CrabLegScurryMs     = 150;   // leg phase toggle
+    static constexpr uint16_t CrabClawSnapMs      = 400;   // big claw snap
+    static constexpr float    CrabSmallClawSpeed   = 0.003f; // rad/ms (~2s/rev)
+    static constexpr int      CrabSmallClawRadius  = 6;     // orbit pixels
+    static constexpr uint16_t CrabBlinkIntervalMs  = 3000;  // between blinks
+    static constexpr uint16_t CrabBlinkDurationMs  = 150;   // eyes closed
+    static constexpr uint16_t CrabLookIntervalMs   = 4500;  // between looks
+    static constexpr uint16_t CrabLookHoldMs       = 800;   // look hold time
+    static constexpr int      CrabLookOffsetPx     = 2;     // pupil shift
+    static constexpr int      CrabLegShiftPx       = 3;     // foot shift
 }
 
 // Settings view UI constants (RFE3)
@@ -1246,50 +1258,98 @@ static void draw_synthwave_bg() {
 // Drawing: Fiddler Crab
 // ---------------------------------------------------------------------------
 static void draw_crab(int ccx, int ccy) {
-    // Body: overlapping filled circles in CYAN
+    uint32_t now = millis();
+
+    // --- Clear crab bounding box ---
+    display.fillRect(ccx - 32, ccy - 32, 78, 64, Synth::BG);
+
+    // --- Compute animation parameters based on claw_state ---
+
+    // Legs: scurry when WORKING (state 2)
+    int leg_shift = 0;
+    if (claw_state == 2) {
+        bool leg_phase = ((now / Config::CrabLegScurryMs) % 2) == 0;
+        leg_shift = leg_phase ? Config::CrabLegShiftPx : -Config::CrabLegShiftPx;
+    }
+
+    // Big claw pincers: snap when NEED INPUT (state 3)
+    bool claw_open = true;
+    if (claw_state == 3) {
+        claw_open = ((now / Config::CrabClawSnapMs) % 2) == 0;
+    }
+
+    // Small claw tip: orbit when FINISHED (state 5)
+    int small_tip_x = ccx - 30;
+    int small_tip_y = ccy - 10;
+    if (claw_state == 5) {
+        float angle = now * Config::CrabSmallClawSpeed;
+        small_tip_x = (int)(ccx - 26 + cosf(angle) * Config::CrabSmallClawRadius);
+        small_tip_y = (int)(ccy - 6  + sinf(angle) * Config::CrabSmallClawRadius);
+    }
+
+    // Eyes: blink + look when IDLE (state 0)
+    bool eyes_closed = false;
+    int pupil_offset_x = 0;
+    if (claw_state == 0) {
+        uint32_t blink_cycle = now % Config::CrabBlinkIntervalMs;
+        eyes_closed = (blink_cycle < Config::CrabBlinkDurationMs);
+        uint32_t look_cycle = now % Config::CrabLookIntervalMs;
+        if (look_cycle >= 1500 && look_cycle < (uint32_t)(1500 + Config::CrabLookHoldMs))
+            pupil_offset_x = -Config::CrabLookOffsetPx;
+        else if (look_cycle >= 3000 && look_cycle < (uint32_t)(3000 + Config::CrabLookHoldMs))
+            pupil_offset_x = Config::CrabLookOffsetPx;
+    }
+
+    // --- Draw body (static) ---
     display.fillCircle(ccx, ccy, 16, Synth::CYAN);
     display.fillCircle(ccx - 8, ccy + 2, 12, Synth::CYAN);
     display.fillCircle(ccx + 8, ccy + 2, 12, Synth::CYAN);
-
-    // Shell accent lines
     uint16_t light_cyan = rgb(100, 255, 255);
     display.drawCircle(ccx, ccy - 2, 14, light_cyan);
     display.drawLine(ccx - 12, ccy, ccx + 12, ccy, light_cyan);
 
-    // Big claw (RIGHT side) - fiddler crabs have one oversized claw
+    // --- Draw big claw (RIGHT) with snap animation ---
     display.fillCircle(ccx + 30, ccy - 8, 10, Synth::MAGENTA);
     display.fillCircle(ccx + 38, ccy - 14, 7, Synth::HOT_PINK);
     display.fillCircle(ccx + 24, ccy - 14, 6, Synth::MAGENTA);
-    // Claw pincer lines
-    display.drawLine(ccx + 34, ccy - 20, ccx + 42, ccy - 28, Synth::HOT_PINK);
-    display.drawLine(ccx + 30, ccy - 20, ccx + 26, ccy - 28, Synth::MAGENTA);
-    // Arm connecting claw to body
+    if (claw_open) {
+        display.drawLine(ccx + 34, ccy - 20, ccx + 44, ccy - 30, Synth::HOT_PINK);
+        display.drawLine(ccx + 30, ccy - 20, ccx + 24, ccy - 30, Synth::MAGENTA);
+    } else {
+        display.drawLine(ccx + 34, ccy - 20, ccx + 38, ccy - 28, Synth::HOT_PINK);
+        display.drawLine(ccx + 30, ccy - 20, ccx + 30, ccy - 28, Synth::MAGENTA);
+    }
     display.drawLine(ccx + 16, ccy - 2, ccx + 24, ccy - 6, Synth::CYAN);
 
-    // Small claw (LEFT side)
+    // --- Draw small claw (LEFT) with rotation animation ---
     display.fillCircle(ccx - 26, ccy - 6, 5, Synth::MAGENTA);
-    display.fillCircle(ccx - 30, ccy - 10, 3, Synth::HOT_PINK);
-    // Arm
-    display.drawLine(ccx - 16, ccy - 2, ccx - 22, ccy - 5, Synth::CYAN);
+    display.fillCircle(small_tip_x, small_tip_y, 3, Synth::HOT_PINK);
+    display.drawLine(ccx - 16, ccy - 2, small_tip_x, small_tip_y, Synth::CYAN);
 
-    // Legs (3 per side) - angled lines
+    // --- Draw legs with scurry animation ---
     // Right legs
-    display.drawLine(ccx + 12, ccy + 8,  ccx + 28, ccy + 18, Synth::CYAN);
-    display.drawLine(ccx + 10, ccy + 10, ccx + 24, ccy + 24, Synth::CYAN);
-    display.drawLine(ccx + 8,  ccy + 12, ccx + 18, ccy + 28, Synth::CYAN);
-    // Left legs
-    display.drawLine(ccx - 12, ccy + 8,  ccx - 28, ccy + 18, Synth::CYAN);
-    display.drawLine(ccx - 10, ccy + 10, ccx - 24, ccy + 24, Synth::CYAN);
-    display.drawLine(ccx - 8,  ccy + 12, ccx - 18, ccy + 28, Synth::CYAN);
+    display.drawLine(ccx + 12, ccy + 8,  ccx + 28 + leg_shift, ccy + 18 - leg_shift / 2, Synth::CYAN);
+    display.drawLine(ccx + 10, ccy + 10, ccx + 24 + leg_shift, ccy + 24 - leg_shift / 2, Synth::CYAN);
+    display.drawLine(ccx + 8,  ccy + 12, ccx + 18 + leg_shift, ccy + 28 - leg_shift / 2, Synth::CYAN);
+    // Left legs (mirrored shift)
+    display.drawLine(ccx - 12, ccy + 8,  ccx - 28 - leg_shift, ccy + 18 - leg_shift / 2, Synth::CYAN);
+    display.drawLine(ccx - 10, ccy + 10, ccx - 24 - leg_shift, ccy + 24 - leg_shift / 2, Synth::CYAN);
+    display.drawLine(ccx - 8,  ccy + 12, ccx - 18 - leg_shift, ccy + 28 - leg_shift / 2, Synth::CYAN);
 
-    // Eye stalks: thin lines with filled circles at tips
+    // --- Draw eyes with blink/look animation ---
     display.drawLine(ccx - 6, ccy - 14, ccx - 10, ccy - 26, Synth::CYAN);
     display.drawLine(ccx + 6, ccy - 14, ccx + 10, ccy - 26, Synth::CYAN);
-    display.fillCircle(ccx - 10, ccy - 27, 3, Synth::NEON_GREEN);
-    display.fillCircle(ccx + 10, ccy - 27, 3, Synth::NEON_GREEN);
-    // Eye pupils
-    display.fillCircle(ccx - 10, ccy - 28, 1, Synth::BG);
-    display.fillCircle(ccx + 10, ccy - 28, 1, Synth::BG);
+    if (eyes_closed) {
+        // Squint lines when blinking
+        display.drawLine(ccx - 12, ccy - 27, ccx - 8, ccy - 27, Synth::DIM_CYAN);
+        display.drawLine(ccx + 8,  ccy - 27, ccx + 12, ccy - 27, Synth::DIM_CYAN);
+    } else {
+        display.fillCircle(ccx - 10, ccy - 27, 3, Synth::NEON_GREEN);
+        display.fillCircle(ccx + 10, ccy - 27, 3, Synth::NEON_GREEN);
+        // Pupils with look offset
+        display.fillCircle(ccx - 10 + pupil_offset_x, ccy - 28, 1, Synth::BG);
+        display.fillCircle(ccx + 10 + pupil_offset_x, ccy - 28, 1, Synth::BG);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2290,9 +2350,22 @@ extern "C" void app_main(void)
                 dirty_wifi = false;
             }
 
-            // --- Animations: always redraw status text for animated states ---
-            bool needs_anim = (claw_state == 2 || claw_state == 3 || claw_state == 7);
-            if (dirty_status || needs_anim) {
+            // --- Crab animation (RFE7): redraw crab with state-dependent motion ---
+            {
+                bool needs_crab_anim = (claw_state == 2 || claw_state == 3 || claw_state == 5);
+                bool needs_idle_anim = (claw_state == 0);
+                static uint32_t last_idle_crab_draw = 0;
+                if (needs_crab_anim) {
+                    draw_crab(cx, cy);
+                } else if (needs_idle_anim && (now - last_idle_crab_draw >= 33)) {
+                    draw_crab(cx, cy);
+                    last_idle_crab_draw = now;
+                }
+            }
+
+            // --- Status text animation ---
+            bool needs_text_anim = (claw_state == 2 || claw_state == 3 || claw_state == 7);
+            if (dirty_status || needs_text_anim) {
                 draw_status_text();
                 dirty_status = false;
             }
