@@ -19,7 +19,7 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
-#include "mdns.h"
+// #include "mdns.h"  // mDNS removed — not reliable in multi-subnet environments
 #include "mqtt_client.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -968,13 +968,14 @@ static void start_http_server(void) {
 // ---------------------------------------------------------------------------
 // mDNS
 // ---------------------------------------------------------------------------
-static void start_mdns_service(void) {
-    ESP_ERROR_CHECK(mdns_init());
-    mdns_hostname_set(hostname_mdns);
-    mdns_instance_name_set("FiddlerCrab Status Display");
-    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-    ESP_LOGI(TAG, "mDNS: %s.local", hostname_mdns);
-}
+// mDNS removed — not reliable in multi-subnet environments
+// static void start_mdns_service(void) {
+//     ESP_ERROR_CHECK(mdns_init());
+//     mdns_hostname_set(hostname_mdns);
+//     mdns_instance_name_set("FiddlerCrab Status Display");
+//     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+//     ESP_LOGI(TAG, "mDNS: %s.local", hostname_mdns);
+// }
 
 // ---------------------------------------------------------------------------
 // MQTT
@@ -1118,7 +1119,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         dirty_wifi = true;
 
         start_http_server();
-        start_mdns_service();
+        // start_mdns_service();  // mDNS removed
         start_mqtt();
     }
 }
