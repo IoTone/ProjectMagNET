@@ -551,13 +551,15 @@ static void draw_sessions_screen(void) {
         gfx.setCursor(106, y);
         gfx.printf("%02d:%02d", mm, ss);
 
-        // Session %
-        if (s->session_pct >= 0) {
+        // Status letter [W] [F] [I] [N] [E] — color-coded
+        {
+            uint16_t sc = stale ? Synth::DIM_GRAY : state_color(s->state);
             gfx.setCursor(170, y);
-            gfx.printf("%2d%%", s->session_pct);
+            gfx.setTextColor(sc);
+            gfx.printf("[%s]", state_letter(s->state));
         }
 
-        // Crawdad on far right of every active (non-stale) session
+        // Crawdad on far right — color-coded per session, animated when WORKING
         if (!stale) {
             uint16_t ccolor = SESSION_COLORS[s->color_index % NUM_SESSION_COLORS];
             bool animate = (s->state == STATE_WORKING);

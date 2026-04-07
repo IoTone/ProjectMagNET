@@ -105,11 +105,11 @@ Uses M5GFX `M5Canvas` sprite for the sessions screen (double-buffered, flicker-f
 ┌──────────────────────────────────────┐
 │  SESSIONS      🦞             3/8    │  size 2, crawdad green when any working
 │──────────────────────────────────────│
-│ ██ abc1 opus 02:15  8%          🦞  │  WORKING: dark yellow bg, white text, crawdad scurries
-│ ██ def2 sonn 01:30  5%          🦞  │  FINISHED: dark green bg, white text, static crawdad
-│ ██ ghi3 opus 00:00 12%          🦞  │  IDLE: grey bg, white text, static crawdad
-│ ▓▓ jkl4 haik 05:20 30%          🦞  │  NEED INPUT: flashing blue bg (400ms cycle)
-│ ▓▓ mno5 opus 00:10  2%          🦞  │  ERROR: flashing red bg (300ms cycle)
+│ ██ abc1 opus 02:15 [W]          🦞  │  WORKING: amber bg, [W] green, crawdad scurries
+│ ██ def2 sonn 01:30 [F]          🦞  │  FINISHED: green bg, [F] cyan, static crawdad
+│ ██ ghi3 opus 00:00 [I]          🦞  │  IDLE: grey bg, [I] dim, static crawdad
+│ ▓▓ jkl4 haik 05:20 [N]          🦞  │  NEED INPUT: flashing blue bg, [N] yellow
+│ ▓▓ mno5 opus 00:10 [E]          🦞  │  ERROR: flashing red bg, [E] red
 │                                  ▼   │  scroll indicator if more
 │  [A]=Scroll  [B]=Back               │  size 1, dim
 └──────────────────────────────────────┘
@@ -120,8 +120,8 @@ Uses M5GFX `M5Canvas` sprite for the sessions screen (double-buffered, flicker-f
 - **Session ID** (first 4 chars of UUID) — white text
 - **Model** (4 chars: "opus"/"sonn"/"haik") — white text
 - **Timer** (mm:ss of accumulated working time) — white text
-- **Token %** (session usage) — white text
-- **Crawdad** on far right — colored by session's assigned neon color, animated (legs scurry) when WORKING, static otherwise
+- **Status letter** `[W]` `[F]` `[I]` `[N]` `[E]` — color-coded by state (neon green, cyan, dim, yellow, red)
+- **Crawdad** on far right — uniquely colored per session (assigned from palette on creation), animated (legs scurry) when WORKING, static otherwise
 
 **State color-coding** (background bar):
 
@@ -315,9 +315,29 @@ Background task on UART0 (115200 baud). Registered words:
 | 3 | Clear: [B] | Clear all session rows |
 | 4 | Back: <- | Return to WiFi screen |
 
-## Session Row Colors (as implemented)
+## Session Row Display (as implemented)
 
-Background bar tints — bright enough to be clearly visible, dark enough for white text readability:
+Each row format: `ID4 MDL4 MM:SS [S] 🦞`
+
+| Element | Content | Color |
+|---------|---------|-------|
+| Session ID | First 4 chars of UUID | White |
+| Model | "opus"/"sonn"/"haik" | White |
+| Timer | mm:ss working time | White |
+| Status letter | `[I]` `[W]` `[F]` `[N]` `[E]` | Color-coded (see below) |
+| Crawdad | Per-session unique color | Animated when WORKING |
+
+**Status letter colors:**
+
+| Letter | State | Color |
+|--------|-------|-------|
+| `[I]` | IDLE | `Synth::TEXT_DIM` (dim grey) |
+| `[W]` | WORKING | `Synth::NEON_GREEN` |
+| `[F]` | FINISHED | `Synth::CYAN` |
+| `[N]` | NEED INPUT | `Synth::YELLOW` |
+| `[E]` | ERROR | `Synth::RED` |
+
+**Row background bar tints** — bright enough to be clearly visible, dark enough for white text readability:
 
 | State | Background RGB | Visual |
 |-------|---------------|--------|
@@ -328,6 +348,10 @@ Background bar tints — bright enough to be clearly visible, dark enough for wh
 | ERROR | `rgb(120, 15, 15)` / `rgb(50, 5, 5)` | Flashing bright red (300ms) |
 | Stale (>5 min) | `Synth::DIM_GRAY` | Dimmed, no crawdad |
 
+**Crawdad colors** — assigned round-robin from the session palette when a new session is created: cyan, magenta, hot pink, neon green, yellow. Each session retains its assigned color for its lifetime. The crawdad animates (legs scurry) only when the session state is WORKING.
+
+**Token % removed** — previously showed session token usage but was unreliable (always 100% due to the `CLAW_PLAN` calculation summing all output tokens against a fixed estimate). Replaced by the bracketed status letter which provides clearer at-a-glance state information.
+
 ## Known Issues / Future Work
 
 - **Model shows "unknown"**: Claude Code only includes the `model` field in certain hook events (Stop, SessionStart). The hook script caches per-session, but the first few messages may show "unknown" until a Stop event occurs.
@@ -337,10 +361,18 @@ Background bar tints — bright enough to be clearly visible, dark enough for wh
 
 ## Open Design Questions
 
-- **Rate limit / token exhaustion visibility**: Currently, rate limits and "out of tokens" conditions are not surfaced as a distinct state. Claude Code doesn't fire a specific hook event for these — the session simply stops receiving updates and goes stale after 5 minutes. Several options to consider:
-  1. **Hook script approach**: If `session_pct` reaches 100%, the hook script could send ERROR (state=7) instead of the normal state — makes token exhaustion visible as a flashing red row.
-  2. **Device-side approach**: If `session_pct >= 95%`, the device could override the row color to a warning tint (e.g. orange) even while the session is still WORKING — proactive "running low" indicator.
-  3. **Staleness-as-warning approach**: If a session was WORKING and goes stale (no updates for 5 min), show it in a warning color (orange) instead of just dimming to grey — distinguishes "session ended normally" from "session stopped unexpectedly."
-  4. **Combination**: Use option 2 for proactive warning + option 3 for unexpected stalls.
+- **Token usage tracking**: The `session_pct` field (token usage percentage) is currently hidden from the display because the calculation is unreliable. The hook script sums all `output_tokens` from the transcript and divides by `CLAW_PLAN` (default 80K), but in any non-trivial session the total quickly exceeds the limit and caps at 100%. Root cause: `CLAW_PLAN` is a rough estimate of a per-5-hour-window token budget, but the transcript accumulates tokens across the entire session lifetime (which may span many hours). To fix properly, one of these approaches is needed:
+  1. **Rolling window**: Track tokens within a sliding 5-hour window rather than cumulative total.
+  2. **API-side data**: Use Claude Code's actual rate limit headers or quota info if/when exposed to hooks.
+  3. **Reset on window boundary**: Clear the cached `session_pct` when `reset_epoch` changes (indicates a new billing window).
+  4. **Relative indicator**: Show tokens-per-hour rate rather than cumulative percentage.
+  
+  For now, the status letter `[W]`/`[F]`/`[I]`/`[N]`/`[E]` replaces the token % on the display. The MQTT message still carries `session_pct` for future use.
+
+- **Rate limit / token exhaustion visibility**: Rate limits and "out of tokens" conditions are not surfaced as a distinct state. Claude Code doesn't fire a specific hook event for these — the session simply stops receiving updates and goes stale after 5 minutes. Options:
+  1. **Hook script approach**: If `session_pct` reaches 100%, send ERROR (state=7) — visible as flashing red row.
+  2. **Device-side approach**: If `session_pct >= 95%`, override the row color to orange — proactive "running low" indicator.
+  3. **Staleness-as-warning approach**: If a WORKING session goes stale (no updates for 5 min), show in orange instead of grey — distinguishes "ended normally" from "stopped unexpectedly."
+  4. **Combination**: Option 2 for proactive warning + option 3 for unexpected stalls.
   
   No implementation yet — pending decision on which approach best fits the workflow.
