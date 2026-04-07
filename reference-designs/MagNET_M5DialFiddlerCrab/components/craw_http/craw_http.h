@@ -1,5 +1,6 @@
 #ifndef CRAW_HTTP_H
 #define CRAW_HTTP_H
+#define CRAW_HTTP_VERSION "0.1.0"
 #include <stdbool.h>
 #include "craw_mqtt.h"  // reuse craw_mqtt_msg_t for the parsed notify data
 

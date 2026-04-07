@@ -1,5 +1,6 @@
 #ifndef CRAW_WIFI_H
 #define CRAW_WIFI_H
+#define CRAW_WIFI_VERSION "0.1.0"
 #include <stdbool.h>
 
 #ifdef __cplusplus

@@ -1,5 +1,6 @@
 #ifndef CRAW_NVS_H
 #define CRAW_NVS_H
+#define CRAW_NVS_VERSION "0.1.0"
 #include <stdbool.h>
 #include <stdint.h>
 

@@ -1,5 +1,6 @@
 #ifndef CRAW_MQTT_H
 #define CRAW_MQTT_H
+#define CRAW_MQTT_VERSION "0.1.0"
 #include <stdbool.h>
 #include <stdint.h>
 

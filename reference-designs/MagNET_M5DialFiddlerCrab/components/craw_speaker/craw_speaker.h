@@ -6,6 +6,7 @@
  */
 #ifndef CRAW_SPEAKER_H
 #define CRAW_SPEAKER_H
+#define CRAW_SPEAKER_VERSION "0.1.0"
 
 #include <stdbool.h>
 #include <stdint.h>

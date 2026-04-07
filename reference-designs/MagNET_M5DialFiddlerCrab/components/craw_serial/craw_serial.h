@@ -9,6 +9,7 @@
  */
 #ifndef CRAW_SERIAL_H
 #define CRAW_SERIAL_H
+#define CRAW_SERIAL_VERSION "0.1.0"
 
 #include <stdbool.h>
 

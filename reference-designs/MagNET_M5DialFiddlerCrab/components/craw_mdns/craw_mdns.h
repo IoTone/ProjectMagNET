@@ -1,5 +1,6 @@
 #ifndef CRAW_MDNS_H
 #define CRAW_MDNS_H
+#define CRAW_MDNS_VERSION "0.1.0"
 
 #ifdef __cplusplus
 extern "C" {
