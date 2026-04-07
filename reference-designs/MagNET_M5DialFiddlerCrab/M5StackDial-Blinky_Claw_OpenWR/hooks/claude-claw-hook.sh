@@ -20,7 +20,7 @@ CLAW_BROKER="${CLAW_BROKER:-broker.hivemq.com}"
 CLAW_TOPIC="${CLAW_TOPIC:-}"
 CLAW_PLAN="${CLAW_PLAN:-80000}"
 CLIENT_HOST="$(hostname -s)"
-CACHE_DIR="${HOME}/.claude/.claw_cache"
+CACHE_DIR="${HOME}/.claude/.craw_cache"
 
 # Bail if no topic configured
 if [ -z "$CLAW_TOPIC" ]; then

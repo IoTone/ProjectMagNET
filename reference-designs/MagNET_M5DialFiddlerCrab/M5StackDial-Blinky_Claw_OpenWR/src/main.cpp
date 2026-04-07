@@ -36,13 +36,13 @@
 #include <cstdarg>
 #include <cmath>
 
-static const char *TAG = "claw_dial";
+static const char *TAG = "craw_dial";
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 #define FORTH_HEAP_SIZE     (48 * 1024)
-#define NVS_NAMESPACE          "claw_config"
+#define NVS_NAMESPACE          "craw_config"
 #define NVS_KEY_SSID           "ssid"         // Legacy — migrated to s_default
 #define NVS_KEY_PASS           "pass"         // Legacy — migrated to p_default
 #define NVS_KEY_MQTT_BROKER    "mqtt_url"
@@ -393,7 +393,7 @@ namespace Settings {
 // ---------------------------------------------------------------------------
 
 // Claw state: 0=IDLE, 2=WORKING, 3=NEED_INPUT, 5=FINISHED, 7=ERROR
-static volatile int claw_state = 0;
+static volatile int craw_state = 0;
 static char model_name[32] = "---";
 static volatile int session_pct = -1;     // -1=unknown, 0-100
 static volatile int weekly_pct = -1;
@@ -445,7 +445,7 @@ static uint16_t tone2_freq = 0;
 static uint16_t tone2_dur = 0;
 
 // Previous state for chime detection
-static int prev_claw_state = -1;
+static int prev_craw_state = -1;
 
 // WiFi (active profile mirror)
 static char wifi_ssid[33] = {0};
@@ -885,7 +885,7 @@ static esp_err_t handler_notify(httpd_req_t *req) {
         char param[64] = {0};
         if (httpd_query_key_value(query, "state", param, sizeof(param)) == ESP_OK) {
             int state = atoi(param);
-            claw_state = state;
+            craw_state = state;
             dirty_status = true;
         }
         if (httpd_query_key_value(query, "model", param, sizeof(param)) == ESP_OK) {
@@ -907,7 +907,7 @@ static esp_err_t handler_notify(httpd_req_t *req) {
             dirty_status = true;
         }
         ESP_LOGI(TAG, "HTTP notify: state=%d model=%s sess=%d wkly=%d",
-                 claw_state, model_name, session_pct, weekly_pct);
+                 craw_state, model_name, session_pct, weekly_pct);
     }
     httpd_resp_set_type(req, "text/plain");
     httpd_resp_sendstr(req, "ok");
@@ -928,7 +928,7 @@ static esp_err_t handler_status(httpd_req_t *req) {
         "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
         "\"hostname\":\"%s.local\",\"uptime_s\":%lu,\"free_heap\":%lu,"
         "\"sound\":%s}",
-        claw_state, state_label(claw_state), model_name,
+        craw_state, state_label(craw_state), model_name,
         session_pct, weekly_pct,
         IP2STR(&ip_info.ip),
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
@@ -1012,7 +1012,7 @@ static void mqtt_event_handler(void *args, esp_event_base_t base,
                     int parsed = sscanf(buf, "%d|%31[^|]|%d|%d|%u|%31[^|]",
                                         &state, model, &sess, &wkly, &reset_e, host);
                     if (parsed >= 1) {
-                        claw_state = state;
+                        craw_state = state;
                         dirty_status = true;
                     }
                     if (parsed >= 2 && strlen(model) > 0) {
@@ -1036,11 +1036,11 @@ static void mqtt_event_handler(void *args, esp_event_base_t base,
                         dirty_status = true;
                     }
                     ESP_LOGI(TAG, "MQTT: state=%d model=%s sess=%d wkly=%d host=%s",
-                             claw_state, model_name, session_pct, weekly_pct, client_host);
+                             craw_state, model_name, session_pct, weekly_pct, client_host);
                 } else {
                     // Backward compat: plain integer
                     int state = atoi(buf);
-                    claw_state = state;
+                    craw_state = state;
                     dirty_status = true;
                     ESP_LOGI(TAG, "MQTT: state=%d (plain)", state);
                 }
@@ -1264,25 +1264,25 @@ static void draw_crab(int ccx, int ccy) {
     // --- Clear crab bounding box ---
     display.fillRect(ccx - 32, ccy - 32, 78, 64, Synth::BG);
 
-    // --- Compute animation parameters based on claw_state ---
+    // --- Compute animation parameters based on craw_state ---
 
     // Legs: scurry when WORKING (state 2)
     int leg_shift = 0;
-    if (claw_state == 2) {
+    if (craw_state == 2) {
         bool leg_phase = ((now / Config::CrabLegScurryMs) % 2) == 0;
         leg_shift = leg_phase ? Config::CrabLegShiftPx : -Config::CrabLegShiftPx;
     }
 
     // Big claw pincers: snap when NEED INPUT (state 3)
-    bool claw_open = true;
-    if (claw_state == 3) {
-        claw_open = ((now / Config::CrabClawSnapMs) % 2) == 0;
+    bool craw_open = true;
+    if (craw_state == 3) {
+        craw_open = ((now / Config::CrabClawSnapMs) % 2) == 0;
     }
 
     // Small claw tip: orbit when FINISHED (state 5)
     int small_tip_x = ccx - 30;
     int small_tip_y = ccy - 10;
-    if (claw_state == 5) {
+    if (craw_state == 5) {
         float angle = now * Config::CrabSmallClawSpeed;
         small_tip_x = (int)(ccx - 26 + cosf(angle) * Config::CrabSmallClawRadius);
         small_tip_y = (int)(ccy - 6  + sinf(angle) * Config::CrabSmallClawRadius);
@@ -1291,7 +1291,7 @@ static void draw_crab(int ccx, int ccy) {
     // Eyes: blink + look when IDLE (state 0)
     bool eyes_closed = false;
     int pupil_offset_x = 0;
-    if (claw_state == 0) {
+    if (craw_state == 0) {
         uint32_t blink_cycle = now % Config::CrabBlinkIntervalMs;
         eyes_closed = (blink_cycle < Config::CrabBlinkDurationMs);
         uint32_t look_cycle = now % Config::CrabLookIntervalMs;
@@ -1313,7 +1313,7 @@ static void draw_crab(int ccx, int ccy) {
     display.fillCircle(ccx + 30, ccy - 8, 10, Synth::MAGENTA);
     display.fillCircle(ccx + 38, ccy - 14, 7, Synth::HOT_PINK);
     display.fillCircle(ccx + 24, ccy - 14, 6, Synth::MAGENTA);
-    if (claw_open) {
+    if (craw_open) {
         display.drawLine(ccx + 34, ccy - 20, ccx + 44, ccy - 30, Synth::HOT_PINK);
         display.drawLine(ccx + 30, ccy - 20, ccx + 24, ccy - 30, Synth::MAGENTA);
     } else {
@@ -1599,7 +1599,7 @@ static void draw_status_text() {
     uint16_t fg;
     uint32_t now = millis();
 
-    switch (claw_state) {
+    switch (craw_state) {
         case 0: // IDLE
             fg = Synth::DIM_CYAN;
             break;
@@ -1626,7 +1626,7 @@ static void draw_status_text() {
     display.setTextColor(fg, Synth::BG);
     // Pad to fixed width to overwrite old text
     char status_buf[20];
-    snprintf(status_buf, sizeof(status_buf), " %-12s", state_label(claw_state));
+    snprintf(status_buf, sizeof(status_buf), " %-12s", state_label(craw_state));
     display.drawString(status_buf, cx, status_y);
 
     // Client hostname in parens below status
@@ -2125,7 +2125,7 @@ static void w_sound_off(void) {
 }
 
 static void w_status(void) {
-    usb_printf("State:   %d (%s)\r\n", claw_state, state_label(claw_state));
+    usb_printf("State:   %d (%s)\r\n", craw_state, state_label(craw_state));
     usb_printf("Model:   %s\r\n", model_name);
     usb_printf("Session: %d%%\r\n", session_pct);
     usb_printf("Weekly:  %d%%\r\n", weekly_pct);
@@ -2255,8 +2255,8 @@ extern "C" void app_main(void)
         uint32_t now = millis();
 
         // --- Check state changes, play chimes, manage timer, set dirty flags ---
-        if (claw_state != prev_claw_state) {
-            switch (claw_state) {
+        if (craw_state != prev_craw_state) {
+            switch (craw_state) {
                 case 2: chime_working();    break;
                 case 3: chime_need_input(); break;
                 case 5: chime_finished();   break;
@@ -2265,9 +2265,9 @@ extern "C" void app_main(void)
             }
 
             // Timer management
-            switch (claw_state) {
+            switch (craw_state) {
                 case 2:  // WORKING — start or resume timer
-                    if (prev_claw_state == 0 || prev_claw_state == 5 || prev_claw_state == -1) {
+                    if (prev_craw_state == 0 || prev_craw_state == 5 || prev_craw_state == -1) {
                         timer_reset();  // New session, reset
                     }
                     timer_start();
@@ -2285,7 +2285,7 @@ extern "C" void app_main(void)
             }
             dirty_timer = true;
 
-            prev_claw_state = claw_state;
+            prev_craw_state = craw_state;
             dirty_status = true;
         }
 
@@ -2353,8 +2353,8 @@ extern "C" void app_main(void)
 
             // --- Crab animation (RFE7): redraw crab with state-dependent motion ---
             {
-                bool needs_crab_anim = (claw_state == 2 || claw_state == 3 || claw_state == 5);
-                bool needs_idle_anim = (claw_state == 0);
+                bool needs_crab_anim = (craw_state == 2 || craw_state == 3 || craw_state == 5);
+                bool needs_idle_anim = (craw_state == 0);
                 static uint32_t last_idle_crab_draw = 0;
                 if (needs_crab_anim) {
                     draw_crab(cx, cy);
@@ -2365,7 +2365,7 @@ extern "C" void app_main(void)
             }
 
             // --- Status text animation ---
-            bool needs_text_anim = (claw_state == 2 || claw_state == 3 || claw_state == 7);
+            bool needs_text_anim = (craw_state == 2 || craw_state == 3 || craw_state == 7);
             if (dirty_status || needs_text_anim) {
                 draw_status_text();
                 dirty_status = false;
