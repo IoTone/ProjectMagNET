@@ -158,6 +158,14 @@ static bool btn_b_long_fired = false;
 static uint32_t crawdad_anim_tick = 0;
 static int crawdad_leg_phase = 0;
 
+// Battery monitoring (AXP192 via M5GFX's I2C bus)
+#define AXP192_ADDR   0x34
+#define AXP192_I2C_PORT 1   // M5GFX uses I2C port 1 for internal bus
+static int  battery_pct = -1;    // -1 = unknown, 0-100
+static bool battery_charging = false;
+static uint32_t last_battery_read = 0;
+#define BATTERY_READ_INTERVAL_MS 10000  // read every 10 seconds
+
 // ---------------------------------------------------------------------------
 // Forward declarations
 // ---------------------------------------------------------------------------
@@ -369,6 +377,113 @@ static void draw_crawdad_mini(int x, int y, uint16_t color, bool animate) {
 }
 
 // ---------------------------------------------------------------------------
+// Battery: AXP192 I2C read
+// ---------------------------------------------------------------------------
+
+// Use M5GFX's internal LGFX I2C — no separate driver init needed.
+// M5GFX already initializes I2C on port 1 for the AXP192 backlight.
+
+static void axp192_init_i2c(void) {
+    // Enable battery voltage ADC (register 0x82, bit 7)
+    // M5GFX already initialized I2C, just write the ADC enable bit
+    auto val = lgfx::i2c::readRegister8(AXP192_I2C_PORT, AXP192_ADDR, 0x82, 400000);
+    if (val.has_value()) {
+        uint8_t adc_en = val.value() | 0x80;  // Set bit 7: battery voltage ADC enable
+        lgfx::i2c::writeRegister8(AXP192_I2C_PORT, AXP192_ADDR, 0x82, adc_en, 0xFF, 400000);
+    }
+}
+
+static void battery_read(void) {
+    uint8_t buf[4] = {0};
+
+    // Read 4 bytes from register 0x78 (battery voltage high + low, current high + low)
+    auto result = lgfx::i2c::readRegister(AXP192_I2C_PORT, AXP192_ADDR, 0x78, buf, 4, 400000);
+    if (!result.has_value()) {
+        battery_pct = -1;
+        return;
+    }
+
+    // 12-bit voltage (1.1 mV/LSB)
+    uint16_t voltage_raw = ((uint16_t)buf[0] << 4) | (buf[1] & 0x0F);
+    // 13-bit discharge current (0.5 mA/LSB)
+    uint16_t current_raw = ((uint16_t)buf[2] << 5) | (buf[3] & 0x1F);
+
+    // Li-Po discharge curve approximation (from M5Unified AXP192_Class)
+    int pct = 0;
+    if (voltage_raw > 3150) {
+        pct = (int)((voltage_raw - 3075) * 0.16f);
+    } else if (voltage_raw > 2690) {
+        pct = (int)((voltage_raw - 2690) * 0.027f);
+    }
+    if (current_raw > 16) pct -= 16;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    battery_pct = pct;
+
+    // Read charging status (register 0x00, bit 2)
+    auto status = lgfx::i2c::readRegister8(AXP192_I2C_PORT, AXP192_ADDR, 0x00, 400000);
+    battery_charging = status.has_value() && (status.value() & 0x04) != 0;
+}
+
+// Draw a 5-level battery gauge: [█████], [████ ], [███  ], [██   ], [█    ], [     ]
+// Plus charging indicator (⚡ or color change)
+static void draw_battery_gauge(int x, int y) {
+    // Gauge dimensions
+    int gw = 36;   // body width
+    int gh = 14;   // body height
+    int nub = 3;   // positive terminal nub
+
+    // Outline
+    display.drawRect(x, y, gw, gh, Synth::WHITE);
+    // Nub on right
+    display.fillRect(x + gw, y + 3, nub, gh - 6, Synth::WHITE);
+
+    // 5 level bars inside (2px gap from border)
+    int bar_w = 5;
+    int bar_gap = 1;
+    int bar_h = gh - 4;
+    int bar_y = y + 2;
+    int bar_x = x + 2;
+
+    int level = 0;
+    if (battery_pct >= 80) level = 5;
+    else if (battery_pct >= 60) level = 4;
+    else if (battery_pct >= 40) level = 3;
+    else if (battery_pct >= 20) level = 2;
+    else if (battery_pct > 0) level = 1;
+
+    // Color: green if >40%, yellow if >20%, red if <=20%
+    uint16_t bar_color = Synth::NEON_GREEN;
+    if (battery_pct <= 20) bar_color = Synth::RED;
+    else if (battery_pct <= 40) bar_color = Synth::YELLOW;
+
+    // If charging, use cyan
+    if (battery_charging) bar_color = Synth::CYAN;
+
+    for (int i = 0; i < 5; i++) {
+        uint16_t c = (i < level) ? bar_color : Synth::DIM_GRAY;
+        display.fillRect(bar_x + i * (bar_w + bar_gap), bar_y, bar_w, bar_h, c);
+    }
+
+    // Percentage text next to gauge
+    display.setTextSize(1);
+    display.setTextColor(Synth::WHITE);
+    display.setCursor(x + gw + nub + 4, y + 3);
+    if (battery_pct >= 0) {
+        display.printf("%d%%", battery_pct);
+    } else {
+        display.print("?");
+    }
+
+    // Charging indicator
+    if (battery_charging) {
+        display.setTextColor(Synth::CYAN);
+        display.setCursor(x + gw + nub + 4, y + 3);
+        display.printf("%d%%+", battery_pct);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Drawing: WiFi Status Screen
 // ---------------------------------------------------------------------------
 static void draw_wifi_screen(void) {
@@ -417,6 +532,9 @@ static void draw_wifi_screen(void) {
     display.setCursor(4, 96);
     display.setTextColor(Synth::MAGENTA);
     display.printf("Prof:%s", craw_nvs_active_profile());
+
+    // Battery gauge below profile
+    draw_battery_gauge(160, 96);
 
     // Navigation hint (size 1)
     display.setTextColor(Synth::TEXT_DIM);
@@ -1195,6 +1313,11 @@ extern "C" void app_main(void)
     display.setBrightness(mapped);
     craw_serial_print("Display initialized.\r\n");
 
+    // 3b. AXP192 battery monitor init + first read
+    axp192_init_i2c();
+    battery_read();
+    craw_serial_printf("Battery: %d%%%s\r\n", battery_pct, battery_charging ? " (charging)" : "");
+
     // 4. Speaker init (GPIO 2)
     craw_speaker_init(SPEAKER_GPIO);
 
@@ -1314,6 +1437,13 @@ extern "C" void app_main(void)
         if (now - last_staleness_check >= STALENESS_CHECK_MS) {
             check_session_staleness();
             last_staleness_check = now;
+        }
+
+        // Battery level read (every 10s)
+        if (now - last_battery_read >= BATTERY_READ_INTERVAL_MS) {
+            battery_read();
+            last_battery_read = now;
+            if (current_screen == SCREEN_WIFI) dirty_screen = true;
         }
 
         // Screen drawing

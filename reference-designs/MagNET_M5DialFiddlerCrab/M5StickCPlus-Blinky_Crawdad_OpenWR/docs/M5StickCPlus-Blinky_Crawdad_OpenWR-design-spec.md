@@ -93,11 +93,34 @@ Uses M5GFX `M5Canvas` sprite for the sessions screen (double-buffered, flicker-f
 │  WiFi: CIC-2.4GHz                   │  size 2, white
 │  IP: 192.168.1.50                   │  size 2
 │  MQTT: Connected  Sessions: 3       │  size 2, green/red for MQTT
-│  Heap: 82340  Profile: default      │  size 2
+│  Heap: 82340                        │  size 2
+│  Prof: default   [█████] 85%        │  size 2, battery gauge right-aligned
 │                                      │
 │  [A]=Sess  [B]=Settings             │  size 1, dim
 └──────────────────────────────────────┘
 ```
+
+### Battery Gauge
+
+A 5-level graphical battery indicator on the WiFi screen, reading from the AXP192 power management IC via I2C.
+
+**Hardware**: AXP192 at I2C address 0x34, SDA=GPIO 21, SCL=GPIO 22. Battery voltage read from registers 0x78-0x79 (12-bit ADC, 1.1 mV/LSB). Charging status from register 0x00 bit 2.
+
+**Gauge design**: Rectangular battery outline (36×14px) with 5 filled bars inside. Positive terminal nub on right. Percentage text next to gauge.
+
+| Level | Battery % | Bars | Color |
+|-------|-----------|------|-------|
+| 5 | 80-100% | █████ | Green |
+| 4 | 60-79% | ████░ | Green |
+| 3 | 40-59% | ███░░ | Yellow |
+| 2 | 20-39% | ██░░░ | Yellow |
+| 1 | 1-19% | █░░░░ | Red |
+| 0 | 0% | ░░░░░ | Red |
+| Charging | Any | Varies | Cyan (all bars + "%" suffix becomes "%+") |
+
+**Voltage-to-percentage conversion**: Uses a piecewise Li-Po discharge curve approximation (from M5Unified AXP192_Class), not a simple linear mapping. Accounts for discharge current by subtracting from the percentage when current exceeds threshold.
+
+**Update interval**: Every 10 seconds via `battery_read()` in the main loop. Triggers a WiFi screen redraw when updated.
 
 ### Screen 2: Sessions Dashboard
 
