@@ -19,8 +19,10 @@
 #   CLAW_PLAN    — Plan tier token limit per 5hr window (default: 80000)
 #                  Rough estimates: Pro=45000, Max5=80000, Max20=200000
 #
-# MQTT message format: state|model|session_pct|weekly_pct|reset_epoch|client_host
+# MQTT message format: state|model|session_pct|weekly_pct|reset_epoch|client_host|prompt_preview
 # Published to: CLAW_TOPIC/session_id
+# The 7th field (prompt_preview) is the first 15 words of the most recent user
+# prompt from the transcript. ESP32 subscribers that expect 6 fields ignore it.
 
 set -euo pipefail
 
@@ -97,6 +99,27 @@ fi
 WEEKLY_PCT=-1
 RESET_EPOCH=0
 
+# --- Prompt preview: first 15 words of most recent user prompt ---
+PROMPT_PREVIEW=""
+if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+    LAST_USER="$(jq -rs '
+        [.[] | select(.type=="user") | .message.content // .content // ""]
+        | map(if type=="array" then (map(.text // "") | join(" ")) else . end)
+        | map(select(length > 0))
+        | last // ""
+    ' "$TRANSCRIPT" 2>/dev/null)" || LAST_USER=""
+    if [ -n "$LAST_USER" ]; then
+        PROMPT_PREVIEW="$(printf '%s' "$LAST_USER" \
+            | tr '\n\r\t|' '    ' \
+            | awk '{ for(i=1;i<=NF && i<=15;i++) printf "%s%s", (i>1?" ":""), $i }' \
+            | cut -c1-200)"
+        echo "$PROMPT_PREVIEW" > "$SESSION_CACHE/prompt_preview"
+    fi
+fi
+if [ -z "$PROMPT_PREVIEW" ] && [ -f "$SESSION_CACHE/prompt_preview" ]; then
+    PROMPT_PREVIEW="$(cat "$SESSION_CACHE/prompt_preview")"
+fi
+
 # --- Publish to per-session topic ---
-MSG="${STATE}|${SHORT_MODEL}|${SESSION_PCT}|${WEEKLY_PCT}|${RESET_EPOCH}|${CLIENT_HOST}"
+MSG="${STATE}|${SHORT_MODEL}|${SESSION_PCT}|${WEEKLY_PCT}|${RESET_EPOCH}|${CLIENT_HOST}|${PROMPT_PREVIEW}"
 mosquitto_pub -h "$CLAW_BROKER" -t "${CLAW_TOPIC}/${SESSION_ID}" -q 1 -m "$MSG" 2>/dev/null || true

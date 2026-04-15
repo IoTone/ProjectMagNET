@@ -43,12 +43,12 @@ We propose to build a standard open source platform to allow WebXR users to expl
 - R16: User is able to introspect all data collected by the Context Engine
 - R17: No data can leak out to 3rd party servers unless approved by the user.
 - R18: User data is portable to other Hyperlocal Context Engine service providers
-- R19: The Hyperlocal Context Engine provides a namespace to provide an area for devices and users to interact with services, data, people, and state.
-- R20: The namespaces should be easily memorized and short enough to be quickly used to join a namespace
-- R21: Namespaces are owned by an entity (a person, a device, an organization)
-- R22: Any entity can join a public namespace
-- R23: private namespaces will be secured by PKI to allow access
-- R24: IoT devices can join namespaces and can register with a shared secret
+- R19: The Hyperlocal Context Engine provides a namespace, known as a dataspace to provide an area for devices and users to interact with services, data, people, and state.
+- R20: The dataspaces should be easily memorized and short enough to be quickly used to join a dataspace
+- R21: dataspaces are owned by an entity (a person, a device, an organization)
+- R22: Any entity can join a public dataspace
+- R23: private dataspaces will be secured by PKI to allow access
+- R24: IoT devices can join dataspaces and can register with a shared secret
 - R25: WebXR UX for device introspection will be defined in the UI Spec V1
 - R26: WebXR UX for people introspection will be defined in the UI Spec V1
 - R27: WebXR UX for service introspection will be defined in the UI Spec V1
@@ -61,11 +61,11 @@ We propose to build a standard open source platform to allow WebXR users to expl
 
 ### Proposal A - locally hosted server behind proxy for hyperlocal context
 
-We will build the architecture pictured below, with a a secure server used as namespace data federation for hyperlocal context, meaning the HMD user can explore this registry on a hyperlocal scale, or any registry compliant with the apis. 
+We will build the architecture pictured below, with a a secure server used as dataspace data federation for hyperlocal context, meaning the HMD user can explore this registry on a hyperlocal scale, or any registry compliant with the apis. 
 
 - The hyperlocal context engine is hosted on the web, self hosted
 - The context is secured via HTTPS:// and WSS://using a self obtained valid SSL certificate
-- The HMD/Mixed Reality Glasses will hit a known url (we will use hlxr.org ... hyperlocal XR) and obtain a temporary or permanent token and namespace
+- The HMD/Mixed Reality Glasses will hit a known url (we will use hlxr.org ... hyperlocal XR) and obtain a temporary or permanent token and dataspace
 
 
 ### Proposal B - SaaS hosted server for hyperlocal context
@@ -93,6 +93,14 @@ Accessibility is extremely important and a challenge and an opportunity.  We con
 - A working example will be available for demonstration at this URL: Work in progress coming soon
 - Open Source Software: Workin progress
 
+### Use Cases
+
+- UC1 : personal dataspace for wearables owned by one person, with a focus on fitness use case
+- UC2 : room scale dataspace: explore the home/room and control lighting and data
+- UC3 : explore interactive data and experiences in a hypothetical conference poster session for XR
+- UC4: explore the interactive data and services available in an airplane seat as art  of in flight experience
+
+
 ### UI Spec V1
 
 TODO
@@ -107,7 +115,7 @@ Proposal A.  The other solutions have significant compromises.  The goal is to g
 - WebXR doesn't support *any* URIs besides https://.  Sadly, this blocks a lot of good use cases where any device could expose its own UX and server directly.  The exception to this rule is "localhost", which is possible, but impossible in an HMD or Mixed Reality Glasses and is really designed for desktop developers.
 - The limitation makes one wonder if this was designed to force the majority of viable scenarios (including offline use) to require native applications.
 - WebXR front facing cameras are generally not available to the browser.  Meta devices have provided some limited support for scanning rooms, but raw camera data isn't available.
-- Because of the previous limitation, AR Markers can't be scanned by normal means.  Doesn't mean you cannot use other technques, but it would require sensor fusion and possibly and external camera set worn by the user feeding data streams live to the namespace /session.
+- Because of the previous limitation, AR Markers can't be scanned by normal means.  Doesn't mean you cannot use other technques, but it would require sensor fusion and possibly and external camera set worn by the user feeding data streams live to the dataspace /session.
 - HMD / Mixed Reality Glasses have horrible browsers.  Not mincing words, these are not standard browsers.  They aren't standards compliant.  They don't support bleeding edge features.  They are slow, and possibly don't do well in web standards even.  TODO: link to Snap Spectacles browser stuff.  But if they support WebXR we must find ways to support these companeies.  
 - 
 
