@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-04-16T23:04:30.183Z",
+  "generatedAt": "2026-04-17T07:32:41.536Z",
   "shots": [
     {
       "id": "m11-overview",
@@ -7,7 +7,7 @@
       "title": "All marks · overview",
       "caption": "line · bar · scatter · arc",
       "file": "shots/m11-overview.png",
-      "ts": "2026-04-16T23:03:45.403Z"
+      "ts": "2026-04-17T07:31:52.590Z"
     },
     {
       "id": "m11-angle",
@@ -15,7 +15,7 @@
       "title": "All marks · 3/4 angle",
       "caption": "3D perspective confirms extruded geometry",
       "file": "shots/m11-angle.png",
-      "ts": "2026-04-16T23:03:45.973Z"
+      "ts": "2026-04-17T07:31:53.174Z"
     },
     {
       "id": "m11-line",
@@ -23,7 +23,7 @@
       "title": "Closeup · line (HR ribbon)",
       "caption": "TubeGeometry along CatmullRomCurve3, d3-scaleTime on x",
       "file": "shots/m11-line.png",
-      "ts": "2026-04-16T23:03:46.502Z"
+      "ts": "2026-04-17T07:31:53.713Z"
     },
     {
       "id": "m11-bar",
@@ -31,7 +31,7 @@
       "title": "Closeup · bar (room temp)",
       "caption": "InstancedMesh of boxes, 12 samples",
       "file": "shots/m11-bar.png",
-      "ts": "2026-04-16T23:03:47.030Z"
+      "ts": "2026-04-17T07:31:54.238Z"
     },
     {
       "id": "m11-scatter",
@@ -39,7 +39,7 @@
       "title": "Closeup · scatter (poster points)",
       "caption": "InstancedMesh of spheres, 180 instances",
       "file": "shots/m11-scatter.png",
-      "ts": "2026-04-16T23:03:47.583Z"
+      "ts": "2026-04-17T07:31:54.808Z"
     },
     {
       "id": "m11-arc",
@@ -47,7 +47,7 @@
       "title": "Closeup · arc (breadcrumb)",
       "caption": "TubeGeometry arc — TBOC breadcrumb primitive",
       "file": "shots/m11-arc.png",
-      "ts": "2026-04-16T23:03:48.126Z"
+      "ts": "2026-04-17T07:31:55.361Z"
     },
     {
       "id": "m2-hover-line",
@@ -55,7 +55,7 @@
       "title": "Hover · line",
       "caption": "Dramatic feedback: scale 1.05, emissive bump, outline",
       "file": "shots/m2-hover-line.png",
-      "ts": "2026-04-16T23:03:48.696Z"
+      "ts": "2026-04-17T07:31:55.951Z"
     },
     {
       "id": "m2-hover-bar",
@@ -63,7 +63,7 @@
       "title": "Hover · bar",
       "caption": "Same feedback pattern across mark types",
       "file": "shots/m2-hover-bar.png",
-      "ts": "2026-04-16T23:03:49.252Z"
+      "ts": "2026-04-17T07:31:56.535Z"
     },
     {
       "id": "m2-hover-scatter",
@@ -71,7 +71,7 @@
       "title": "Hover · scatter",
       "caption": "Outline visible at desktop resolution, legible through passthrough",
       "file": "shots/m2-hover-scatter.png",
-      "ts": "2026-04-16T23:03:49.820Z"
+      "ts": "2026-04-17T07:31:57.139Z"
     },
     {
       "id": "m2-hover-arc",
@@ -79,7 +79,7 @@
       "title": "Hover · arc",
       "caption": "Breadcrumb arc highlighted",
       "file": "shots/m2-hover-arc.png",
-      "ts": "2026-04-16T23:03:50.799Z"
+      "ts": "2026-04-17T07:31:57.712Z"
     },
     {
       "id": "m3-inspector-line",
@@ -87,7 +87,7 @@
       "title": "Inspector · line",
       "caption": "ThreeMeshUI.Block panel with troika text, placed adjacent to hovered mark",
       "file": "shots/m3-inspector-line.png",
-      "ts": "2026-04-16T23:03:51.357Z"
+      "ts": "2026-04-17T07:31:58.286Z"
     },
     {
       "id": "m3-inspector-bar",
@@ -95,7 +95,7 @@
       "title": "Inspector · bar",
       "caption": "Same panel template, different content per mark",
       "file": "shots/m3-inspector-bar.png",
-      "ts": "2026-04-16T23:03:51.885Z"
+      "ts": "2026-04-17T07:31:58.816Z"
     },
     {
       "id": "m3-inspector-scatter",
@@ -103,7 +103,7 @@
       "title": "Inspector · scatter",
       "caption": "Inspector reads UC3 poster dataspace manifest values",
       "file": "shots/m3-inspector-scatter.png",
-      "ts": "2026-04-16T23:03:52.478Z"
+      "ts": "2026-04-17T07:31:59.397Z"
     },
     {
       "id": "m3-inspector-arc",
@@ -111,7 +111,7 @@
       "title": "Inspector · arc + breadcrumb",
       "caption": "TBOC breadcrumb arc with chapter trail readout",
       "file": "shots/m3-inspector-arc.png",
-      "ts": "2026-04-16T23:03:53.010Z"
+      "ts": "2026-04-17T07:31:59.924Z"
     },
     {
       "id": "m3-overview",
@@ -119,7 +119,7 @@
       "title": "M3 overview · inspector floating near line",
       "caption": "Shows spatial relationship: chart left, inspector right. Spatial audio: PositionalAudio at each mark (not audible in screenshot).",
       "file": "shots/m3-overview.png",
-      "ts": "2026-04-16T23:03:53.594Z"
+      "ts": "2026-04-17T07:32:00.510Z"
     },
     {
       "id": "m31-placement-bar",
@@ -127,7 +127,7 @@
       "title": "Inspector placement · bar (auto flip left)",
       "caption": "placeNear auto-selects side with clearance — bar is on the right half, card flips to the left",
       "file": "shots/m31-placement-bar.png",
-      "ts": "2026-04-16T23:03:54.165Z"
+      "ts": "2026-04-17T07:32:01.085Z"
     },
     {
       "id": "m31-placement-line",
@@ -135,7 +135,7 @@
       "title": "Inspector placement · line (auto right)",
       "caption": "line is on the left half, card auto-places to the right",
       "file": "shots/m31-placement-line.png",
-      "ts": "2026-04-16T23:03:54.750Z"
+      "ts": "2026-04-17T07:32:01.655Z"
     },
     {
       "id": "m4-brush-line",
@@ -143,7 +143,7 @@
       "title": "Brush · line (middle 40%)",
       "caption": "Translucent cyan selection rectangle + count readout in inspector",
       "file": "shots/m4-brush-line.png",
-      "ts": "2026-04-16T23:03:55.302Z"
+      "ts": "2026-04-17T07:32:02.211Z"
     },
     {
       "id": "m4-brush-bar",
@@ -151,7 +151,7 @@
       "title": "Brush · bar (last 30%)",
       "caption": "Same brush primitive works across mark types",
       "file": "shots/m4-brush-bar.png",
-      "ts": "2026-04-16T23:03:55.832Z"
+      "ts": "2026-04-17T07:32:02.740Z"
     },
     {
       "id": "m4-brush-scatter",
@@ -159,7 +159,7 @@
       "title": "Brush · scatter (left half)",
       "caption": "Point-in-range filter over InstancedMesh",
       "file": "shots/m4-brush-scatter.png",
-      "ts": "2026-04-16T23:03:56.426Z"
+      "ts": "2026-04-17T07:32:03.329Z"
     },
     {
       "id": "m4-brush-overview",
@@ -167,7 +167,7 @@
       "title": "Brush overview · two marks selected",
       "caption": "Inspector shows last-brushed count; chart retains selection",
       "file": "shots/m4-brush-overview.png",
-      "ts": "2026-04-16T23:03:56.994Z"
+      "ts": "2026-04-17T07:32:03.914Z"
     },
     {
       "id": "m4a-select-bar",
@@ -175,7 +175,7 @@
       "title": "Trigger = activate · bar selected",
       "caption": "Trigger toggles a latched \"selected\" state. Outline + inspector pin even when you look away. Trigger again to release.",
       "file": "shots/m4a-select-bar.png",
-      "ts": "2026-04-16T23:03:57.562Z"
+      "ts": "2026-04-17T07:32:04.498Z"
     },
     {
       "id": "m5-drag-start",
@@ -183,7 +183,7 @@
       "title": "Drag brush · start",
       "caption": "Real pointer down on line chart; brush rectangle appears",
       "file": "shots/m5-drag-start.png",
-      "ts": "2026-04-16T23:03:58.389Z"
+      "ts": "2026-04-17T07:32:05.305Z"
     },
     {
       "id": "m5-drag-mid",
@@ -191,7 +191,7 @@
       "title": "Drag brush · mid-drag",
       "caption": "Rubberband widens as pointer moves right",
       "file": "shots/m5-drag-mid.png",
-      "ts": "2026-04-16T23:04:00.162Z"
+      "ts": "2026-04-17T07:32:06.573Z"
     },
     {
       "id": "m5-drag-end",
@@ -199,7 +199,7 @@
       "title": "Drag brush · released",
       "caption": "Selection persists; inspector shows sample count",
       "file": "shots/m5-drag-end.png",
-      "ts": "2026-04-16T23:04:01.890Z"
+      "ts": "2026-04-17T07:32:07.678Z"
     },
     {
       "id": "m6-ambient-on",
@@ -207,7 +207,7 @@
       "title": "Ambient bed · ON",
       "caption": "Omnitone FOA renderer initialized with a procedural 4-channel buffer. Rotation matrix updated per frame.",
       "file": "shots/m6-ambient-on.png",
-      "ts": "2026-04-16T23:04:02.512Z"
+      "ts": "2026-04-17T07:32:08.351Z"
     },
     {
       "id": "m6-ambient-off",
@@ -215,7 +215,7 @@
       "title": "Ambient bed · off",
       "caption": "Baseline state — bed not started; user must opt in",
       "file": "shots/m6-ambient-off.png",
-      "ts": "2026-04-16T23:04:03.092Z"
+      "ts": "2026-04-17T07:32:08.958Z"
     },
     {
       "id": "m7-focus-uc1",
@@ -223,7 +223,7 @@
       "title": "Dataspace focus · UC1 (wrist)",
       "caption": "line mark stays bright; room + poster marks dim (0.25 opacity, 0.85 scale)",
       "file": "shots/m7-focus-uc1.png",
-      "ts": "2026-04-16T23:04:03.672Z"
+      "ts": "2026-04-17T07:32:09.577Z"
     },
     {
       "id": "m7-focus-uc2",
@@ -231,7 +231,7 @@
       "title": "Dataspace focus · UC2 (room)",
       "caption": "bar mark active; wrist and poster dim",
       "file": "shots/m7-focus-uc2.png",
-      "ts": "2026-04-16T23:04:04.242Z"
+      "ts": "2026-04-17T07:32:10.155Z"
     },
     {
       "id": "m7-focus-uc3",
@@ -239,7 +239,7 @@
       "title": "Dataspace focus · UC3 (poster)",
       "caption": "scatter + arc both belong to UC3 and stay bright together",
       "file": "shots/m7-focus-uc3.png",
-      "ts": "2026-04-16T23:04:04.800Z"
+      "ts": "2026-04-17T07:32:10.728Z"
     },
     {
       "id": "m7-focus-all",
@@ -247,7 +247,7 @@
       "title": "Dataspace focus · all (null)",
       "caption": "Clearing focus returns every mark to full brightness",
       "file": "shots/m7-focus-all.png",
-      "ts": "2026-04-16T23:04:05.389Z"
+      "ts": "2026-04-17T07:32:11.307Z"
     },
     {
       "id": "m8-gallery-overview",
@@ -255,7 +255,7 @@
       "title": "Viz gallery · overview",
       "caption": "6 new marks from §9: tree (radial), treemap (extruded), sunburst (stacked), circular packing (spheres), force (3D physics), ridgeline (depth-offset)",
       "file": "shots/m8-gallery-overview.png",
-      "ts": "2026-04-16T23:04:06.396Z"
+      "ts": "2026-04-17T07:32:12.351Z"
     },
     {
       "id": "m8-gallery-angle",
@@ -263,7 +263,7 @@
       "title": "Viz gallery · 3/4 angle",
       "caption": "Perspective confirms every mark has real z-depth",
       "file": "shots/m8-gallery-angle.png",
-      "ts": "2026-04-16T23:04:07.066Z"
+      "ts": "2026-04-17T07:32:12.900Z"
     },
     {
       "id": "m9-tree-radial",
@@ -271,7 +271,7 @@
       "title": "Tree · radial (§9.1)",
       "caption": "d3-cluster layout remapped to polar; InstancedMesh spheres + LineSegments edges",
       "file": "shots/m9-tree-radial.png",
-      "ts": "2026-04-16T23:04:07.598Z"
+      "ts": "2026-04-17T07:32:13.411Z"
     },
     {
       "id": "m9-treemap",
@@ -279,7 +279,7 @@
       "title": "Treemap · extruded (§9.2)",
       "caption": "d3-treemap layout; extrusion height = value (second quantity)",
       "file": "shots/m9-treemap.png",
-      "ts": "2026-04-16T23:04:08.155Z"
+      "ts": "2026-04-17T07:32:13.957Z"
     },
     {
       "id": "m9-sunburst",
@@ -287,7 +287,7 @@
       "title": "Sunburst · stacked discs (§9.5)",
       "caption": "d3-partition with polar remap; one disc per hierarchy level, +z per level",
       "file": "shots/m9-sunburst.png",
-      "ts": "2026-04-16T23:04:08.663Z"
+      "ts": "2026-04-17T07:32:14.498Z"
     },
     {
       "id": "m10-pack",
@@ -295,7 +295,7 @@
       "title": "Circular packing · nested spheres (§9.9 ★)",
       "caption": "d3-pack layout; volume encodes value, nesting encodes hierarchy",
       "file": "shots/m10-pack.png",
-      "ts": "2026-04-16T23:04:09.184Z"
+      "ts": "2026-04-17T07:32:15.030Z"
     },
     {
       "id": "m10-force",
@@ -303,7 +303,7 @@
       "title": "Force-directed graph · 3D physics (§9.6)",
       "caption": "d3-force-3d simulation settled for 200 ticks; nodes and links in full 3D",
       "file": "shots/m10-force.png",
-      "ts": "2026-04-16T23:04:09.718Z"
+      "ts": "2026-04-17T07:32:15.585Z"
     },
     {
       "id": "m10-ridgeline",
@@ -311,7 +311,7 @@
       "title": "Ridgeline · depth-offset (§9.9 ★)",
       "caption": "6 density rows offset in z instead of y — a mountain range in front of the reader",
       "file": "shots/m10-ridgeline.png",
-      "ts": "2026-04-16T23:04:10.232Z"
+      "ts": "2026-04-17T07:32:16.129Z"
     },
     {
       "id": "m11-gallery-top",
@@ -319,7 +319,7 @@
       "title": "Viz gallery · top-down",
       "caption": "All six marks from above; treemap and packing read as city footprints",
       "file": "shots/m11-gallery-top.png",
-      "ts": "2026-04-16T23:04:10.740Z"
+      "ts": "2026-04-17T07:32:16.624Z"
     },
     {
       "id": "m11-gallery-wide",
@@ -327,7 +327,7 @@
       "title": "Viz gallery · wide context",
       "caption": "Reader at ~2m; full gallery fits in frame with surrounding grid",
       "file": "shots/m11-gallery-wide.png",
-      "ts": "2026-04-16T23:04:11.273Z"
+      "ts": "2026-04-17T07:32:17.156Z"
     },
     {
       "id": "m12-force-pre",
@@ -335,7 +335,7 @@
       "title": "Force graph · before interaction",
       "caption": "Settled baseline before any node is touched",
       "file": "shots/m12-force-pre.png",
-      "ts": "2026-04-16T23:04:11.699Z"
+      "ts": "2026-04-17T07:32:17.604Z"
     },
     {
       "id": "m12-force-hover",
@@ -343,7 +343,7 @@
       "title": "Force graph · hover on node 3",
       "caption": "Shared halo + billboarded label appear at hovered node; physics keeps running",
       "file": "shots/m12-force-hover.png",
-      "ts": "2026-04-16T23:04:12.149Z"
+      "ts": "2026-04-17T07:32:18.071Z"
     },
     {
       "id": "m12-force-hover2",
@@ -351,7 +351,7 @@
       "title": "Force graph · hover on node 14",
       "caption": "Same halo + label primitive re-parents to a different node",
       "file": "shots/m12-force-hover2.png",
-      "ts": "2026-04-16T23:04:12.602Z"
+      "ts": "2026-04-17T07:32:18.537Z"
     },
     {
       "id": "m12-force-drag-up",
@@ -359,7 +359,7 @@
       "title": "Force graph · drag node up",
       "caption": "Node pinned with fx/fy/fz; surrounding graph relaxes via physics",
       "file": "shots/m12-force-drag-up.png",
-      "ts": "2026-04-16T23:04:13.385Z"
+      "ts": "2026-04-17T07:32:19.332Z"
     },
     {
       "id": "m12-force-drag-out",
@@ -367,7 +367,7 @@
       "title": "Force graph · drag node toward reader",
       "caption": "Pull a node out of the cluster; edges tension visibly",
       "file": "shots/m12-force-drag-out.png",
-      "ts": "2026-04-16T23:04:14.162Z"
+      "ts": "2026-04-17T07:32:20.130Z"
     },
     {
       "id": "m12-force-after",
@@ -375,7 +375,7 @@
       "title": "Force graph · after release (physics relaxed)",
       "caption": "Unpin; the graph settles into a new low-energy layout",
       "file": "shots/m12-force-after.png",
-      "ts": "2026-04-16T23:04:15.649Z"
+      "ts": "2026-04-17T07:32:21.623Z"
     },
     {
       "id": "m13a-tree-pre",
@@ -383,7 +383,7 @@
       "title": "Tree · radial baseline",
       "caption": "Per-node hover + pinch-select now wired, same pattern as the force graph",
       "file": "shots/m13a-tree-pre.png",
-      "ts": "2026-04-16T23:04:16.083Z"
+      "ts": "2026-04-17T07:32:22.095Z"
     },
     {
       "id": "m13a-tree-hover-leaf",
@@ -391,7 +391,7 @@
       "title": "Tree · hover on a leaf",
       "caption": "Halo + billboarded label over the hovered node (leaf \"gateway\")",
       "file": "shots/m13a-tree-hover-leaf.png",
-      "ts": "2026-04-16T23:04:16.515Z"
+      "ts": "2026-04-17T07:32:22.560Z"
     },
     {
       "id": "m13a-tree-hover-internal",
@@ -399,7 +399,7 @@
       "title": "Tree · hover on an internal node",
       "caption": "Same infrastructure works for non-leaves (\"compute\")",
       "file": "shots/m13a-tree-hover-internal.png",
-      "ts": "2026-04-16T23:04:16.945Z"
+      "ts": "2026-04-17T07:32:23.032Z"
     },
     {
       "id": "m13a-tree-select-one",
@@ -407,7 +407,7 @@
       "title": "Tree · one node selected",
       "caption": "Pinch latches a mint-green selection halo; persists when you look away",
       "file": "shots/m13a-tree-select-one.png",
-      "ts": "2026-04-16T23:04:17.377Z"
+      "ts": "2026-04-17T07:32:23.498Z"
     },
     {
       "id": "m13a-tree-select-many",
@@ -415,7 +415,7 @@
       "title": "Tree · multiple nodes selected",
       "caption": "Multi-select — each pinch toggles independently",
       "file": "shots/m13a-tree-select-many.png",
-      "ts": "2026-04-16T23:04:17.812Z"
+      "ts": "2026-04-17T07:32:23.957Z"
     },
     {
       "id": "m13b-treemap-pre",
@@ -423,7 +423,7 @@
       "title": "Treemap · baseline",
       "caption": "Extruded treemap with per-cell hover + pinch-select now wired",
       "file": "shots/m13b-treemap-pre.png",
-      "ts": "2026-04-16T23:04:18.243Z"
+      "ts": "2026-04-17T07:32:24.430Z"
     },
     {
       "id": "m13b-treemap-hover",
@@ -431,7 +431,7 @@
       "title": "Treemap · hover on cell 2",
       "caption": "Shared halo + billboarded label at hovered treemap cell",
       "file": "shots/m13b-treemap-hover.png",
-      "ts": "2026-04-16T23:04:18.691Z"
+      "ts": "2026-04-17T07:32:24.899Z"
     },
     {
       "id": "m13b-treemap-select",
@@ -439,7 +439,7 @@
       "title": "Treemap · cell selected",
       "caption": "Mint-green selection halo on treemap cell",
       "file": "shots/m13b-treemap-select.png",
-      "ts": "2026-04-16T23:04:19.117Z"
+      "ts": "2026-04-17T07:32:25.364Z"
     },
     {
       "id": "m13b-treemap-select-many",
@@ -447,7 +447,7 @@
       "title": "Treemap · multiple cells selected",
       "caption": "Multi-select across treemap cells",
       "file": "shots/m13b-treemap-select-many.png",
-      "ts": "2026-04-16T23:04:19.551Z"
+      "ts": "2026-04-17T07:32:25.837Z"
     },
     {
       "id": "m13b-sunburst-pre",
@@ -455,7 +455,7 @@
       "title": "Sunburst · baseline",
       "caption": "Stacked sunburst with per-segment hover + pinch-select",
       "file": "shots/m13b-sunburst-pre.png",
-      "ts": "2026-04-16T23:04:20.059Z"
+      "ts": "2026-04-17T07:32:26.378Z"
     },
     {
       "id": "m13b-sunburst-hover",
@@ -463,7 +463,7 @@
       "title": "Sunburst · hover on segment 3",
       "caption": "Shared halo + label at hovered sunburst segment centroid",
       "file": "shots/m13b-sunburst-hover.png",
-      "ts": "2026-04-16T23:04:20.566Z"
+      "ts": "2026-04-17T07:32:26.914Z"
     },
     {
       "id": "m13b-sunburst-select",
@@ -471,7 +471,7 @@
       "title": "Sunburst · segment selected",
       "caption": "Selection marker on sunburst segment",
       "file": "shots/m13b-sunburst-select.png",
-      "ts": "2026-04-16T23:04:21.064Z"
+      "ts": "2026-04-17T07:32:27.494Z"
     },
     {
       "id": "m13b-pack-pre",
@@ -479,7 +479,7 @@
       "title": "Circular packing · baseline",
       "caption": "Nested spheres with per-node hover + pinch-select",
       "file": "shots/m13b-pack-pre.png",
-      "ts": "2026-04-16T23:04:21.608Z"
+      "ts": "2026-04-17T07:32:28.037Z"
     },
     {
       "id": "m13b-pack-hover",
@@ -487,7 +487,7 @@
       "title": "Pack · hover on node 4",
       "caption": "Halo + label on hovered pack node",
       "file": "shots/m13b-pack-hover.png",
-      "ts": "2026-04-16T23:04:22.145Z"
+      "ts": "2026-04-17T07:32:28.576Z"
     },
     {
       "id": "m13b-pack-select",
@@ -495,7 +495,7 @@
       "title": "Pack · node selected",
       "caption": "Mint-green selection halo around packed sphere",
       "file": "shots/m13b-pack-select.png",
-      "ts": "2026-04-16T23:04:22.688Z"
+      "ts": "2026-04-17T07:32:29.133Z"
     },
     {
       "id": "m14-tree-drill-pre",
@@ -503,7 +503,7 @@
       "title": "Tree · before drill-in",
       "caption": "Full tree baseline before drilling into a subtree",
       "file": "shots/m14-tree-drill-pre.png",
-      "ts": "2026-04-16T23:04:23.111Z"
+      "ts": "2026-04-17T07:32:29.597Z"
     },
     {
       "id": "m14-tree-drill-in",
@@ -511,7 +511,7 @@
       "title": "Tree · drilled into \"sensors\" subtree",
       "caption": "Tree re-lays-out with the sensors node as root, animated transition",
       "file": "shots/m14-tree-drill-in.png",
-      "ts": "2026-04-16T23:04:23.894Z"
+      "ts": "2026-04-17T07:32:30.384Z"
     },
     {
       "id": "m14-tree-drill-out",
@@ -519,7 +519,7 @@
       "title": "Tree · drilled back out",
       "caption": "Tree returns to full hierarchy after drillOut",
       "file": "shots/m14-tree-drill-out.png",
-      "ts": "2026-04-16T23:04:24.679Z"
+      "ts": "2026-04-17T07:32:31.168Z"
     },
     {
       "id": "m14-treemap-drill-pre",
@@ -527,7 +527,7 @@
       "title": "Treemap · before drill-in",
       "caption": "Full treemap baseline",
       "file": "shots/m14-treemap-drill-pre.png",
-      "ts": "2026-04-16T23:04:25.109Z"
+      "ts": "2026-04-17T07:32:31.634Z"
     },
     {
       "id": "m14-treemap-drill-in",
@@ -535,7 +535,7 @@
       "title": "Treemap · drilled into subtree",
       "caption": "Treemap re-lays-out with a parent node as root",
       "file": "shots/m14-treemap-drill-in.png",
-      "ts": "2026-04-16T23:04:25.891Z"
+      "ts": "2026-04-17T07:32:32.466Z"
     },
     {
       "id": "m14-treemap-drill-out",
@@ -543,7 +543,7 @@
       "title": "Treemap · drilled back out",
       "caption": "Treemap returns to full layout",
       "file": "shots/m14-treemap-drill-out.png",
-      "ts": "2026-04-16T23:04:26.687Z"
+      "ts": "2026-04-17T07:32:33.274Z"
     },
     {
       "id": "m14-sunburst-drill-in",
@@ -551,7 +551,7 @@
       "title": "Sunburst · drilled into subtree",
       "caption": "Sunburst re-partitions with focused subtree",
       "file": "shots/m14-sunburst-drill-in.png",
-      "ts": "2026-04-16T23:04:27.510Z"
+      "ts": "2026-04-17T07:32:34.107Z"
     },
     {
       "id": "m14-sunburst-drill-out",
@@ -559,7 +559,7 @@
       "title": "Sunburst · drilled back out",
       "caption": "Sunburst returns to full partition",
       "file": "shots/m14-sunburst-drill-out.png",
-      "ts": "2026-04-16T23:04:28.319Z"
+      "ts": "2026-04-17T07:32:34.935Z"
     },
     {
       "id": "m14-pack-drill-in",
@@ -567,7 +567,7 @@
       "title": "Pack · drilled into subtree",
       "caption": "Pack re-layouts with focused subtree, animated transition",
       "file": "shots/m14-pack-drill-in.png",
-      "ts": "2026-04-16T23:04:29.196Z"
+      "ts": "2026-04-17T07:32:35.795Z"
     },
     {
       "id": "m14-pack-drill-out",
@@ -575,7 +575,63 @@
       "title": "Pack · drilled back out",
       "caption": "Pack returns to full hierarchy",
       "file": "shots/m14-pack-drill-out.png",
-      "ts": "2026-04-16T23:04:30.081Z"
+      "ts": "2026-04-17T07:32:36.699Z"
+    },
+    {
+      "id": "m15-force-two-hover",
+      "milestone": "M15",
+      "title": "Force · two-hand hover",
+      "caption": "Two different nodes hovered simultaneously — each hand gets its own halo + label",
+      "file": "shots/m15-force-two-hover.png",
+      "ts": "2026-04-17T07:32:37.225Z"
+    },
+    {
+      "id": "m15-force-two-drag",
+      "milestone": "M15",
+      "title": "Force · two-hand drag",
+      "caption": "Two nodes pinned at different positions simultaneously — physics reacts to both",
+      "file": "shots/m15-force-two-drag.png",
+      "ts": "2026-04-17T07:32:38.051Z"
+    },
+    {
+      "id": "m16-sankey-overview",
+      "milestone": "M16",
+      "title": "Sankey · overview in gallery",
+      "caption": "3D Sankey diagram with tube flows and box nodes — 7th cell in viz gallery",
+      "file": "shots/m16-sankey-overview.png",
+      "ts": "2026-04-17T07:32:38.709Z"
+    },
+    {
+      "id": "m16-sankey-closeup",
+      "milestone": "M16",
+      "title": "Sankey · close-up tube flows",
+      "caption": "CatmullRomCurve3 tubes with radius proportional to flow value; nodes colored by group",
+      "file": "shots/m16-sankey-closeup.png",
+      "ts": "2026-04-17T07:32:39.351Z"
+    },
+    {
+      "id": "m16-ridgeline-animated",
+      "milestone": "M16",
+      "title": "Ridgeline · animated curves",
+      "caption": "Ridgeline with time-shifted density curves — BufferGeometry updated each frame",
+      "file": "shots/m16-ridgeline-animated.png",
+      "ts": "2026-04-17T07:32:39.920Z"
+    },
+    {
+      "id": "m16-breadcrumb-drilled",
+      "milestone": "M16b",
+      "title": "Breadcrumb · drilled into sensors",
+      "caption": "Breadcrumb trail shows \"root > sensors\" after drilling into the sensors subtree on the tree mark",
+      "file": "shots/m16-breadcrumb-drilled.png",
+      "ts": "2026-04-17T07:32:40.691Z"
+    },
+    {
+      "id": "m16-vizhud-back",
+      "milestone": "M16b",
+      "title": "VizHud · Back button visible",
+      "caption": "Per-cell HUD with Back button appears below the tree mark when drilled in",
+      "file": "shots/m16-vizhud-back.png",
+      "ts": "2026-04-17T07:32:41.489Z"
     }
   ]
 }

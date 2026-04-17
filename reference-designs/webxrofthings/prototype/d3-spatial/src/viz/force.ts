@@ -145,7 +145,7 @@ function computeScale(nodes: SimNode[], size: number): number {
 
 function writeInstanceMatrices(mesh: THREE.InstancedMesh, nodes: SimNode[], scale: number) {
   const m = new THREE.Matrix4();
-  const r = 0.005;
+  const r = 0.009;
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i]!;
     m.compose(

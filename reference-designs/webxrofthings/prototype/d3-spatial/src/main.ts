@@ -10,6 +10,8 @@ import { InspectorCard } from './ui/InspectorCard';
 import { Toolbar } from './ui/Toolbar';
 import { TEXT } from './ui/palette';
 import { NodeHoverFx } from './ui/NodeHoverFx';
+import { Breadcrumb } from './ui/Breadcrumb';
+import { VizHud } from './ui/VizHud';
 import { SpatialHoverAudio } from './audio/SpatialHoverAudio';
 import { AmbientBed } from './audio/AmbientBed';
 import { makeAmbientFoaBuffer } from './audio/proceduralBed';
@@ -82,11 +84,18 @@ uiAnchor.add(demoRoot);
 const vizAnchor = new THREE.Group();
 vizAnchor.name = 'vizAnchor';
 scene.add(vizAnchor);
-const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz } = buildVizGallery();
+const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, treeCell, treemapCell, sunburstCell, packCell } = buildVizGallery();
 vizAnchor.add(galleryRoot);
 
-const nodeHoverFx = new NodeHoverFx(camera);
-scene.add(nodeHoverFx.group);
+// Per-hand NodeHoverFx: indices 0, 1 = XR hands; 2 = mouse/desktop
+const nodeHoverFxs: NodeHoverFx[] = [];
+for (let i = 0; i < 3; i++) {
+  const fx = new NodeHoverFx(camera);
+  scene.add(fx.group);
+  nodeHoverFxs.push(fx);
+}
+// Convenience alias for desktop / legacy paths
+const nodeHoverFx: NodeHoverFx = nodeHoverFxs[2]!;
 vizAnchor.position.set(0, 1.3, 0);
 const urlScene = new URLSearchParams(window.location.search).get('scene');
 const defaultToGallery = urlScene !== 'charts';
@@ -135,13 +144,13 @@ function hardClearAllHoverFeedback() {
 }
 
 const rig = new XRRig(renderer, scene, {
-  onSelectStart: () => {
-    if (!interact.beginDrag()) interact.setPressLocked(true);
+  onSelectStart: (controllerIndex: number) => {
+    if (!interact.beginDragForHand(controllerIndex)) interact.setPressLockedForHand(controllerIndex, true);
   },
-  onSelectEnd: () => {
-    if (interact.isDragging()) { interact.endDrag(); return; }
-    interact.triggerSelectOnHovered();
-    interact.setPressLocked(false);
+  onSelectEnd: (controllerIndex: number) => {
+    if (interact.isDraggingForHand(controllerIndex)) { interact.endDragForHand(controllerIndex); return; }
+    interact.triggerSelectForHand(controllerIndex);
+    interact.setPressLockedForHand(controllerIndex, false);
   },
 });
 
@@ -150,38 +159,55 @@ interact.setXrControllers(rig.controllers);
 const inspector = new InspectorCard();
 uiAnchor.add(inspector.block);
 
-let forceDragNodeId: number | null = null;
-const tmpForceVec = new THREE.Vector3();
+// Per-hand force drag state: indices 0, 1 = XR hands; 2 = mouse
+const forceDragNodeIds: (number | null)[] = [null, null, null];
+const tmpForceVecs: THREE.Vector3[] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+const tmpForceVec = tmpForceVecs[2]!; // legacy alias
+
+/** Safe hand-index accessor — always returns a valid NodeHoverFx. */
+function fxForHand(hi: number): NodeHoverFx { return nodeHoverFxs[hi] ?? nodeHoverFxs[2]!; }
+function vecForHand(hi: number): THREE.Vector3 { return tmpForceVecs[hi] ?? tmpForceVecs[2]!; }
+
 interact.add({
   id: 'force:nodes',
   object: forceViz.nodeMesh,
   supportsInstances: true,
   onHoverIn: (ctx) => {
+    const hi = ctx?.handIndex ?? 2;
     if (ctx?.instanceId !== undefined) {
-      forceViz.getNodeWorldPosition(ctx.instanceId, tmpForceVec);
-      nodeHoverFx.show(tmpForceVec, forceViz.getNodeLabel(ctx.instanceId));
+      forceViz.getNodeWorldPosition(ctx.instanceId, vecForHand(hi));
+      fxForHand(hi).show(vecForHand(hi), forceViz.getNodeLabel(ctx.instanceId));
     }
   },
-  onHoverOut: () => { nodeHoverFx.hide(); },
-  onHoverInstance: (instanceId) => {
-    if (instanceId === null) { nodeHoverFx.hide(); return; }
-    forceViz.getNodeWorldPosition(instanceId, tmpForceVec);
-    nodeHoverFx.show(tmpForceVec, forceViz.getNodeLabel(instanceId));
+  onHoverOut: (ctx) => {
+    const hi = ctx?.handIndex ?? 2;
+    fxForHand(hi).hide();
+  },
+  onHoverInstance: (instanceId, handIndex) => {
+    const hi = handIndex ?? 2;
+    if (instanceId === null) { fxForHand(hi).hide(); return; }
+    forceViz.getNodeWorldPosition(instanceId, vecForHand(hi));
+    fxForHand(hi).show(vecForHand(hi), forceViz.getNodeLabel(instanceId));
   },
   onDragStart: (ctx) => {
     if (ctx.instanceId === undefined) return false;
-    forceDragNodeId = ctx.instanceId;
+    const hi = ctx.handIndex ?? 2;
+    forceDragNodeIds[hi] = ctx.instanceId;
     return true;
   },
-  onDragMove: (worldPoint) => {
-    if (forceDragNodeId !== null) {
-      forceViz.pinNode(forceDragNodeId, worldPoint);
-      nodeHoverFx.updatePosition(worldPoint);
+  onDragMove: (worldPoint, handIndex) => {
+    const hi = handIndex ?? 2;
+    const nodeId = forceDragNodeIds[hi];
+    if (nodeId !== null && nodeId !== undefined) {
+      forceViz.pinNode(nodeId, worldPoint);
+      fxForHand(hi).updatePosition(worldPoint);
     }
   },
-  onDragEnd: () => {
-    if (forceDragNodeId !== null) forceViz.unpinNode(forceDragNodeId);
-    forceDragNodeId = null;
+  onDragEnd: (ctx) => {
+    const hi = ctx?.handIndex ?? 2;
+    const nodeId = forceDragNodeIds[hi];
+    if (nodeId !== null && nodeId !== undefined) forceViz.unpinNode(nodeId);
+    forceDragNodeIds[hi] = null;
   },
 });
 
@@ -193,20 +219,22 @@ interact.add({
   onHoverIn: (ctx) => {
     if (ctx?.instanceId !== undefined) {
       treeViz.getNodeWorldPosition(ctx.instanceId, tmpTreeVec);
-      nodeHoverFx.show(tmpTreeVec, treeViz.getNodeLabel(ctx.instanceId));
+      fxForHand(ctx?.handIndex ?? 2).show(tmpTreeVec, treeViz.getNodeLabel(ctx.instanceId));
     }
   },
-  onHoverOut: () => { nodeHoverFx.hide(); },
-  onHoverInstance: (instanceId) => {
-    if (instanceId === null) { nodeHoverFx.hide(); return; }
+  onHoverOut: (ctx) => { fxForHand(ctx?.handIndex ?? 2).hide(); },
+  onHoverInstance: (instanceId, handIndex) => {
+    const fx = fxForHand(handIndex ?? 2);
+    if (instanceId === null) { fx.hide(); return; }
     treeViz.getNodeWorldPosition(instanceId, tmpTreeVec);
-    nodeHoverFx.show(tmpTreeVec, treeViz.getNodeLabel(instanceId));
+    fx.show(tmpTreeVec, treeViz.getNodeLabel(instanceId));
   },
   onSelect: (ctx) => {
     if (ctx?.instanceId === undefined) return;
     const info = treeViz.getNodeInfo(ctx.instanceId);
     if (!info.isLeaf && info.childCount > 0) {
       treeViz.drillIn(ctx.instanceId);
+      if (treeEntry) updateBreadcrumbAndHud(treeEntry);
     } else {
       treeViz.toggleSelected(ctx.instanceId);
     }
@@ -222,18 +250,23 @@ interact.add({
   onHoverIn: (ctx) => {
     if (ctx?.instanceId !== undefined) {
       treemapViz.getNodeWorldPosition(ctx.instanceId, tmpTreemapVec);
-      nodeHoverFx.show(tmpTreemapVec, treemapViz.getNodeLabel(ctx.instanceId));
+      fxForHand(ctx?.handIndex ?? 2).show(tmpTreemapVec, treemapViz.getNodeLabel(ctx.instanceId));
     }
   },
-  onHoverOut: () => { nodeHoverFx.hide(); },
-  onHoverInstance: (instanceId) => {
-    if (instanceId === null) { nodeHoverFx.hide(); return; }
+  onHoverOut: (ctx) => { fxForHand(ctx?.handIndex ?? 2).hide(); },
+  onHoverInstance: (instanceId, handIndex) => {
+    const fx = fxForHand(handIndex ?? 2);
+    if (instanceId === null) { fx.hide(); return; }
     treemapViz.getNodeWorldPosition(instanceId, tmpTreemapVec);
-    nodeHoverFx.show(tmpTreemapVec, treemapViz.getNodeLabel(instanceId));
+    fx.show(tmpTreemapVec, treemapViz.getNodeLabel(instanceId));
   },
   onSelect: (ctx) => {
     if (ctx?.instanceId === undefined) return;
-    treemapViz.toggleSelected(ctx.instanceId);
+    if (treemapViz.drillIn(ctx.instanceId)) {
+      if (treemapEntry) updateBreadcrumbAndHud(treemapEntry);
+    } else {
+      treemapViz.toggleSelected(ctx.instanceId);
+    }
   },
 });
 
@@ -246,16 +279,17 @@ interact.add({
     const segIdx = ctx?.hitObject?.userData?.segmentIndex;
     if (segIdx !== undefined) {
       sunburstViz.getSegmentWorldPosition(segIdx, tmpSunburstVec);
-      nodeHoverFx.show(tmpSunburstVec, sunburstViz.getSegmentLabel(segIdx));
+      fxForHand(ctx?.handIndex ?? 2).show(tmpSunburstVec, sunburstViz.getSegmentLabel(segIdx));
     }
   },
-  onHoverOut: () => { nodeHoverFx.hide(); },
+  onHoverOut: (ctx) => { fxForHand(ctx?.handIndex ?? 2).hide(); },
   onSelect: (ctx) => {
     const segIdx = ctx?.hitObject?.userData?.segmentIndex;
     if (segIdx === undefined) return;
     const info = sunburstViz.getSegmentInfo(segIdx);
     if (!info.isLeaf && info.childCount > 0) {
       sunburstViz.drillIn(segIdx);
+      if (sunburstEntry) updateBreadcrumbAndHud(sunburstEntry);
     } else {
       sunburstViz.toggleSelected(segIdx);
     }
@@ -271,21 +305,181 @@ interact.add({
     const nodeIdx = ctx?.hitObject?.userData?.nodeIndex;
     if (nodeIdx !== undefined) {
       packViz.getNodeWorldPosition(nodeIdx, tmpPackVec);
-      nodeHoverFx.show(tmpPackVec, packViz.getNodeLabel(nodeIdx));
+      fxForHand(ctx?.handIndex ?? 2).show(tmpPackVec, packViz.getNodeLabel(nodeIdx));
     }
   },
-  onHoverOut: () => { nodeHoverFx.hide(); },
+  onHoverOut: (ctx) => { fxForHand(ctx?.handIndex ?? 2).hide(); },
   onSelect: (ctx) => {
     const nodeIdx = ctx?.hitObject?.userData?.nodeIndex;
     if (nodeIdx === undefined) return;
     const info = packViz.getNodeInfo(nodeIdx);
     if (!info.isLeaf && info.childCount > 0) {
       packViz.drillIn(nodeIdx);
+      if (packEntry) updateBreadcrumbAndHud(packEntry);
     } else {
       packViz.toggleSelected(nodeIdx);
     }
   },
 });
+
+// --- Sankey interaction (InstancedMesh) ---
+const tmpSankeyVec = new THREE.Vector3();
+interact.add({
+  id: 'sankey:nodes',
+  object: sankeyViz.nodeMesh,
+  supportsInstances: true,
+  onHoverIn: (ctx) => {
+    if (ctx?.instanceId !== undefined) {
+      sankeyViz.getNodeWorldPosition(ctx.instanceId, tmpSankeyVec);
+      fxForHand(ctx?.handIndex ?? 2).show(tmpSankeyVec, sankeyViz.getNodeLabel(ctx.instanceId));
+    }
+  },
+  onHoverOut: (ctx) => { fxForHand(ctx?.handIndex ?? 2).hide(); },
+  onHoverInstance: (instanceId, handIndex) => {
+    const fx = fxForHand(handIndex ?? 2);
+    if (instanceId === null) { fx.hide(); return; }
+    sankeyViz.getNodeWorldPosition(instanceId, tmpSankeyVec);
+    fx.show(tmpSankeyVec, sankeyViz.getNodeLabel(instanceId));
+  },
+  onSelect: (ctx) => {
+    if (ctx?.instanceId === undefined) return;
+    // No drill-in for sankey; just show info via hover
+  },
+});
+
+// --- M16: Breadcrumb trails + VizHud per-cell buttons for hierarchy marks ---
+const CELL_H = 0.32;
+
+interface HierarchyVizEntry {
+  id: string;
+  viz: { drillOut(): boolean; getFocusPath(): number[]; getFocusLabels(): string[]; clearSelection(): void };
+  cell: THREE.Group;
+  breadcrumb: Breadcrumb;
+  hud: VizHud;
+}
+
+const hierarchyVizEntries: HierarchyVizEntry[] = [];
+
+function setupHierarchyUI(
+  id: string,
+  viz: HierarchyVizEntry['viz'],
+  cell: THREE.Group,
+) {
+  // Breadcrumb: above cell title
+  const breadcrumb = new Breadcrumb({
+    onNavigate: (depthIndex: number) => {
+      const path = viz.getFocusPath();
+      // Drill out to target depth: depthIndex = 0 means root, etc.
+      const targetDepth = depthIndex;
+      while (viz.getFocusPath().length > targetDepth) {
+        viz.drillOut();
+      }
+      updateBreadcrumbAndHud(entry);
+    },
+  });
+  breadcrumb.group.position.set(0, CELL_H / 2 + 0.005, 0.001);
+  cell.add(breadcrumb.group);
+
+  // VizHud: below cell sublabel
+  const hud = new VizHud({
+    onBack: () => {
+      viz.drillOut();
+      updateBreadcrumbAndHud(entry);
+    },
+    onReset: () => {
+      while (viz.getFocusPath().length > 0) {
+        viz.drillOut();
+      }
+      viz.clearSelection();
+      updateBreadcrumbAndHud(entry);
+    },
+  });
+  hud.group.position.set(0, -CELL_H / 2 - 0.02, 0.001);
+  cell.add(hud.group);
+
+  const entry: HierarchyVizEntry = { id, viz, cell, breadcrumb, hud };
+  hierarchyVizEntries.push(entry);
+
+  // Register breadcrumb blocks with Interact
+  for (const { block, index } of breadcrumb.getBlocks()) {
+    interact.add({
+      id: `bc:${id}:${index}`,
+      object: block,
+      onHoverIn: () => {
+        (block as any).set({ backgroundColor: new THREE.Color(0x2a4a6a), backgroundOpacity: 1.0 });
+      },
+      onHoverOut: () => {
+        const labels = viz.getFocusLabels();
+        const isLast = index === labels.length - 1;
+        (block as any).set({
+          backgroundColor: new THREE.Color(isLast ? 0x2a3a1a : 0x0f1a2c),
+          backgroundOpacity: 0.88,
+        });
+      },
+      onSelect: () => {
+        breadcrumb.navigate(index);
+      },
+    });
+  }
+
+  // Register VizHud buttons with Interact
+  for (const { block, id: btnId, onSelect } of hud.getBlocks()) {
+    interact.add({
+      id: `hud:${id}:${btnId}`,
+      object: block,
+      onHoverIn: () => {
+        (block as any).set({ backgroundColor: new THREE.Color(0x2a4a6a), backgroundOpacity: 1.0 });
+      },
+      onHoverOut: () => {
+        const origBg = btnId === 'back' ? 0x2a1a0f : 0x0f1a2c;
+        (block as any).set({ backgroundColor: new THREE.Color(origBg), backgroundOpacity: 0.9 });
+      },
+      onSelect: () => onSelect(),
+    });
+  }
+
+  return entry;
+}
+
+function updateBreadcrumbAndHud(entry: HierarchyVizEntry) {
+  const labels = entry.viz.getFocusLabels();
+  const depth = entry.viz.getFocusPath().length;
+
+  // Remove old interact registrations for breadcrumb blocks
+  for (const { index } of entry.breadcrumb.getBlocks()) {
+    interact.remove(`bc:${entry.id}:${index}`);
+  }
+
+  entry.breadcrumb.setPath(labels);
+  entry.hud.setDrillDepth(depth);
+
+  // Re-register new breadcrumb blocks
+  for (const { block, index } of entry.breadcrumb.getBlocks()) {
+    interact.add({
+      id: `bc:${entry.id}:${index}`,
+      object: block,
+      onHoverIn: () => {
+        (block as any).set({ backgroundColor: new THREE.Color(0x2a4a6a), backgroundOpacity: 1.0 });
+      },
+      onHoverOut: () => {
+        const currentLabels = entry.viz.getFocusLabels();
+        const isLast = index === currentLabels.length - 1;
+        (block as any).set({
+          backgroundColor: new THREE.Color(isLast ? 0x2a3a1a : 0x0f1a2c),
+          backgroundOpacity: 0.88,
+        });
+      },
+      onSelect: () => {
+        entry.breadcrumb.navigate(index);
+      },
+    });
+  }
+}
+
+const treeEntry = setupHierarchyUI('tree', treeViz, treeCell);
+const treemapEntry = setupHierarchyUI('treemap', treemapViz, treemapCell);
+const sunburstEntry = setupHierarchyUI('sunburst', sunburstViz, sunburstCell);
+const packEntry = setupHierarchyUI('pack', packViz, packCell);
 
 const audio = new SpatialHoverAudio(camera);
 let ambientBed: AmbientBed | null = null;
@@ -415,7 +609,7 @@ for (const m of demoMarks) {
       inspector.placeNear(m.group);
       audio.play(m.id);
     },
-    onHoverOut: () => {
+    onHoverOut: (_ctx) => {
       if (selectedMarks.has(m.id)) return;
       fb.off();
       inspector.hide();
@@ -559,6 +753,27 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
     forceViz.reheat(0.5);
   },
   forceUnpin(i: number) { forceViz.unpinNode(i); },
+  // M15 — per-hand hover/pin for two-handed force interaction
+  forceHoverHand(handIndex: number, i: number | null) {
+    const fx = fxForHand(handIndex);
+    if (i === null) { fx.hide(); return; }
+    const v = vecForHand(handIndex);
+    forceViz.getNodeWorldPosition(i, v);
+    fx.show(v, forceViz.getNodeLabel(i));
+  },
+  forcePinHand(handIndex: number, i: number, offset: [number, number, number]) {
+    const v = vecForHand(handIndex);
+    const fx = fxForHand(handIndex);
+    forceViz.getNodeWorldPosition(i, v);
+    v.add(new THREE.Vector3(offset[0], offset[1], offset[2]));
+    forceViz.pinNode(i, v);
+    fx.show(v, forceViz.getNodeLabel(i));
+    forceViz.reheat(0.5);
+  },
+  forceUnpinHand(handIndex: number, i: number) {
+    forceViz.unpinNode(i);
+    fxForHand(handIndex).hide();
+  },
   forceNodeCount: () => forceViz.nodeCount(),
   forceWorldCenter: () => {
     const v = new THREE.Vector3();
@@ -588,9 +803,10 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
     camera.lookAt(v.x, v.y, v.z);
     camera.updateMatrixWorld(true);
   },
-  treeDrillIn(i: number) { return treeViz.drillIn(i); },
-  treeDrillOut() { return treeViz.drillOut(); },
+  treeDrillIn(i: number) { const r = treeViz.drillIn(i); updateBreadcrumbAndHud(treeEntry); return r; },
+  treeDrillOut() { const r = treeViz.drillOut(); updateBreadcrumbAndHud(treeEntry); return r; },
   treeFocusPath() { return treeViz.getFocusPath(); },
+  treeFocusLabels() { return treeViz.getFocusLabels(); },
 
   // --- Treemap ---
   treemapHover(i: number | null) {
@@ -602,8 +818,8 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
   treemapClearSelections() { treemapViz.clearSelection(); },
   treemapNodeCount: () => treemapViz.nodeCount(),
   treemapNodeInfo: (i: number) => treemapViz.getNodeInfo(i),
-  treemapDrillIn(i: number) { return treemapViz.drillIn(i); },
-  treemapDrillOut() { return treemapViz.drillOut(); },
+  treemapDrillIn(i: number) { const r = treemapViz.drillIn(i); updateBreadcrumbAndHud(treemapEntry); return r; },
+  treemapDrillOut() { const r = treemapViz.drillOut(); updateBreadcrumbAndHud(treemapEntry); return r; },
   lookAtTreemap(distance: number) {
     const v = new THREE.Vector3();
     treemapViz.group.getWorldPosition(v);
@@ -622,8 +838,8 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
   sunburstClearSelections() { sunburstViz.clearSelection(); },
   sunburstSegmentCount: () => sunburstViz.segmentCount(),
   sunburstSegmentInfo: (i: number) => sunburstViz.getSegmentInfo(i),
-  sunburstDrillIn(i: number) { return sunburstViz.drillIn(i); },
-  sunburstDrillOut() { return sunburstViz.drillOut(); },
+  sunburstDrillIn(i: number) { const r = sunburstViz.drillIn(i); updateBreadcrumbAndHud(sunburstEntry); return r; },
+  sunburstDrillOut() { const r = sunburstViz.drillOut(); updateBreadcrumbAndHud(sunburstEntry); return r; },
   lookAtSunburst(distance: number) {
     const v = new THREE.Vector3();
     sunburstViz.group.getWorldPosition(v);
@@ -642,8 +858,8 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
   packClearSelections() { packViz.clearSelection(); },
   packNodeCount: () => packViz.nodeCount(),
   packNodeInfo: (i: number) => packViz.getNodeInfo(i),
-  packDrillIn(i: number) { return packViz.drillIn(i); },
-  packDrillOut() { return packViz.drillOut(); },
+  packDrillIn(i: number) { const r = packViz.drillIn(i); updateBreadcrumbAndHud(packEntry); return r; },
+  packDrillOut() { const r = packViz.drillOut(); updateBreadcrumbAndHud(packEntry); return r; },
   lookAtPack(distance: number) {
     const v = new THREE.Vector3();
     packViz.group.getWorldPosition(v);
@@ -651,6 +867,25 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
     camera.lookAt(v.x, v.y, v.z);
     camera.updateMatrixWorld(true);
   },
+
+  // --- Sankey ---
+  sankeyHover(i: number | null) {
+    if (i === null) { nodeHoverFx.hide(); return; }
+    sankeyViz.getNodeWorldPosition(i, tmpSankeyVec);
+    nodeHoverFx.show(tmpSankeyVec, sankeyViz.getNodeLabel(i));
+  },
+  sankeyNodeCount: () => sankeyViz.nodeCount(),
+  sankeyNodeInfo: (i: number) => sankeyViz.getNodeInfo(i),
+  lookAtSankey(distance: number) {
+    const v = new THREE.Vector3();
+    sankeyViz.group.getWorldPosition(v);
+    camera.position.set(v.x, v.y, v.z + distance);
+    camera.lookAt(v.x, v.y, v.z);
+    camera.updateMatrixWorld(true);
+  },
+
+  // --- Ridgeline ---
+  ridgelineTick(t: number) { ridgelineViz.tick(t); },
 };
 
 window.addEventListener('keydown', e => {
@@ -675,7 +910,7 @@ for (const btn of toolbar.buttons) {
     onHoverIn: () => {
       btn.block.set({ backgroundColor: new THREE.Color(0x2a4a6a), backgroundOpacity: 1.0 });
     },
-    onHoverOut: () => {
+    onHoverOut: (_ctx) => {
       btn.block.set({ backgroundColor: origBg, backgroundOpacity: 0.92 });
     },
     onSelect: () => btn.onSelect(),
@@ -712,12 +947,16 @@ renderer.setAnimationLoop((time, frame) => {
     treemapViz.tick();
     sunburstViz.tick();
     packViz.tick();
+    ridgelineViz.tick(time / 1000);
   }
-  if (forceDragNodeId !== null) {
-    forceViz.getNodeWorldPosition(forceDragNodeId, tmpForceVec);
-    nodeHoverFx.updatePosition(tmpForceVec);
+  for (let hi = 0; hi < forceDragNodeIds.length; hi++) {
+    const nodeId = forceDragNodeIds[hi];
+    if (nodeId !== null && nodeId !== undefined) {
+      forceViz.getNodeWorldPosition(nodeId, vecForHand(hi));
+      fxForHand(hi).updatePosition(vecForHand(hi));
+    }
   }
-  nodeHoverFx.tick();
+  for (const fx of nodeHoverFxs) fx.tick();
   ThreeMeshUI.update();
   updateDebugHud(dt);
   if (!anchorPlaced && !renderer.xr.isPresenting) {

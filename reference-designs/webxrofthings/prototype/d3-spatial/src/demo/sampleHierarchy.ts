@@ -79,6 +79,44 @@ function gauss(x: number, m: number, s: number) {
   return Math.exp(-0.5 * d * d) / (s * Math.sqrt(2 * Math.PI));
 }
 
+export interface SankeyData {
+  nodes: Array<{ id: string; name: string; group: number }>;
+  links: Array<{ source: string; target: string; value: number }>;
+}
+
+export function sampleSankey(): SankeyData {
+  return {
+    nodes: [
+      { id: 'solar',   name: 'Solar',   group: 0 },
+      { id: 'wind',    name: 'Wind',    group: 0 },
+      { id: 'grid',    name: 'Grid',    group: 1 },
+      { id: 'battery', name: 'Battery', group: 1 },
+      { id: 'home',    name: 'Home',    group: 2 },
+      { id: 'office',  name: 'Office',  group: 2 },
+      { id: 'lights',  name: 'Lights',  group: 3 },
+      { id: 'hvac',    name: 'HVAC',    group: 3 },
+      { id: 'compute', name: 'Compute', group: 3 },
+      { id: 'ev',      name: 'EV',      group: 3 },
+    ],
+    links: [
+      { source: 'solar',   target: 'grid',    value: 40 },
+      { source: 'solar',   target: 'battery', value: 15 },
+      { source: 'wind',    target: 'grid',    value: 30 },
+      { source: 'wind',    target: 'battery', value: 10 },
+      { source: 'grid',    target: 'home',    value: 45 },
+      { source: 'grid',    target: 'office',  value: 25 },
+      { source: 'battery', target: 'home',    value: 15 },
+      { source: 'battery', target: 'office',  value: 10 },
+      { source: 'home',    target: 'lights',  value: 18 },
+      { source: 'home',    target: 'hvac',    value: 25 },
+      { source: 'home',    target: 'compute', value: 12 },
+      { source: 'office',  target: 'lights',  value: 10 },
+      { source: 'office',  target: 'compute', value: 15 },
+      { source: 'office',  target: 'ev',      value: 10 },
+    ],
+  };
+}
+
 function mulberry32(seed: number) {
   let a = seed >>> 0;
   return () => {

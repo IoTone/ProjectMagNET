@@ -5,8 +5,9 @@ import { buildTreemap, TreemapViz } from '../viz/treemap';
 import { buildSunburst, SunburstViz } from '../viz/sunburst';
 import { buildCircularPack, PackViz } from '../viz/pack';
 import { buildForceGraph, ForceViz } from '../viz/force';
-import { buildRidgeline } from '../viz/ridgeline';
-import { sampleTree, sampleGraph, sampleRidgeline } from './sampleHierarchy';
+import { buildRidgeline, RidgelineViz } from '../viz/ridgeline';
+import { buildSankey, SankeyViz } from '../viz/sankey';
+import { sampleTree, sampleGraph, sampleRidgeline, sampleSankey } from './sampleHierarchy';
 import { TEXT } from '../ui/palette';
 
 export interface GalleryItem {
@@ -29,6 +30,9 @@ export interface GalleryResult {
   sunburstCell: THREE.Group;
   pack: PackViz;
   packCell: THREE.Group;
+  ridgeline: RidgelineViz;
+  sankey: SankeyViz;
+  sankeyCell: THREE.Group;
 }
 
 export function buildVizGallery(): GalleryResult {
@@ -41,6 +45,8 @@ export function buildVizGallery(): GalleryResult {
   const treemap = buildTreemap(sampleTree);
   const sunburst = buildSunburst(sampleTree);
   const pack = buildCircularPack(sampleTree);
+  const ridgeline = buildRidgeline(sampleRidgeline(6));
+  const sankey = buildSankey(sampleSankey());
 
   const specs = [
     { id: 'tree',       title: 'tree \u00b7 radial',          viz: tree.group,                                       sublabel: '\u00a79.1 hierarchy \u00b7 node-link' },
@@ -48,13 +54,14 @@ export function buildVizGallery(): GalleryResult {
     { id: 'sunburst',   title: 'sunburst \u00b7 stacked',     viz: sunburst.group,                                   sublabel: '\u00a79.5 hierarchy \u00b7 radial partition' },
     { id: 'pack',       title: 'circular packing',       viz: pack.group,                                        sublabel: '\u00a79.9 \u2605 nested spheres' },
     { id: 'force',      title: 'force \u00b7 d3-force-3d',    viz: force.group,                                      sublabel: '\u00a79.6 graph \u00b7 3D physics' },
-    { id: 'ridgeline',  title: 'ridgeline \u00b7 depth-offset', viz: buildRidgeline(sampleRidgeline(6)),              sublabel: '\u00a79.9 \u2605 distribution' },
+    { id: 'ridgeline',  title: 'ridgeline \u00b7 depth-offset', viz: ridgeline.group,                                sublabel: '\u00a79.9 \u2605 distribution' },
+    { id: 'sankey',     title: 'sankey \u00b7 3D tubes',      viz: sankey.group,                                      sublabel: '\u00a79.9 \u2605 flow network' },
   ];
 
-  const cols = 3;
+  const cols = 4;
   const rows = Math.ceil(specs.length / cols);
-  const cellW = 0.42;
-  const cellH = 0.34;
+  const cellW = 0.38;
+  const cellH = 0.32;
 
   specs.forEach((s, i) => {
     const col = i % cols;
@@ -95,5 +102,6 @@ export function buildVizGallery(): GalleryResult {
   const treemapCell = items.find(i => i.id === 'treemap')!.group;
   const sunburstCell = items.find(i => i.id === 'sunburst')!.group;
   const packCell = items.find(i => i.id === 'pack')!.group;
-  return { root, items, force, forceCell, tree, treeCell, treemap, treemapCell, sunburst, sunburstCell, pack, packCell };
+  const sankeyCell = items.find(i => i.id === 'sankey')!.group;
+  return { root, items, force, forceCell, tree, treeCell, treemap, treemapCell, sunburst, sunburstCell, pack, packCell, ridgeline, sankey, sankeyCell };
 }

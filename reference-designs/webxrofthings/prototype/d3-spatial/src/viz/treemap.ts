@@ -31,6 +31,7 @@ export interface TreemapViz {
   drillIn(nodeIndex: number): boolean;
   drillOut(): boolean;
   getFocusPath(): number[];
+  getFocusLabels(): string[];
   tick(): void;
 }
 
@@ -291,6 +292,14 @@ export function buildTreemap(root: HNode, opts: TreemapOptions = {}): TreemapViz
       return true;
     },
     getFocusPath: () => [...focusPath],
+    getFocusLabels: () => {
+      const labels = ['root'];
+      for (const idx of focusPath) {
+        const n = allDescendants[idx];
+        if (n) labels.push(n.data.name);
+      }
+      return labels;
+    },
     tick: () => {
       if (activeTween && !activeTween.done) {
         activeTween.tick();

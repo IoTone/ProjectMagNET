@@ -5,6 +5,7 @@ export interface HoverContext {
   worldPoint?: THREE.Vector3;
   distance?: number;
   hitObject?: THREE.Object3D;
+  handIndex?: number;
 }
 
 export interface Hoverable {
@@ -12,22 +13,51 @@ export interface Hoverable {
   object: THREE.Object3D;
   supportsInstances?: boolean;
   onHoverIn: (ctx?: HoverContext) => void;
-  onHoverOut: () => void;
-  onHoverInstance?: (instanceId: number | null) => void;
+  onHoverOut: (ctx?: HoverContext) => void;
+  onHoverInstance?: (instanceId: number | null, handIndex?: number) => void;
   onSelect?: (ctx?: HoverContext) => void;
   onDragStart?: (ctx: HoverContext) => boolean | void;
-  onDragMove?: (worldPoint: THREE.Vector3) => void;
-  onDragEnd?: () => void;
+  onDragMove?: (worldPoint: THREE.Vector3, handIndex?: number) => void;
+  onDragEnd?: (ctx?: HoverContext) => void;
+}
+
+interface HandState {
+  hoveredId: string | null;
+  hoveredInstance: number | null;
+  draggingId: string | null;
+  dragDistance: number;
+  pressLockedHoverId: string | null;
+  pressLockedInstance: number | null;
+  lastHitDistance: number;
+  lastHitObject?: THREE.Object3D;
+  lastWorldPoint?: THREE.Vector3;
+  pendingClearAt: number;
+  dragLastRayOrigin: THREE.Vector3;
+  dragLastRayDirection: THREE.Vector3;
+}
+
+const HAND_MOUSE = 2;
+
+function makeHandState(): HandState {
+  return {
+    hoveredId: null,
+    hoveredInstance: null,
+    draggingId: null,
+    dragDistance: 0,
+    pressLockedHoverId: null,
+    pressLockedInstance: null,
+    lastHitDistance: 0,
+    lastHitObject: undefined,
+    lastWorldPoint: undefined,
+    pendingClearAt: 0,
+    dragLastRayOrigin: new THREE.Vector3(),
+    dragLastRayDirection: new THREE.Vector3(),
+  };
 }
 
 export class Interact {
   private items = new Map<string, Hoverable>();
-  private hoveredId: string | null = null;
-  private hoveredInstance: number | null = null;
-  private draggingId: string | null = null;
-  private dragDistance = 0;
-  private dragLastRayOrigin = new THREE.Vector3();
-  private dragLastRayDirection = new THREE.Vector3();
+  private handStates: HandState[] = [makeHandState(), makeHandState(), makeHandState()]; // 0, 1 = XR hands; 2 = mouse
   private raycaster = (() => {
     const r = new THREE.Raycaster();
     r.params.Line = { threshold: 0.0005 };
@@ -38,11 +68,7 @@ export class Interact {
   private mouseEnabled = false;
   private xrControllers: THREE.Group[] = [];
   private tempMatrix = new THREE.Matrix4();
-  private lastHitDistance = 0;
   private exitDebounceMs = 150;
-  private pendingClearAt = 0;
-  private pressLockedHoverId: string | null = null;
-  private pressLockedInstance: number | null = null;
 
   constructor(
     private camera: THREE.Camera,
@@ -57,7 +83,7 @@ export class Interact {
     });
     canvas.addEventListener('pointerleave', () => {
       this.mouseEnabled = false;
-      this.setHover(null);
+      this.setHoverForHand(HAND_MOUSE, null);
     });
   }
 
@@ -66,142 +92,217 @@ export class Interact {
 
   setXrControllers(controllers: THREE.Group[]) { this.xrControllers = controllers; }
 
+  /** Legacy: hover by id (uses mouse hand slot). */
   hoverById(id: string | null) {
-    this.setHover(id);
+    this.setHoverForHand(HAND_MOUSE, id);
   }
 
-  getHoveredId(): string | null { return this.hoveredId; }
+  /** Returns the most-recently-hovered id from any hand. */
+  getHoveredId(): string | null {
+    for (const hs of this.handStates) {
+      if (hs.hoveredId !== null) return hs.hoveredId;
+    }
+    return null;
+  }
 
+  /** Legacy: triggers select on whatever the mouse hand is hovering. */
   triggerSelectOnHovered() {
-    const id = this.pressLockedHoverId ?? this.hoveredId;
-    const instance = this.pressLockedHoverId !== null ? this.pressLockedInstance : this.hoveredInstance;
+    this.triggerSelectForHand(HAND_MOUSE);
+  }
+
+  triggerSelectForHand(handIndex: number) {
+    const hs = this.handStates[handIndex];
+    if (!hs) return false;
+    const id = hs.pressLockedHoverId ?? hs.hoveredId;
+    const instance = hs.pressLockedHoverId !== null ? hs.pressLockedInstance : hs.hoveredInstance;
     if (!id) return false;
     const h = this.items.get(id);
-    if (h?.onSelect) { h.onSelect({ instanceId: instance ?? undefined, hitObject: this.lastHitObject, worldPoint: this.lastWorldPoint }); return true; }
+    if (h?.onSelect) {
+      h.onSelect({ instanceId: instance ?? undefined, hitObject: hs.lastHitObject, worldPoint: hs.lastWorldPoint, handIndex });
+      return true;
+    }
     return false;
   }
 
+  /** Legacy: press-lock for mouse hand. */
   setPressLocked(locked: boolean) {
+    this.setPressLockedForHand(HAND_MOUSE, locked);
+  }
+
+  setPressLockedForHand(handIndex: number, locked: boolean) {
+    const hs = this.handStates[handIndex];
+    if (!hs) return;
     if (locked) {
-      this.pressLockedHoverId = this.hoveredId;
-      this.pressLockedInstance = this.hoveredInstance;
-      this.pendingClearAt = 0;
+      hs.pressLockedHoverId = hs.hoveredId;
+      hs.pressLockedInstance = hs.hoveredInstance;
+      hs.pendingClearAt = 0;
     } else {
-      this.pressLockedHoverId = null;
-      this.pressLockedInstance = null;
+      hs.pressLockedHoverId = null;
+      hs.pressLockedInstance = null;
     }
   }
 
-  isDragging(): boolean { return this.draggingId !== null; }
+  /** Legacy: true if any hand is dragging. */
+  isDragging(): boolean {
+    return this.handStates.some(hs => hs.draggingId !== null);
+  }
 
+  isDraggingForHand(handIndex: number): boolean {
+    return this.handStates[handIndex]?.draggingId !== null;
+  }
+
+  /** Legacy: begin drag for mouse hand. */
   beginDrag(): boolean {
-    if (!this.hoveredId || this.draggingId) return false;
-    const h = this.items.get(this.hoveredId);
+    return this.beginDragForHand(HAND_MOUSE);
+  }
+
+  beginDragForHand(handIndex: number): boolean {
+    const hs = this.handStates[handIndex];
+    if (!hs || !hs.hoveredId || hs.draggingId) return false;
+    const h = this.items.get(hs.hoveredId);
     if (!h?.onDragStart) return false;
-    const ctx: HoverContext = { instanceId: this.hoveredInstance ?? undefined };
+    const ctx: HoverContext = { instanceId: hs.hoveredInstance ?? undefined, handIndex };
     const ok = h.onDragStart(ctx);
     if (ok === false) return false;
-    this.draggingId = this.hoveredId;
-    this.dragDistance = this.lastHitDistance > 0 ? this.lastHitDistance : 0.5;
-    this.dragLastRayOrigin.copy(this.raycaster.ray.origin);
-    this.dragLastRayDirection.copy(this.raycaster.ray.direction);
+    hs.draggingId = hs.hoveredId;
+    hs.dragDistance = hs.lastHitDistance > 0 ? hs.lastHitDistance : 0.5;
+    // Save the current ray for this hand
+    this.setupRayForHand(handIndex);
+    hs.dragLastRayOrigin.copy(this.raycaster.ray.origin);
+    hs.dragLastRayDirection.copy(this.raycaster.ray.direction);
     return true;
   }
 
+  /** Legacy: end drag for mouse hand. */
   endDrag() {
-    if (!this.draggingId) return;
-    const h = this.items.get(this.draggingId);
-    h?.onDragEnd?.();
-    this.draggingId = null;
+    this.endDragForHand(HAND_MOUSE);
+  }
+
+  endDragForHand(handIndex: number) {
+    const hs = this.handStates[handIndex];
+    if (!hs || !hs.draggingId) return;
+    const h = this.items.get(hs.draggingId);
+    h?.onDragEnd?.({ handIndex });
+    hs.draggingId = null;
   }
 
   update() {
     if (this.items.size === 0) return;
-    if (this.draggingId) {
-      this.updateDragRay();
-      this.tickDrag();
-      return;
-    }
-    if (this.pressLockedHoverId !== null) return;
 
     const isXr = this.renderer?.xr.isPresenting;
-    let pick: { id: string; instanceId?: number; distance: number } | null = null;
+
     if (isXr && this.xrControllers.length) {
-      pick = this.raycastFromControllers();
+      // Process each XR controller independently
+      for (let i = 0; i < this.xrControllers.length; i++) {
+        const hs = this.handStates[i];
+        if (!hs) continue;
+        const c = this.xrControllers[i];
+        if (!c || !c.visible) {
+          // Controller not visible — if dragging, keep drag; otherwise skip
+          if (!hs.draggingId) continue;
+        }
+
+        if (hs.draggingId) {
+          this.updateDragRayForHand(i);
+          this.tickDragForHand(i);
+          continue;
+        }
+        if (hs.pressLockedHoverId !== null) continue;
+
+        const pick = this.raycastFromController(i);
+        this.applyPickForHand(i, pick);
+      }
     } else if (this.mouseEnabled) {
+      // Desktop mouse path — uses hand slot HAND_MOUSE
+      const hs = this.handStates[HAND_MOUSE]!;
+      if (hs.draggingId) {
+        this.updateDragRayForHand(HAND_MOUSE);
+        this.tickDragForHand(HAND_MOUSE);
+        return;
+      }
+      if (hs.pressLockedHoverId !== null) return;
+
       this.raycaster.setFromCamera(this.mouseNdc, this.camera);
-      pick = this.pickFromRaycaster();
-    } else {
-      return;
+      const pick = this.pickFromRaycaster();
+      this.applyPickForHand(HAND_MOUSE, pick);
     }
-    this.applyPick(pick);
   }
 
   /** Set the exit-debounce window (ms). 0 disables debounce. Default 150. */
   setExitDebounceMs(ms: number) { this.exitDebounceMs = Math.max(0, ms); }
 
-  private updateDragRay() {
-    const isXr = this.renderer?.xr.isPresenting;
-    if (isXr && this.xrControllers.length) {
-      for (const c of this.xrControllers) {
-        if (!c.visible) continue;
-        this.tempMatrix.identity().extractRotation(c.matrixWorld);
-        this.raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
-        this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
-        return;
-      }
-    }
-    if (this.mouseEnabled) this.raycaster.setFromCamera(this.mouseNdc, this.camera);
-  }
-
-  private tickDrag() {
-    const h = this.items.get(this.draggingId!);
-    if (!h) return;
-    const target = new THREE.Vector3()
-      .copy(this.raycaster.ray.direction)
-      .multiplyScalar(this.dragDistance)
-      .add(this.raycaster.ray.origin);
-    h.onDragMove?.(target);
-  }
-
-  private lastHitObject: THREE.Object3D | undefined = undefined;
-  private lastWorldPoint: THREE.Vector3 | undefined = undefined;
-
-  private applyPick(pick: { id: string; instanceId?: number; distance: number; hitObject?: THREE.Object3D; worldPoint?: THREE.Vector3 } | null) {
-    if (pick) {
-      this.lastHitDistance = pick.distance;
-      this.lastHitObject = pick.hitObject;
-      this.lastWorldPoint = pick.worldPoint;
-      this.pendingClearAt = 0;
-      this.setHover(pick.id, pick.instanceId ?? null);
+  private setupRayForHand(handIndex: number) {
+    if (handIndex === HAND_MOUSE) {
+      this.raycaster.setFromCamera(this.mouseNdc, this.camera);
       return;
     }
-    this.lastHitDistance = 0;
-    if (this.hoveredId === null) return;
-    if (this.exitDebounceMs <= 0) { this.setHover(null, null); return; }
-    const now = performance.now();
-    if (this.pendingClearAt === 0) {
-      this.pendingClearAt = now + this.exitDebounceMs;
-    } else if (now >= this.pendingClearAt) {
-      this.pendingClearAt = 0;
-      this.setHover(null, null);
-    }
-  }
-
-  private raycastFromControllers(): { id: string; instanceId?: number; distance: number } | null {
-    const objects = [...this.items.values()].map(i => i.object);
-    for (const c of this.xrControllers) {
-      if (!c.visible) continue;
+    const c = this.xrControllers[handIndex];
+    if (c && c.visible) {
       this.tempMatrix.identity().extractRotation(c.matrixWorld);
       this.raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
       this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
-      const hits = this.filterHits(this.raycaster.intersectObjects(objects, true));
-      if (hits.length) return this.hitToPick(hits[0]!);
     }
-    return null;
   }
 
-  private pickFromRaycaster(): { id: string; instanceId?: number; distance: number } | null {
+  private updateDragRayForHand(handIndex: number) {
+    if (handIndex === HAND_MOUSE) {
+      if (this.mouseEnabled) this.raycaster.setFromCamera(this.mouseNdc, this.camera);
+      return;
+    }
+    const c = this.xrControllers[handIndex];
+    if (c && c.visible) {
+      this.tempMatrix.identity().extractRotation(c.matrixWorld);
+      this.raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
+      this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
+    }
+  }
+
+  private tickDragForHand(handIndex: number) {
+    const hs = this.handStates[handIndex];
+    if (!hs || !hs.draggingId) return;
+    const h = this.items.get(hs.draggingId);
+    if (!h) return;
+    const target = new THREE.Vector3()
+      .copy(this.raycaster.ray.direction)
+      .multiplyScalar(hs.dragDistance)
+      .add(this.raycaster.ray.origin);
+    h.onDragMove?.(target, handIndex);
+  }
+
+  private applyPickForHand(handIndex: number, pick: { id: string; instanceId?: number; distance: number; hitObject?: THREE.Object3D; worldPoint?: THREE.Vector3 } | null) {
+    const hs = this.handStates[handIndex];
+    if (!hs) return;
+
+    if (pick) {
+      hs.lastHitDistance = pick.distance;
+      hs.lastHitObject = pick.hitObject;
+      hs.lastWorldPoint = pick.worldPoint;
+      hs.pendingClearAt = 0;
+      this.setHoverForHand(handIndex, pick.id, pick.instanceId ?? null);
+      return;
+    }
+    hs.lastHitDistance = 0;
+    if (hs.hoveredId === null) return;
+    if (this.exitDebounceMs <= 0) { this.setHoverForHand(handIndex, null, null); return; }
+    const now = performance.now();
+    if (hs.pendingClearAt === 0) {
+      hs.pendingClearAt = now + this.exitDebounceMs;
+    } else if (now >= hs.pendingClearAt) {
+      hs.pendingClearAt = 0;
+      this.setHoverForHand(handIndex, null, null);
+    }
+  }
+
+  private raycastFromController(controllerIndex: number): { id: string; instanceId?: number; distance: number; hitObject?: THREE.Object3D; worldPoint?: THREE.Vector3 } | null {
+    const c = this.xrControllers[controllerIndex];
+    if (!c || !c.visible) return null;
+    this.tempMatrix.identity().extractRotation(c.matrixWorld);
+    this.raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
+    this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(this.tempMatrix);
+    return this.pickFromRaycaster();
+  }
+
+  private pickFromRaycaster(): { id: string; instanceId?: number; distance: number; hitObject?: THREE.Object3D; worldPoint?: THREE.Vector3 } | null {
     const objects = [...this.items.values()].map(i => i.object);
     const hits = this.filterHits(this.raycaster.intersectObjects(objects, true));
     if (!hits.length) return null;
@@ -233,23 +334,26 @@ export class Interact {
     return null;
   }
 
-  private setHover(id: string | null, instanceId: number | null = null) {
-    if (id === this.hoveredId && instanceId === this.hoveredInstance) return;
-    if (id === this.hoveredId && id) {
-      this.items.get(id)?.onHoverInstance?.(instanceId);
-      this.hoveredInstance = instanceId;
+  private setHoverForHand(handIndex: number, id: string | null, instanceId: number | null = null) {
+    const hs = this.handStates[handIndex];
+    if (!hs) return;
+
+    if (id === hs.hoveredId && instanceId === hs.hoveredInstance) return;
+    if (id === hs.hoveredId && id) {
+      this.items.get(id)?.onHoverInstance?.(instanceId, handIndex);
+      hs.hoveredInstance = instanceId;
       return;
     }
-    if (this.hoveredId) {
-      this.items.get(this.hoveredId)?.onHoverInstance?.(null);
-      this.items.get(this.hoveredId)?.onHoverOut();
+    if (hs.hoveredId) {
+      this.items.get(hs.hoveredId)?.onHoverInstance?.(null, handIndex);
+      this.items.get(hs.hoveredId)?.onHoverOut({ handIndex });
     }
-    this.hoveredId = id;
-    this.hoveredInstance = instanceId;
+    hs.hoveredId = id;
+    hs.hoveredInstance = instanceId;
     if (id) {
       const h = this.items.get(id);
-      h?.onHoverIn({ instanceId: instanceId ?? undefined, hitObject: this.lastHitObject, worldPoint: this.lastWorldPoint });
-      if (instanceId !== null) h?.onHoverInstance?.(instanceId);
+      h?.onHoverIn({ instanceId: instanceId ?? undefined, hitObject: hs.lastHitObject, worldPoint: hs.lastWorldPoint, handIndex });
+      if (instanceId !== null) h?.onHoverInstance?.(instanceId, handIndex);
     }
   }
 }

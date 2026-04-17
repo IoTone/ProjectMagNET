@@ -36,6 +36,7 @@ export interface TreeViz {
   drillIn(nodeIndex: number): boolean;
   drillOut(): boolean;
   getFocusPath(): number[];
+  getFocusLabels(): string[];
   tick(): void;
 }
 
@@ -76,7 +77,7 @@ export function buildTree(root: HNode, opts: TreeOptions = {}): TreeViz {
   let currentHier = layoutSubtree(root);
   let descendants = currentHier.descendants();
   let positions: THREE.Vector3[] = descendants.map(n => toPos(n));
-  let radii = descendants.map(n => n.children ? 0.006 : 0.004);
+  let radii = descendants.map(n => n.children ? 0.009 : 0.007);
 
   const maxNodes = allDescendants.length;
   const focusPath: number[] = [];
@@ -185,7 +186,7 @@ export function buildTree(root: HNode, opts: TreeOptions = {}): TreeViz {
     currentHier = layoutSubtree(subtreeRoot);
     descendants = currentHier.descendants();
     positions = descendants.map(n => toPos(n));
-    radii = descendants.map(n => n.children ? 0.006 : 0.004);
+    radii = descendants.map(n => n.children ? 0.009 : 0.007);
 
     // Clear selection
     for (const [, marker] of selectionMarkers) g.remove(marker);
@@ -293,6 +294,14 @@ export function buildTree(root: HNode, opts: TreeOptions = {}): TreeViz {
       return true;
     },
     getFocusPath: () => [...focusPath],
+    getFocusLabels: () => {
+      const labels = ['root'];
+      for (const idx of focusPath) {
+        const n = allDescendants[idx];
+        if (n) labels.push(n.data.name);
+      }
+      return labels;
+    },
     tick: () => {
       if (activeTween && !activeTween.done) {
         activeTween.tick();

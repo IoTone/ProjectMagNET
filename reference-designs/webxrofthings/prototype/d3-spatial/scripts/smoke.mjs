@@ -277,6 +277,39 @@ const DRILL_SHOTS = [
     viz: 'pack', distance: 0.28, action: 'drill-out' },
 ];
 
+// M15 — multi-hand interaction (two-hand hover + two-hand drag)
+const M15_SHOTS = [
+  { id: 'm15-force-two-hover', ms: 'M15', title: 'Force · two-hand hover',
+    caption: 'Two different nodes hovered simultaneously — each hand gets its own halo + label',
+    distance: 0.22, action: 'two-hover', nodeIds: [3, 12] },
+  { id: 'm15-force-two-drag', ms: 'M15', title: 'Force · two-hand drag',
+    caption: 'Two nodes pinned at different positions simultaneously — physics reacts to both',
+    distance: 0.22, action: 'two-drag', nodeIds: [5, 12], offsets: [[0, 0.08, 0], [0.06, -0.04, 0.05]] },
+];
+
+// M16 — Sankey + ridgeline animation
+const M16_SHOTS = [
+  { id: 'm16-sankey-overview', ms: 'M16', title: 'Sankey · overview in gallery',
+    caption: '3D Sankey diagram with tube flows and box nodes — 7th cell in viz gallery',
+    type: 'gallery', pos: [0, 1.3, 1.4], look: [0, 1.3, 0] },
+  { id: 'm16-sankey-closeup', ms: 'M16', title: 'Sankey · close-up tube flows',
+    caption: 'CatmullRomCurve3 tubes with radius proportional to flow value; nodes colored by group',
+    type: 'lookAt', viz: 'sankey', distance: 0.22 },
+  { id: 'm16-ridgeline-animated', ms: 'M16', title: 'Ridgeline · animated curves',
+    caption: 'Ridgeline with time-shifted density curves — BufferGeometry updated each frame',
+    type: 'lookAt', viz: 'ridgeline', distance: 0.28 },
+];
+
+// M16b — breadcrumb trail + VizHud per-cell buttons
+const M16B_SHOTS = [
+  { id: 'm16-breadcrumb-drilled', ms: 'M16b', title: 'Breadcrumb · drilled into sensors',
+    caption: 'Breadcrumb trail shows "root > sensors" after drilling into the sensors subtree on the tree mark',
+    viz: 'tree', distance: 0.28, action: 'drill-in', nodeIdx: 1 },
+  { id: 'm16-vizhud-back', ms: 'M16b', title: 'VizHud · Back button visible',
+    caption: 'Per-cell HUD with Back button appears below the tree mark when drilled in',
+    viz: 'tree', distance: 0.35, action: 'drill-in', nodeIdx: 1 },
+];
+
 const server = spawn('npx', ['vite', '--port', '5179', '--host', '127.0.0.1'], {
   stdio: ['ignore', 'pipe', 'pipe'],
   env: { ...process.env, NO_COLOR: '1' },
@@ -587,6 +620,104 @@ try {
     });
     console.log(`  shot -> ${file}`);
   }
+
+  // M15 — multi-hand interaction
+  for (const s of M15_SHOTS) {
+    await page.evaluate(({ distance, action, nodeIds, offsets }) => {
+      const d = (window).__demo;
+      d.lookAtForce(distance);
+      // Clear any prior hovers
+      d.forceHoverHand(0, null);
+      d.forceHoverHand(1, null);
+      if (action === 'two-hover') {
+        d.forceHoverHand(0, nodeIds[0]);
+        d.forceHoverHand(1, nodeIds[1]);
+      }
+      if (action === 'two-drag') {
+        d.forcePinHand(0, nodeIds[0], offsets[0]);
+        d.forcePinHand(1, nodeIds[1], offsets[1]);
+      }
+    }, s);
+    await sleep(s.action === 'two-drag' ? 700 : 400);
+    const file = `${OUT_DIR}/${s.id}.png`;
+    await page.screenshot({ path: file, fullPage: false });
+    shots.push({
+      id: s.id, milestone: s.ms, title: s.title, caption: s.caption,
+      file: `shots/${s.id}.png`, ts: new Date().toISOString(),
+    });
+    console.log(`  shot -> ${file}`);
+  }
+  // Clean up M15 pins
+  await page.evaluate(() => {
+    const d = (window).__demo;
+    d.forceHoverHand(0, null);
+    d.forceHoverHand(1, null);
+  });
+
+  // M16 — Sankey + ridgeline animation
+  for (const s of M16_SHOTS) {
+    if (s.type === 'gallery') {
+      await page.evaluate(({ pos, look }) => {
+        const d = (window).__demo;
+        d.showVizGallery(true);
+        d.setCameraPose(pos, look);
+      }, s);
+    } else if (s.type === 'lookAt') {
+      await page.evaluate(({ viz, distance }) => {
+        const d = (window).__demo;
+        d.showVizGallery(true);
+        if (viz === 'sankey') d.lookAtSankey(distance);
+        else if (viz === 'ridgeline') {
+          // Advance ridgeline animation a bit for visible deformation
+          d.ridgelineTick(5.0);
+          // Use gallery overview but close-up on ridgeline cell
+          const items = d.galleryItems();
+          const ridgeItem = items.find(i => i.id === 'ridgeline');
+          if (ridgeItem) {
+            const [rx, ry, rz] = ridgeItem.worldPos;
+            d.setCameraPose([rx, ry, rz + distance], [rx, ry, rz]);
+          }
+        }
+      }, s);
+    }
+    await sleep(500);
+    const file = `${OUT_DIR}/${s.id}.png`;
+    await page.screenshot({ path: file, fullPage: false });
+    shots.push({
+      id: s.id, milestone: s.ms, title: s.title, caption: s.caption,
+      file: `shots/${s.id}.png`, ts: new Date().toISOString(),
+    });
+    console.log(`  shot -> ${file}`);
+  }
+
+  // M16b — breadcrumb trail + VizHud per-cell buttons
+  for (const s of M16B_SHOTS) {
+    await page.evaluate(({ viz, distance, action, nodeIdx }) => {
+      const d = (window).__demo;
+      d.showVizGallery(true);
+      // Reset drill state first
+      if (viz === 'tree') { while (d.treeFocusPath().length > 0) d.treeDrillOut(); }
+      // Look at the viz
+      if (viz === 'tree') d.lookAtTree(distance);
+      // Execute action
+      if (action === 'drill-in') {
+        if (viz === 'tree') d.treeDrillIn(nodeIdx);
+      }
+    }, s);
+    await sleep(700);
+    const file = `${OUT_DIR}/${s.id}.png`;
+    await page.screenshot({ path: file, fullPage: false });
+    shots.push({
+      id: s.id, milestone: s.ms, title: s.title, caption: s.caption,
+      file: `shots/${s.id}.png`, ts: new Date().toISOString(),
+    });
+    console.log(`  shot -> ${file}`);
+  }
+  // Clean up drill state after M16b
+  await page.evaluate(() => {
+    const d = (window).__demo;
+    while (d.treeFocusPath().length > 0) d.treeDrillOut();
+  });
 } catch (e) {
   console.error('capture failed:', e.message);
   errors.push(`capture: ${e.message}`);
