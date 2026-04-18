@@ -1,5 +1,5 @@
 idf_component_register(
     SRCS "main.cpp"
     INCLUDE_DIRS "."
-    REQUIRES forth esp_timer driver
+    REQUIRES forth esp_timer driver esp_hw_support spi_flash
 )

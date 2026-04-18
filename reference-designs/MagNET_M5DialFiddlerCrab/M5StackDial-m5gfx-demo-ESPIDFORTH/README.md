@@ -47,6 +47,10 @@ In addition to all standard ESPIDFORTH words (see `ESPIDFORTH/README.md`), this 
 | `mute` | ( -- ) | Toggle audio mute |
 | `theme?` | ( -- n ) | Push current theme index |
 | `bright?` | ( -- n ) | Push current brightness percent |
+| `appbeep` | ( -- ) | Play a short 2kHz beep (ignores mute) |
+| `appsleep` | ( -- ) | Blank display + drop backlight to 0. Wake on touch, encoder, or button |
+| `appshowmem` | ( -- ) | Full-screen overlay: free heap / internal / min-free / largest block / uptime. Exit on any input |
+| `appdevinfo` | ( -- ) | Full-screen overlay: chip model + rev, cores, flash size, MAC, IDF / Forth versions. Exit on any input |
 
 ### Examples
 

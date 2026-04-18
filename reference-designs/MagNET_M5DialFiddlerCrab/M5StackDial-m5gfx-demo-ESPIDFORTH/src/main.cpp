@@ -10,6 +10,10 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"
+#include "esp_chip_info.h"
+#include "esp_flash.h"
+#include "esp_mac.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/pulse_cnt.h"
@@ -442,6 +446,15 @@ static int cx = 120, cy = 120;
 static int ring_ro = 102, ring_ri = 80;
 static int play_area_r = 64;
 
+// Sleep / wake state. When true, display backlight is off and main loop
+// skips rendering. Any encoder tick, touch press, or button press returns
+// the display to the normal dial program via wake_from_sleep().
+static bool app_sleeping = false;
+// When showing a full-screen info overlay (appshowmem / appdevinfo), the
+// main loop suspends rendering until the next touch/encoder/button event
+// restores the dial scene.
+static bool info_overlay_active = false;
+
 // ---------------------------------------------------------------------------
 // Forward declarations
 // ---------------------------------------------------------------------------
@@ -792,15 +805,153 @@ static void w_bright_get(void) {
     forth_push(brightness_pct);
 }
 
+// ---------------------------------------------------------------------------
+// Sleep / wake helpers (shared by appsleep, appshowmem, appdevinfo)
+// ---------------------------------------------------------------------------
+static void wake_from_sleep(void) {
+    if (!app_sleeping && !info_overlay_active) return;
+    app_sleeping = false;
+    info_overlay_active = false;
+    int mapped = (brightness_pct * 255) / Config::BrightMax;
+    display.setBrightness(mapped);
+    draw_scene(true);
+}
+
+// ( -- ) Play a short beep. Ignores mute so this word is deterministic
+// and can serve as a Forth-level "it's alive" tone.
+static void w_appbeep(void) {
+    speaker_tone_nb(2000, 120);
+}
+
+// ( -- ) Blank the display and back-off brightness until the user
+// interacts with the dial, touches the screen, or presses the button.
+// Wake is handled in the main loop.
+static void w_appsleep(void) {
+    app_sleeping = true;
+    info_overlay_active = false;
+    ripple_active = false;
+    free(ping_bk); ping_bk = nullptr; ping_w = ping_h = 0;
+    auto &t = THEMES[theme_idx];
+    display.fillScreen(t.bg);
+    display.setBrightness(0);
+}
+
+// ( -- ) Dump memory state to the display and serial. Any touch, encoder
+// tick, or button press restores the normal dial scene.
+static void w_appshowmem(void) {
+    auto &t = THEMES[theme_idx];
+    info_overlay_active = true;
+    app_sleeping = false;
+    ripple_active = false;
+    free(ping_bk); ping_bk = nullptr; ping_w = ping_h = 0;
+    display.fillScreen(t.bg);
+    display.setTextDatum(lgfx::textdatum_t::top_left);
+    display.setTextColor(t.primary, t.bg);
+    display.setTextSize(2);
+    display.drawString("MEM", 10, 14);
+
+    display.setTextSize(1);
+    display.setTextColor(t.text, t.bg);
+
+    size_t free_total    = esp_get_free_heap_size();
+    size_t min_free      = esp_get_minimum_free_heap_size();
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+
+    char buf[64];
+    int y = 50;
+    snprintf(buf, sizeof(buf), "free:     %u", (unsigned)free_total);
+    display.drawString(buf, 10, y); y += 14;
+    snprintf(buf, sizeof(buf), "internal: %u", (unsigned)free_internal);
+    display.drawString(buf, 10, y); y += 14;
+    snprintf(buf, sizeof(buf), "min free: %u", (unsigned)min_free);
+    display.drawString(buf, 10, y); y += 14;
+    snprintf(buf, sizeof(buf), "largest:  %u", (unsigned)largest_block);
+    display.drawString(buf, 10, y); y += 14;
+    snprintf(buf, sizeof(buf), "uptime:   %lus",
+             (unsigned long)(esp_timer_get_time() / 1000000));
+    display.drawString(buf, 10, y); y += 18;
+
+    display.setTextColor(t.accent, t.bg);
+    display.drawString("touch / turn / press to exit", 10, y);
+
+    usb_printf("[MEM] free=%u internal=%u min=%u largest=%u\r\n",
+               (unsigned)free_total, (unsigned)free_internal,
+               (unsigned)min_free, (unsigned)largest_block);
+}
+
+// ( -- ) Dump chip/device info to the display and serial. Any touch, encoder
+// tick, or button press restores the normal dial scene.
+static void w_appdevinfo(void) {
+    auto &t = THEMES[theme_idx];
+    info_overlay_active = true;
+    app_sleeping = false;
+    ripple_active = false;
+    free(ping_bk); ping_bk = nullptr; ping_w = ping_h = 0;
+    display.fillScreen(t.bg);
+    display.setTextDatum(lgfx::textdatum_t::top_left);
+    display.setTextColor(t.primary, t.bg);
+    display.setTextSize(2);
+    display.drawString("DEV", 10, 14);
+
+    display.setTextSize(1);
+    display.setTextColor(t.text, t.bg);
+
+    esp_chip_info_t ci;
+    esp_chip_info(&ci);
+    uint32_t flash_size = 0;
+    esp_flash_get_size(NULL, &flash_size);
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
+    const char *model = "unknown";
+    switch (ci.model) {
+        case CHIP_ESP32:   model = "ESP32";    break;
+        case CHIP_ESP32S2: model = "ESP32-S2"; break;
+        case CHIP_ESP32S3: model = "ESP32-S3"; break;
+        case CHIP_ESP32C3: model = "ESP32-C3"; break;
+        case CHIP_ESP32C6: model = "ESP32-C6"; break;
+        case CHIP_ESP32H2: model = "ESP32-H2"; break;
+        default: break;
+    }
+
+    char buf[64];
+    int y = 50;
+    snprintf(buf, sizeof(buf), "chip:   %s rev%d", model, ci.revision);
+    display.drawString(buf, 10, y); y += 14;
+    snprintf(buf, sizeof(buf), "cores:  %d", ci.cores);
+    display.drawString(buf, 10, y); y += 14;
+    snprintf(buf, sizeof(buf), "flash:  %luKB", (unsigned long)(flash_size / 1024));
+    display.drawString(buf, 10, y); y += 14;
+    snprintf(buf, sizeof(buf), "mac:    %02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    display.drawString(buf, 10, y); y += 14;
+    snprintf(buf, sizeof(buf), "idf:    %s", esp_get_idf_version());
+    display.drawString(buf, 10, y); y += 14;
+    snprintf(buf, sizeof(buf), "forth:  %s", ESPIDFORTH_VERSION_STRING);
+    display.drawString(buf, 10, y); y += 18;
+
+    display.setTextColor(t.accent, t.bg);
+    display.drawString("touch / turn / press to exit", 10, y);
+
+    usb_printf("[DEV] %s rev%d cores=%d flash=%luKB mac=%02X%02X%02X%02X%02X%02X\r\n",
+               model, ci.revision, ci.cores, (unsigned long)(flash_size / 1024),
+               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 static void register_forth_words(void) {
-    forth_register_word("theme",      w_theme);
-    forth_register_word("brightness", w_brightness);
-    forth_register_word("ping",       w_ping);
-    forth_register_word("starburst",  w_starburst);
-    forth_register_word("invert",     w_invert);
-    forth_register_word("mute",       w_mute);
-    forth_register_word("theme?",     w_theme_get);
-    forth_register_word("bright?",    w_bright_get);
+    forth_register_word("theme",       w_theme);
+    forth_register_word("brightness",  w_brightness);
+    forth_register_word("ping",        w_ping);
+    forth_register_word("starburst",   w_starburst);
+    forth_register_word("invert",      w_invert);
+    forth_register_word("mute",        w_mute);
+    forth_register_word("theme?",      w_theme_get);
+    forth_register_word("bright?",     w_bright_get);
+    forth_register_word("appbeep",     w_appbeep);
+    forth_register_word("appsleep",    w_appsleep);
+    forth_register_word("appshowmem",  w_appshowmem);
+    forth_register_word("appdevinfo",  w_appdevinfo);
 }
 
 // ---------------------------------------------------------------------------
@@ -867,7 +1018,11 @@ extern "C" void app_main(void)
     usb_print("  invert       -- toggle display inversion\r\n");
     usb_print("  mute         -- toggle mute\r\n");
     usb_print("  theme?       -- show current theme\r\n");
-    usb_print("  bright?      -- show current brightness\r\n\r\n");
+    usb_print("  bright?      -- show current brightness\r\n");
+    usb_print("  appbeep      -- play a short beep\r\n");
+    usb_print("  appsleep     -- blank display until touch/turn/press\r\n");
+    usb_print("  appshowmem   -- display heap state\r\n");
+    usb_print("  appdevinfo   -- display chip / CPU info\r\n\r\n");
 
     // Start Forth REPL in background task
     xTaskCreate(forth_repl_task, "forth_repl", 8192, NULL, 3, NULL);
@@ -881,10 +1036,17 @@ extern "C" void app_main(void)
         constexpr int BRIGHT_MAX = Config::BrightMax;
         constexpr int BRIGHT_STEP = Config::BrightStep;
 
-        // Encoder -> brightness
+        // Encoder -> brightness (also wakes from sleep / clears info overlay)
         int32_t d = encoder_read_and_reset();
-        if (d)
-            enc_accum += d;
+        if (d) {
+            if (app_sleeping || info_overlay_active) {
+                wake_from_sleep();
+                enc_accum = 0; // swallow the wake gesture, don't adjust brightness
+                d = 0;
+            } else {
+                enc_accum += d;
+            }
+        }
         int logical = 0;
         while (enc_accum >= Config::EncDiv)
         {
@@ -933,6 +1095,12 @@ extern "C" void app_main(void)
                 press_y0 = tp.y;
                 touch_dragged = false;
                 touch_active = true;
+                if (app_sleeping || info_overlay_active) {
+                    wake_from_sleep();
+                    // Swallow the wake gesture — don't let the subsequent
+                    // release trigger a ping or long-press invert.
+                    touch_dragged = true;
+                }
                 if (Config::DebugTouch)
                     ESP_LOGD(TAG, "[TOUCH] PRESS x=%d y=%d", tp.x, tp.y);
             }
@@ -1064,17 +1232,25 @@ extern "C" void app_main(void)
         button_update();
         if (btn_was_pressed)
         {
-            theme_idx = (theme_idx + 1) % NUM_THEMES;
-            draw_scene(true);
-            play_confirm_up();
-            if (Config::DebugBtn)
-                ESP_LOGD(TAG, "[BTN] A press -> theme %d", theme_idx + 1);
+            if (app_sleeping || info_overlay_active) {
+                wake_from_sleep();
+            } else {
+                theme_idx = (theme_idx + 1) % NUM_THEMES;
+                draw_scene(true);
+                play_confirm_up();
+                if (Config::DebugBtn)
+                    ESP_LOGD(TAG, "[BTN] A press -> theme %d", theme_idx + 1);
+            }
         }
         if (btn_was_hold)
         {
-            if (Config::DebugBtn)
-                ESP_LOGD(TAG, "[BTN] A hold -> starburst");
-            effect_starburst();
+            if (app_sleeping || info_overlay_active) {
+                wake_from_sleep();
+            } else {
+                if (Config::DebugBtn)
+                    ESP_LOGD(TAG, "[BTN] A hold -> starburst");
+                effect_starburst();
+            }
         }
 
         // Timed secondary tones (confirmation sounds)
