@@ -125,9 +125,9 @@ export function buildSankey(data: SankeyData): SankeyViz {
     const tubeMat = new THREE.MeshStandardMaterial({
       color: srcColor,
       emissive: srcColor,
-      emissiveIntensity: 0.2,
+      emissiveIntensity: 0.35,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.75,
       roughness: 0.5,
       metalness: 0.05,
     });

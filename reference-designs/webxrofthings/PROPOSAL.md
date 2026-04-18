@@ -103,7 +103,24 @@ Accessibility is extremely important and a challenge and an opportunity.  We con
 
 ### UI Spec V1
 
-TODO
+The UI Spec V1 has been prototyped in `reference-designs/webxrofthings/prototype/d3-spatial/` and documented in `XR_UX-proposal1.md §11`. Current status:
+
+#### Implemented
+- **V1.6 Data dashboard UX** — 11 spatial mark types (line, bar, scatter, arc, tree, treemap, sunburst, circular packing, force-directed graph, ridgeline, sankey). Per-node hover, drill-in transitions, multi-hand drag, brush selection, live data streaming. See `XR_UX-proposal1.md §5, §9`.
+- **V1.8 Spatial audio model** — THREE.PositionalAudio per-mark hover ticks + Omnitone FOA ambient bed with head-pose rotation. See `XR_UX-proposal1.md §8`.
+- **V1.9 Manifest schema** — DataspaceManifest JSON schema for describing marks, data sources, and interaction capabilities. See `prototype/d3-spatial/src/manifest/schema.ts` and `manifest.schema.json`.
+
+#### Partially implemented
+- **V1.2 Continuous-awareness HUD** — Debug HUD and audio state badge exist. Connection/security/QoS indicators not yet wired.
+- **V1.5 Service introspection UX** — Manifest-driven mark loading exists. Live service discovery not implemented.
+
+#### Not yet implemented
+- **V1.1 Join-code onboarding flow** — Designed in §2, no code yet.
+- **V1.3 Device introspection UX** — Pin + control-puck pattern designed, not coded.
+- **V1.4 People introspection UX** — Avatar sphere + name tag designed, not coded.
+- **V1.7 Shared-experience coordination** — Multi-user presence requires signaling server.
+
+See `XR_UX-proposal1.md` for full design specifications and `prototype/d3-spatial/API.md` for the developer API reference.
 
 ## Recommended Solution
 

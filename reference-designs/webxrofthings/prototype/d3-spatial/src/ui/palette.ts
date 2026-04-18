@@ -26,3 +26,11 @@ export const TEXT = {
   /** Error. Warm coral (not pure red). */
   error: 0xff7a8a,
 } as const;
+
+/** Edge / connection line colors — must be visible on optical passthrough. */
+export const EDGE = {
+  /** Default link/edge color. Warm mid-tone, not dark blue. */
+  link: 0xb8a380,
+  /** Axis lines on charts. */
+  axis: 0x9a8a70,
+} as const;

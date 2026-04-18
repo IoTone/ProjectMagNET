@@ -21,10 +21,10 @@ export class InspectorCard {
       height: 0.085,
       padding: 0.01,
       borderRadius: 0.008,
-      backgroundColor: new THREE.Color(0x0f1a2c),
+      backgroundColor: new THREE.Color(0x2a2520),
       backgroundOpacity: 0.92,
       borderWidth: 0.0012,
-      borderColor: new THREE.Color(0x3a5a8a),
+      borderColor: new THREE.Color(0xb8a380),
       borderOpacity: 0.9,
     });
     this.block.name = 'inspector-card';

@@ -36,10 +36,10 @@ export class Toolbar {
         height: btnH,
         padding: 0.004,
         borderRadius: 0.006,
-        backgroundColor: new THREE.Color(b.active ? 0x1a3a5a : 0x0f1a2c),
+        backgroundColor: new THREE.Color(b.active ? 0x3a4a28 : 0x2a2520),
         backgroundOpacity: 0.92,
         borderWidth: 0.0012,
-        borderColor: new THREE.Color(b.active ? 0x66ccff : 0x3a5a8a),
+        borderColor: new THREE.Color(b.active ? 0x66ccff : TEXT.muted),
         borderOpacity: 0.9,
       });
       block.position.set(x, 0, 0);
@@ -66,8 +66,8 @@ export class Toolbar {
     for (const b of this.buttons) {
       const active = b.id === id;
       b.block.set({
-        backgroundColor: new THREE.Color(active ? 0x1a3a5a : 0x0f1a2c),
-        borderColor: new THREE.Color(active ? 0x66ccff : 0x3a5a8a),
+        backgroundColor: new THREE.Color(active ? 0x3a4a28 : 0x2a2520),
+        borderColor: new THREE.Color(active ? 0x66ccff : TEXT.muted),
       });
     }
   }

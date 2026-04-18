@@ -1,8 +1,6 @@
 # M5Stamp C3U Blinky E4TH
 
-NeoPixel LED pattern demo on M5Stamp C3U, powered by ESPIDFORTH.
-
-Uses the ESP-IDF `led_strip` RMT driver (equivalent to Adafruit NeoPixel) for the onboard SK6812 RGB LED, and native GPIO with interrupt for the button. The ESPIDFORTH REPL is available over USB-serial-JTAG for interactive Forth commands alongside the running patterns.
+NeoPixel LED pattern demo on M5Stamp C3U, powered by ESPIDFORTH. Also the first consumer of the Phase-4A `craw_ble_provision` component: on boot the device advertises as `MagNET-biologic-<MAC4>` and accepts WiFi credentials over BLE GATT (R3 + R4 of the hive spec).
 
 ## Hardware
 
@@ -39,6 +37,8 @@ In addition to all standard ESPIDFORTH words, this project adds:
 | `mode?` | ( -- mode ) | Push current mode number onto stack |
 | `R G B led-rgb` | ( r g b -- ) | Set LED to exact color (stops pattern) |
 | `led-off` | ( -- ) | Turn off LED (stops pattern, same as `0 blinky`) |
+| `prov-status` | ( -- ) | Print BLE / WiFi provisioning state, current IP |
+| `prov-reset` | ( -- ) | Clear stored WiFi creds, restart BLE advertising |
 
 ### Examples
 
@@ -133,11 +133,26 @@ forth_register_word("led-rgb", w_led_rgb);
 
 This project uses the ESPIDFORTH component (copied into `components/forth/`). The component provides the Forth interpreter, REPL, and the external registration API (`forth_register_word`, `forth_push`, `forth_pop`) used by the blinky words. See `ESPIDFORTH/README.md` for the full standard word list.
 
+## BLE Provisioning (Phase 4A)
+
+On boot the device advertises as `MagNET-biologic-<MAC4>` (e.g. `MagNET-biologic-a1b2`). A connected controller (nRF Connect, LightBlue, or a MagNET ruler/gateway app) can discover the provisioning service:
+
+- **Service UUID**: `4d41474e-4554-0001-0000-000000000000`
+- **Characteristics** (UUID suffix = 01..06):
+  - `01` device_info (read): JSON with chip, role, fw version, SSID, IP, status
+  - `02` wifi_ssid (read/write): UTF-8, max 32 chars
+  - `03` wifi_pass (write only): UTF-8, max 64 chars; reads return empty
+  - `04` wifi_commit (write): uint8 trigger; writing `1` begins WiFi connect
+  - `05` ip_address (read + notify): IPv4 string or `N/A`
+  - `06` status (read + notify): uint8 — 0=idle, 1=creds-received, 2=commit-requested, 3=connecting, 4=connected, 5=failed
+
+The commit flow persists credentials through `craw_nvs` using the standard `craw_config` namespace, so on next boot the node auto-connects without needing BLE again. Use `prov-reset` at the REPL to clear and re-advertise.
+
 ## Memory Usage
 
 | Metric | Value |
 |--------|-------|
-| Flash | 205 KB (19.5% of 1 MB) |
-| Static RAM | 67 KB (20.4% of 328 KB) |
+| Flash | 914 KB (44.6% of 2 MB partition) |
+| Static RAM | 92 KB (28.8% of 320 KB) |
 | Forth heap | 64 KB |
-| Free heap | ~168 KB |
+| Components added | `craw_nvs`, `craw_wifi`, `craw_ble_provision` |

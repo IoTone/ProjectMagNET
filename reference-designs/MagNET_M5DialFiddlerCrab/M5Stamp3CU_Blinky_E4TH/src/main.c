@@ -29,6 +29,11 @@
 #include "forth_core.h"
 #include "forth_version.h"
 
+/* Phase 4A — hive provisioning (R3, R4) */
+#include "craw_nvs.h"
+#include "craw_wifi.h"
+#include "craw_ble_provision.h"
+
 #define LED_GPIO        2
 #define BTN_GPIO        9
 #define FORTH_HEAP_SIZE (64 * 1024)
@@ -37,6 +42,10 @@
 static led_strip_handle_t led_strip = NULL;
 static volatile int btn_released = 0;
 static volatile int current_mode = 0;
+
+/* Phase 4A provisioning state surfaced to Forth / LED */
+static volatile int s_prov_state = 0;   /* mirrors craw_ble_prov_state_t */
+static char s_ip_str[20] = "N/A";
 
 /* ---- USB serial I/O ---- */
 
@@ -252,7 +261,89 @@ static void led_task(void *arg) {
     }
 }
 
+/* ---- Phase 4A: WiFi + BLE provisioning (R3, R4) ---- */
+
+static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
+    (void)ctx;
+    switch (event) {
+        case CRAW_WIFI_EVENT_CONNECTED:
+            craw_wifi_get_ip_str(s_ip_str, sizeof(s_ip_str));
+            usb_printf("\r\n[WiFi] connected, IP: %s\r\n", s_ip_str);
+            craw_ble_provision_set_ip(s_ip_str);
+            craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTED);
+            s_prov_state = CRAW_BLE_PROV_CONNECTED;
+            break;
+        case CRAW_WIFI_EVENT_DISCONNECTED:
+            usb_print("\r\n[WiFi] disconnected\r\n");
+            strncpy(s_ip_str, "N/A", sizeof(s_ip_str));
+            craw_ble_provision_set_ip(s_ip_str);
+            break;
+        case CRAW_WIFI_EVENT_CONNECT_FAILED:
+            usb_print("\r\n[WiFi] connect failed\r\n");
+            strncpy(s_ip_str, "N/A", sizeof(s_ip_str));
+            craw_ble_provision_set_ip(s_ip_str);
+            craw_ble_provision_set_status(CRAW_BLE_PROV_FAILED);
+            s_prov_state = CRAW_BLE_PROV_FAILED;
+            break;
+    }
+}
+
+static void on_prov_event(craw_ble_prov_state_t state,
+                          const char *ssid, const char *pass, void *ctx) {
+    (void)ctx;
+    s_prov_state = (int)state;
+    switch (state) {
+        case CRAW_BLE_PROV_CREDS_RECEIVED:
+            usb_printf("\r\n[PROV] creds received: ssid='%s' pass=%d chars\r\n",
+                       ssid, (int)strlen(pass ? pass : ""));
+            break;
+        case CRAW_BLE_PROV_COMMIT_REQUESTED:
+            if (!ssid || !ssid[0]) {
+                usb_print("\r\n[PROV] commit with empty SSID, ignoring\r\n");
+                break;
+            }
+            usb_printf("\r\n[PROV] commit -> connecting to '%s'\r\n", ssid);
+            craw_nvs_save_wifi_creds(ssid, pass ? pass : "");
+            craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
+            s_prov_state = CRAW_BLE_PROV_CONNECTING;
+            craw_wifi_connect(ssid, pass ? pass : "");
+            break;
+        default:
+            break;
+    }
+}
+
 /* ---- Forth FFI Words ---- */
+
+/* ( -- ) Report provisioning + WiFi state */
+static void w_prov_status(void) {
+    const char *labels[] = {
+        "IDLE", "CREDS_RECEIVED", "COMMIT_REQUESTED",
+        "CONNECTING", "CONNECTED", "FAILED",
+    };
+    int st = s_prov_state;
+    if (st < 0 || st >= (int)(sizeof(labels)/sizeof(labels[0]))) st = 0;
+    char ssid[33], pass[65];
+    bool has_creds = craw_nvs_load_wifi_creds(ssid, pass);
+    usb_printf("\r\nprov:  %s\r\n", labels[st]);
+    usb_printf("ble:   %s\r\n", craw_ble_provision_device_name());
+    usb_printf("wifi:  %s\r\n", craw_wifi_is_connected() ? "connected" : "down");
+    usb_printf("ssid:  %s\r\n", has_creds ? ssid : "(none)");
+    usb_printf("ip:    %s\r\n", s_ip_str);
+}
+
+/* ( -- ) Clear WiFi creds and re-advertise as unprovisioned */
+static void w_prov_reset(void) {
+    char ssid[33], pass[65];
+    craw_nvs_clear_wifi_creds(ssid, pass);
+    craw_wifi_disconnect();
+    strncpy(s_ip_str, "N/A", sizeof(s_ip_str));
+    craw_ble_provision_set_ip(s_ip_str);
+    craw_ble_provision_set_status(CRAW_BLE_PROV_IDLE);
+    s_prov_state = CRAW_BLE_PROV_IDLE;
+    craw_ble_provision_advertise();
+    usb_print("\r\nProvisioning reset. Advertising.\r\n");
+}
 
 /* ( mode -- ) Set the blinky mode: 0=off 1=flash 2=breathe 3=strobe 4=rainbow */
 static void w_blinky(void) {
@@ -300,6 +391,8 @@ static void register_blinky_words(void) {
     forth_register_word("led-off", w_led_off);
     forth_register_word("mode?", w_mode_get);
     forth_register_word("modes", w_modes);
+    forth_register_word("prov-status", w_prov_status);
+    forth_register_word("prov-reset", w_prov_reset);
 }
 
 /* ---- Main ---- */
@@ -320,6 +413,17 @@ void app_main(void) {
     btn_init();
     usb_print("LED on GPIO 2, Button on GPIO 9\r\n");
 
+    /* NVS + WiFi + BLE provisioning (Phase 4A) */
+    craw_nvs_init_flash();
+    craw_nvs_migrate_wifi_profiles();
+    craw_wifi_init("MagNET-biologic", on_wifi_event, NULL);
+    craw_ble_provision_config_t prov_cfg = {
+        .name_prefix = "MagNET-biologic",
+        .role        = "spawn",
+    };
+    craw_ble_provision_init(&prov_cfg, on_prov_event, NULL);
+    usb_printf("BLE advertising as '%s'\r\n", craw_ble_provision_device_name());
+
     /* Initialize Forth engine + register custom words */
     forth_init(FORTH_HEAP_SIZE);
     register_blinky_words();
@@ -330,12 +434,25 @@ void app_main(void) {
     /* Start LED pattern task */
     xTaskCreate(led_task, "led_task", 4096, NULL, 5, NULL);
 
+    /* Auto-connect if we have stored creds */
+    char ssid[33], pass[65];
+    if (craw_nvs_load_wifi_creds(ssid, pass) && ssid[0]) {
+        usb_printf("Stored WiFi '%s' — auto-connecting...\r\n", ssid);
+        craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
+        s_prov_state = CRAW_BLE_PROV_CONNECTING;
+        craw_wifi_connect(ssid, pass);
+    } else {
+        usb_print("No stored WiFi. Connect via BLE to provision.\r\n");
+    }
+
     usb_print("Button cycles modes. Forth commands:\r\n");
     usb_print("  N blinky    -- set mode (0-4)\r\n");
     usb_print("  modes       -- list all modes\r\n");
     usb_print("  R G B led-rgb -- set LED color (stops pattern)\r\n");
     usb_print("  led-off     -- turn off LED\r\n");
-    usb_print("  mode?       -- show current mode\r\n\r\n");
+    usb_print("  mode?       -- show current mode\r\n");
+    usb_print("  prov-status -- BLE/WiFi provisioning state\r\n");
+    usb_print("  prov-reset  -- clear WiFi creds, re-advertise\r\n\r\n");
 
     /* Run Forth REPL (blocks forever) */
     forth_repl(uart_getchar, uart_putchar);

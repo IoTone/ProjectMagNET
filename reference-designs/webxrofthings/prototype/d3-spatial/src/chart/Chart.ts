@@ -307,7 +307,7 @@ function buildAxes(xScale: ScaleFn, yScale: ScaleFn): THREE.Group {
   const y0 = yScale(yDomain[0]);
   const y1 = yScale(yDomain[1]);
 
-  const axisMat = new THREE.LineBasicMaterial({ color: 0x668899, transparent: true, opacity: 0.6 });
+  const axisMat = new THREE.LineBasicMaterial({ color: 0x9a8a70, transparent: true, opacity: 0.7 });
 
   const xAxis = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([

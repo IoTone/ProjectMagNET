@@ -49,9 +49,9 @@ const dir = new THREE.DirectionalLight(0xffffff, 0.6);
 dir.position.set(1, 2, 1);
 scene.add(dir);
 
-const floorGrid = new THREE.GridHelper(4, 16, 0x224466, 0x112233);
+const floorGrid = new THREE.GridHelper(4, 16, 0x9a8a70, 0x6a5e4a);
 (floorGrid.material as THREE.Material).transparent = true;
-(floorGrid.material as THREE.Material).opacity = 0.35;
+(floorGrid.material as THREE.Material).opacity = 0.5;
 floorGrid.userData.noHover = true;
 scene.add(floorGrid);
 
@@ -470,7 +470,7 @@ function setupHierarchyUI(
       updateBreadcrumbAndHud(entry);
     },
   });
-  breadcrumb.group.position.set(0, CELL_H / 2 + 0.005, 0.001);
+  breadcrumb.group.position.set(0, CELL_H / 2 + 0.04, -0.015);
   cell.add(breadcrumb.group);
 
   // VizHud: below cell sublabel
@@ -487,7 +487,7 @@ function setupHierarchyUI(
       updateBreadcrumbAndHud(entry);
     },
   });
-  hud.group.position.set(0, -CELL_H / 2 - 0.02, 0.001);
+  hud.group.position.set(0, -CELL_H / 2 - 0.045, -0.015);
   cell.add(hud.group);
 
   const entry: HierarchyVizEntry = { id, viz, cell, breadcrumb, hud };

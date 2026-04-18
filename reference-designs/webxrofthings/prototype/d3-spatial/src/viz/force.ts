@@ -71,7 +71,7 @@ export function buildForceGraph(data: GraphData, opts: ForceOptions = {}): Force
 
   const edgeGeo = new THREE.BufferGeometry();
   edgeGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(links.length * 2 * 3), 3));
-  const edgeMat = new THREE.LineBasicMaterial({ color: 0x3a5a8a, transparent: true, opacity: 0.6 });
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0xb8a380, transparent: true, opacity: 0.75 });
   const edges = new THREE.LineSegments(edgeGeo, edgeMat);
   edges.userData.isForceEdges = true;
   group.add(edges);

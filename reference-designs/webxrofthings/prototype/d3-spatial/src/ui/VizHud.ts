@@ -29,13 +29,13 @@ export class VizHud {
     this.backBtn = new ThreeMeshUI.Block({
       width: btnW,
       height: btnH,
-      padding: 0.002,
+      padding: 0.003,
       borderRadius: 0.004,
-      backgroundColor: new THREE.Color(0x2a1a0f),
-      backgroundOpacity: 0.9,
-      borderWidth: 0.001,
+      backgroundColor: new THREE.Color(0x3a2a18),
+      backgroundOpacity: 0.95,
+      borderWidth: 0.0012,
       borderColor: new THREE.Color(TEXT.warn),
-      borderOpacity: 0.8,
+      borderOpacity: 1.0,
     });
     this.backBtn.position.set(-(btnW + gap) / 2, 0, 0);
     this.backBtn.userData.isVizHudButton = true;
@@ -44,7 +44,7 @@ export class VizHud {
 
     this.backText = new Text();
     this.backText.text = 'Back';
-    this.backText.fontSize = 0.009;
+    this.backText.fontSize = 0.011;
     this.backText.color = TEXT.warn;
     this.backText.anchorX = 'center';
     this.backText.anchorY = 'middle';
@@ -57,13 +57,13 @@ export class VizHud {
     this.resetBtn = new ThreeMeshUI.Block({
       width: btnW,
       height: btnH,
-      padding: 0.002,
+      padding: 0.003,
       borderRadius: 0.004,
-      backgroundColor: new THREE.Color(0x0f1a2c),
-      backgroundOpacity: 0.9,
-      borderWidth: 0.001,
-      borderColor: new THREE.Color(0x3a5a8a),
-      borderOpacity: 0.7,
+      backgroundColor: new THREE.Color(0x2a2520),
+      backgroundOpacity: 0.95,
+      borderWidth: 0.0012,
+      borderColor: new THREE.Color(TEXT.muted),
+      borderOpacity: 0.9,
     });
     this.resetBtn.position.set((btnW + gap) / 2, 0, 0);
     this.resetBtn.userData.isVizHudButton = true;
@@ -71,7 +71,7 @@ export class VizHud {
 
     const resetText = new Text();
     resetText.text = 'Reset';
-    resetText.fontSize = 0.009;
+    resetText.fontSize = 0.011;
     resetText.color = TEXT.body;
     resetText.anchorX = 'center';
     resetText.anchorY = 'middle';

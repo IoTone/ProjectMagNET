@@ -62,12 +62,13 @@ export function buildVizGallery(): GalleryResult {
   const rows = Math.ceil(specs.length / cols);
   const cellW = 0.38;
   const cellH = 0.32;
+  const rowGap = 0.10;
 
   specs.forEach((s, i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
     const x = (col - (cols - 1) / 2) * cellW;
-    const y = ((rows - 1) / 2 - row) * cellH;
+    const y = ((rows - 1) / 2 - row) * (cellH + rowGap);
 
     const cell = new THREE.Group();
     cell.position.set(x, y, 0);
@@ -79,7 +80,7 @@ export function buildVizGallery(): GalleryResult {
     title.color = TEXT.primary;
     title.anchorX = 'center';
     title.anchorY = 'bottom';
-    title.position.set(0, cellH / 2 - 0.02, 0);
+    title.position.set(0, cellH / 2 + 0.015, 0.03);
     title.sync();
     cell.add(title);
 
@@ -89,7 +90,7 @@ export function buildVizGallery(): GalleryResult {
     sub.color = TEXT.muted;
     sub.anchorX = 'center';
     sub.anchorY = 'top';
-    sub.position.set(0, -cellH / 2 + 0.015, 0);
+    sub.position.set(0, -cellH / 2 - 0.015, 0.03);
     sub.sync();
     cell.add(sub);
 

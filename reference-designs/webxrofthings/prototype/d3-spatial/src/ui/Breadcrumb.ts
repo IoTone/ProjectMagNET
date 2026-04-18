@@ -48,11 +48,11 @@ export class Breadcrumb {
         height: crumbH,
         padding: 0.002,
         borderRadius: 0.004,
-        backgroundColor: new THREE.Color(isLast ? 0x2a3a1a : 0x0f1a2c),
-        backgroundOpacity: 0.88,
-        borderWidth: 0.001,
-        borderColor: new THREE.Color(isLast ? TEXT.primary : 0x3a5a8a),
-        borderOpacity: isLast ? 0.9 : 0.5,
+        backgroundColor: new THREE.Color(isLast ? 0x3a4a28 : 0x2a2520),
+        backgroundOpacity: 0.92,
+        borderWidth: 0.0012,
+        borderColor: new THREE.Color(isLast ? TEXT.primary : TEXT.muted),
+        borderOpacity: isLast ? 1.0 : 0.7,
       });
       block.position.set(x, 0, 0);
       block.userData.isBreadcrumb = true;
@@ -60,7 +60,7 @@ export class Breadcrumb {
 
       const text = new Text();
       text.text = labels[i]!;
-      text.fontSize = 0.009;
+      text.fontSize = 0.011;
       text.color = isRoot && labels.length === 1 ? TEXT.dim : (isLast ? TEXT.primary : TEXT.muted);
       text.anchorX = 'center';
       text.anchorY = 'middle';
