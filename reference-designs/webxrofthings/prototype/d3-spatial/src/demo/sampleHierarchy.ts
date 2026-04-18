@@ -117,6 +117,35 @@ export function sampleSankey(): SankeyData {
   };
 }
 
+export function sampleTangles(): Array<{ source: string; target: string; type: string }> {
+  return [
+    { source: 'temp', target: 'lights', type: 'control' },
+    { source: 'edge', target: 'wrist', type: 'sync' },
+    { source: 'motion', target: 'hvac', type: 'control' },
+    { source: 'cloud', target: 'glasses', type: 'sync' },
+    { source: 'humidity', target: 'blinds', type: 'control' },
+  ];
+}
+
+export interface ParallelDataPoint {
+  id: string;
+  group: number;
+  values: number[]; // one per dimension
+}
+
+export function sampleParallel(): { dimensions: string[]; points: ParallelDataPoint[] } {
+  const dimensions = ['temp', 'humidity', 'light', 'motion', 'power'];
+  const rand = mulberry32(42);
+  const points: ParallelDataPoint[] = [];
+  for (let i = 0; i < 18; i++) {
+    const group = Math.floor(rand() * 3);
+    const base = [0.3 + group * 0.2, 0.5, 0.4 + group * 0.1, 0.6 - group * 0.15, 0.35 + group * 0.2];
+    const values = base.map(b => Math.max(0, Math.min(1, b + (rand() - 0.5) * 0.4)));
+    points.push({ id: `p${i}`, group, values });
+  }
+  return { dimensions, points };
+}
+
 function mulberry32(seed: number) {
   let a = seed >>> 0;
   return () => {

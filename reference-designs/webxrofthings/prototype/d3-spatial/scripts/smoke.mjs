@@ -310,6 +310,38 @@ const M17_SHOTS = [
     action: 'live-update' },
 ];
 
+// M18 — morph demo shots
+const MORPH_SHOTS = [
+  { id: 'm18-morph-tree', ms: 'M18', title: 'Morph · tree layout',
+    caption: 'Morph demo showing hierarchy data in radial tree layout',
+    distance: 0.35, action: 'start' },
+  { id: 'm18-morph-sunburst', ms: 'M18', title: 'Morph · sunburst layout',
+    caption: 'Same data morphed to sunburst (ring) arrangement',
+    distance: 0.35, action: 'next' },
+  { id: 'm18-morph-treemap', ms: 'M18', title: 'Morph · treemap layout',
+    caption: 'Same data morphed to treemap (area) arrangement',
+    distance: 0.35, action: 'next' },
+  { id: 'm18-morph-pack', ms: 'M18', title: 'Morph · pack layout',
+    caption: 'Same data morphed to circular packing arrangement',
+    distance: 0.35, action: 'next' },
+];
+
+// M19 — new viz types
+const M19_SHOTS = [
+  { id: 'm19-tidy-tree', ms: 'M19', title: 'Tidy tree · cylindrical',
+    caption: 'Reingold-Tilford tree layout wrapped onto a cylinder surface',
+    viz: 'tidyTree', distance: 0.28 },
+  { id: 'm19-tangled-tree', ms: 'M19', title: 'Tangled tree · z-separated arcs',
+    caption: 'Tree spine with CatmullRom cross-link arcs routing through +z',
+    viz: 'tangledTree', distance: 0.28 },
+  { id: 'm19-parallel', ms: 'M19', title: 'Parallel coordinates',
+    caption: '5-axis parallel coordinates with 18 data points colored by group',
+    viz: 'parallel', distance: 0.28 },
+  { id: 'm19-edge-bundle', ms: 'M19', title: 'Hierarchical edge bundling',
+    caption: 'Nodes on circle with beta=0.85 bundled CatmullRom tube edges',
+    viz: 'edgeBundle', distance: 0.28 },
+];
+
 // M16b — breadcrumb trail + VizHud per-cell buttons
 const M16B_SHOTS = [
   { id: 'm16-breadcrumb-drilled', ms: 'M16b', title: 'Breadcrumb · drilled into sensors',
@@ -691,6 +723,53 @@ try {
       }, s);
     }
     await sleep(500);
+    const file = `${OUT_DIR}/${s.id}.png`;
+    await page.screenshot({ path: file, fullPage: false });
+    shots.push({
+      id: s.id, milestone: s.ms, title: s.title, caption: s.caption,
+      file: `shots/${s.id}.png`, ts: new Date().toISOString(),
+    });
+    console.log(`  shot -> ${file}`);
+  }
+
+  // M18 — morph demo
+  for (const s of MORPH_SHOTS) {
+    await page.evaluate(({ distance, action }) => {
+      const d = (window).__demo;
+      d.showVizGallery(true);
+      if (action === 'start') {
+        d.startMorph();
+      } else if (action === 'next') {
+        d.nextMorph();
+      }
+      d.lookAtMorph(distance);
+    }, s);
+    // Wait for tween to complete
+    await sleep(s.action === 'next' ? 1200 : 500);
+    const file = `${OUT_DIR}/${s.id}.png`;
+    await page.screenshot({ path: file, fullPage: false });
+    shots.push({
+      id: s.id, milestone: s.ms, title: s.title, caption: s.caption,
+      file: `shots/${s.id}.png`, ts: new Date().toISOString(),
+    });
+    console.log(`  shot -> ${file}`);
+  }
+  // Stop morph mode and return to gallery
+  await page.evaluate(() => { (window).__demo.stopMorph(); (window).__demo.showVizGallery(true); });
+  await sleep(300);
+
+  // M19 — new viz types
+  for (const s of M19_SHOTS) {
+    await page.evaluate(({ viz, distance }) => {
+      const d = (window).__demo;
+      d.showVizGallery(true);
+      const lookFn = viz === 'tidyTree' ? d.lookAtTidyTree
+        : viz === 'tangledTree' ? d.lookAtTangledTree
+        : viz === 'parallel' ? d.lookAtParallel
+        : d.lookAtEdgeBundle;
+      lookFn.call(d, distance);
+    }, s);
+    await sleep(400);
     const file = `${OUT_DIR}/${s.id}.png`;
     await page.screenshot({ path: file, fullPage: false });
     shots.push({

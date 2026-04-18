@@ -7,7 +7,12 @@ import { buildCircularPack, PackViz } from '../viz/pack';
 import { buildForceGraph, ForceViz } from '../viz/force';
 import { buildRidgeline, RidgelineViz } from '../viz/ridgeline';
 import { buildSankey, SankeyViz } from '../viz/sankey';
-import { sampleTree, sampleGraph, sampleRidgeline, sampleSankey } from './sampleHierarchy';
+import { buildTidyTree, TidyTreeViz } from '../viz/tidyTree';
+import { buildTangledTree, TangledTreeViz } from '../viz/tangledTree';
+import { buildParallel, ParallelViz } from '../viz/parallel';
+import { buildEdgeBundle, EdgeBundleViz } from '../viz/edgeBundle';
+import { buildMorphDemo, MorphDemo } from './morphDemo';
+import { sampleTree, sampleGraph, sampleRidgeline, sampleSankey, sampleTangles, sampleParallel } from './sampleHierarchy';
 import { TEXT } from '../ui/palette';
 
 export interface GalleryItem {
@@ -33,6 +38,16 @@ export interface GalleryResult {
   ridgeline: RidgelineViz;
   sankey: SankeyViz;
   sankeyCell: THREE.Group;
+  tidyTree: TidyTreeViz;
+  tidyTreeCell: THREE.Group;
+  tangledTree: TangledTreeViz;
+  tangledTreeCell: THREE.Group;
+  parallel: ParallelViz;
+  parallelCell: THREE.Group;
+  edgeBundle: EdgeBundleViz;
+  edgeBundleCell: THREE.Group;
+  morphDemo: MorphDemo;
+  morphCell: THREE.Group;
 }
 
 export function buildVizGallery(): GalleryResult {
@@ -47,21 +62,31 @@ export function buildVizGallery(): GalleryResult {
   const pack = buildCircularPack(sampleTree);
   const ridgeline = buildRidgeline(sampleRidgeline(6));
   const sankey = buildSankey(sampleSankey());
+  const tidyTree = buildTidyTree(sampleTree);
+  const tangledTree = buildTangledTree(sampleTree, sampleTangles());
+  const parallel = buildParallel(sampleParallel());
+  const edgeBundle = buildEdgeBundle(sampleTree, sampleGraph(28));
+  const morphDemo = buildMorphDemo(sampleTree);
 
   const specs = [
-    { id: 'tree',       title: 'tree \u00b7 radial',          viz: tree.group,                                       sublabel: '\u00a79.1 hierarchy \u00b7 node-link' },
-    { id: 'treemap',    title: 'treemap \u00b7 extruded',     viz: treemap.group,                                    sublabel: '\u00a79.2 hierarchy \u00b7 area + z' },
-    { id: 'sunburst',   title: 'sunburst \u00b7 stacked',     viz: sunburst.group,                                   sublabel: '\u00a79.5 hierarchy \u00b7 radial partition' },
-    { id: 'pack',       title: 'circular packing',       viz: pack.group,                                        sublabel: '\u00a79.9 \u2605 nested spheres' },
-    { id: 'force',      title: 'force \u00b7 d3-force-3d',    viz: force.group,                                      sublabel: '\u00a79.6 graph \u00b7 3D physics' },
-    { id: 'ridgeline',  title: 'ridgeline \u00b7 depth-offset', viz: ridgeline.group,                                sublabel: '\u00a79.9 \u2605 distribution' },
-    { id: 'sankey',     title: 'sankey \u00b7 3D tubes',      viz: sankey.group,                                      sublabel: '\u00a79.9 \u2605 flow network' },
+    { id: 'tree',       title: 'tree \u00b7 radial',              viz: tree.group,          sublabel: '\u00a79.1 hierarchy \u00b7 node-link' },
+    { id: 'treemap',    title: 'treemap \u00b7 extruded',         viz: treemap.group,       sublabel: '\u00a79.2 hierarchy \u00b7 area + z' },
+    { id: 'sunburst',   title: 'sunburst \u00b7 stacked',         viz: sunburst.group,      sublabel: '\u00a79.5 hierarchy \u00b7 radial partition' },
+    { id: 'pack',       title: 'circular packing',           viz: pack.group,          sublabel: '\u00a79.9 \u2605 nested spheres' },
+    { id: 'force',      title: 'force \u00b7 d3-force-3d',        viz: force.group,         sublabel: '\u00a79.6 graph \u00b7 3D physics' },
+    { id: 'ridgeline',  title: 'ridgeline \u00b7 depth-offset',   viz: ridgeline.group,     sublabel: '\u00a79.9 \u2605 distribution' },
+    { id: 'sankey',     title: 'sankey \u00b7 3D tubes',          viz: sankey.group,        sublabel: '\u00a79.9 \u2605 flow network' },
+    { id: 'tidyTree',   title: 'tidy tree \u00b7 cylindrical',    viz: tidyTree.group,      sublabel: '\u00a79 Reingold-Tilford \u00b7 cylinder' },
+    { id: 'tangledTree',title: 'tangled tree \u00b7 arcs',        viz: tangledTree.group,   sublabel: '\u00a79 tree + cross-links' },
+    { id: 'parallel',   title: 'parallel coords',            viz: parallel.group,      sublabel: '\u00a79 multivariate axes' },
+    { id: 'edgeBundle', title: 'edge bundling',               viz: edgeBundle.group,    sublabel: '\u00a79 hierarchical routing' },
+    { id: 'morph',      title: 'morph \u00b7 layout transition',  viz: morphDemo.group,     sublabel: 'tree \u2192 sunburst \u2192 treemap \u2192 pack' },
   ];
 
   const cols = 4;
   const rows = Math.ceil(specs.length / cols);
   const cellW = 0.38;
-  const cellH = 0.32;
+  const cellH = 0.30;
   const rowGap = 0.10;
 
   specs.forEach((s, i) => {
@@ -104,5 +129,17 @@ export function buildVizGallery(): GalleryResult {
   const sunburstCell = items.find(i => i.id === 'sunburst')!.group;
   const packCell = items.find(i => i.id === 'pack')!.group;
   const sankeyCell = items.find(i => i.id === 'sankey')!.group;
-  return { root, items, force, forceCell, tree, treeCell, treemap, treemapCell, sunburst, sunburstCell, pack, packCell, ridgeline, sankey, sankeyCell };
+  const tidyTreeCell = items.find(i => i.id === 'tidyTree')!.group;
+  const tangledTreeCell = items.find(i => i.id === 'tangledTree')!.group;
+  const parallelCell = items.find(i => i.id === 'parallel')!.group;
+  const edgeBundleCell = items.find(i => i.id === 'edgeBundle')!.group;
+  const morphCell = items.find(i => i.id === 'morph')!.group;
+
+  return {
+    root, items, force, forceCell, tree, treeCell, treemap, treemapCell,
+    sunburst, sunburstCell, pack, packCell, ridgeline, sankey, sankeyCell,
+    tidyTree, tidyTreeCell, tangledTree, tangledTreeCell,
+    parallel, parallelCell, edgeBundle, edgeBundleCell,
+    morphDemo, morphCell,
+  };
 }

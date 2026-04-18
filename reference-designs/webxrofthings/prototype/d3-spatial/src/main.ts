@@ -87,7 +87,7 @@ uiAnchor.add(demoRoot);
 const vizAnchor = new THREE.Group();
 vizAnchor.name = 'vizAnchor';
 scene.add(vizAnchor);
-const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, treeCell, treemapCell, sunburstCell, packCell } = buildVizGallery();
+const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz } = buildVizGallery();
 vizAnchor.add(galleryRoot);
 
 // Per-hand NodeHoverFx: indices 0, 1 = XR hands; 2 = mouse/desktop
@@ -361,6 +361,69 @@ interact.add({
   onSelect: (ctx) => {
     if (ctx?.instanceId === undefined) return;
     // No drill-in for sankey; just show info via hover
+  },
+});
+
+// --- Tidy Tree interaction ---
+const tmpTidyTreeVec = new THREE.Vector3();
+interact.add({
+  id: 'tidyTree:nodes',
+  object: tidyTreeViz.nodeMesh,
+  supportsInstances: true,
+  onHoverIn: (ctx) => {
+    if (ctx?.instanceId !== undefined) {
+      tidyTreeViz.getNodeWorldPosition(ctx.instanceId, tmpTidyTreeVec);
+      fxForHand(ctx?.handIndex ?? 2).show(tmpTidyTreeVec, tidyTreeViz.getNodeLabel(ctx.instanceId));
+    }
+  },
+  onHoverOut: (ctx) => { fxForHand(ctx?.handIndex ?? 2).hide(); },
+  onHoverInstance: (instanceId, handIndex) => {
+    const fx = fxForHand(handIndex ?? 2);
+    if (instanceId === null) { fx.hide(); return; }
+    tidyTreeViz.getNodeWorldPosition(instanceId, tmpTidyTreeVec);
+    fx.show(tmpTidyTreeVec, tidyTreeViz.getNodeLabel(instanceId));
+  },
+});
+
+// --- Tangled Tree interaction ---
+const tmpTangledTreeVec = new THREE.Vector3();
+interact.add({
+  id: 'tangledTree:nodes',
+  object: tangledTreeViz.nodeMesh,
+  supportsInstances: true,
+  onHoverIn: (ctx) => {
+    if (ctx?.instanceId !== undefined) {
+      tangledTreeViz.getNodeWorldPosition(ctx.instanceId, tmpTangledTreeVec);
+      fxForHand(ctx?.handIndex ?? 2).show(tmpTangledTreeVec, tangledTreeViz.getNodeLabel(ctx.instanceId));
+    }
+  },
+  onHoverOut: (ctx) => { fxForHand(ctx?.handIndex ?? 2).hide(); },
+  onHoverInstance: (instanceId, handIndex) => {
+    const fx = fxForHand(handIndex ?? 2);
+    if (instanceId === null) { fx.hide(); return; }
+    tangledTreeViz.getNodeWorldPosition(instanceId, tmpTangledTreeVec);
+    fx.show(tmpTangledTreeVec, tangledTreeViz.getNodeLabel(instanceId));
+  },
+});
+
+// --- Edge Bundle interaction ---
+const tmpEdgeBundleVec = new THREE.Vector3();
+interact.add({
+  id: 'edgeBundle:nodes',
+  object: edgeBundleViz.nodeMesh,
+  supportsInstances: true,
+  onHoverIn: (ctx) => {
+    if (ctx?.instanceId !== undefined) {
+      edgeBundleViz.getNodeWorldPosition(ctx.instanceId, tmpEdgeBundleVec);
+      fxForHand(ctx?.handIndex ?? 2).show(tmpEdgeBundleVec, edgeBundleViz.getNodeLabel(ctx.instanceId));
+    }
+  },
+  onHoverOut: (ctx) => { fxForHand(ctx?.handIndex ?? 2).hide(); },
+  onHoverInstance: (instanceId, handIndex) => {
+    const fx = fxForHand(handIndex ?? 2);
+    if (instanceId === null) { fx.hide(); return; }
+    edgeBundleViz.getNodeWorldPosition(instanceId, tmpEdgeBundleVec);
+    fx.show(tmpEdgeBundleVec, edgeBundleViz.getNodeLabel(instanceId));
   },
 });
 
@@ -977,6 +1040,59 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
     camera.updateMatrixWorld(true);
   },
 
+  // --- Tidy Tree ---
+  tidyTreeNodeCount: () => tidyTreeViz.nodeCount(),
+  lookAtTidyTree(distance: number) {
+    const v = new THREE.Vector3();
+    tidyTreeViz.group.getWorldPosition(v);
+    camera.position.set(v.x, v.y, v.z + distance);
+    camera.lookAt(v.x, v.y, v.z);
+    camera.updateMatrixWorld(true);
+  },
+
+  // --- Tangled Tree ---
+  tangledTreeNodeCount: () => tangledTreeViz.nodeCount(),
+  lookAtTangledTree(distance: number) {
+    const v = new THREE.Vector3();
+    tangledTreeViz.group.getWorldPosition(v);
+    camera.position.set(v.x, v.y, v.z + distance);
+    camera.lookAt(v.x, v.y, v.z);
+    camera.updateMatrixWorld(true);
+  },
+
+  // --- Parallel ---
+  parallelNodeCount: () => parallelViz.nodeCount(),
+  lookAtParallel(distance: number) {
+    const v = new THREE.Vector3();
+    parallelViz.group.getWorldPosition(v);
+    camera.position.set(v.x, v.y, v.z + distance);
+    camera.lookAt(v.x, v.y, v.z);
+    camera.updateMatrixWorld(true);
+  },
+
+  // --- Edge Bundle ---
+  edgeBundleNodeCount: () => edgeBundleViz.nodeCount(),
+  lookAtEdgeBundle(distance: number) {
+    const v = new THREE.Vector3();
+    edgeBundleViz.group.getWorldPosition(v);
+    camera.position.set(v.x, v.y, v.z + distance);
+    camera.lookAt(v.x, v.y, v.z);
+    camera.updateMatrixWorld(true);
+  },
+
+  // --- Morph Demo ---
+  startMorph() { startMorphMode(); },
+  nextMorph() { morphDemoViz.nextLayout(); },
+  stopMorph() { stopMorphMode(); },
+  morphCurrentType: () => morphDemoViz.currentType(),
+  lookAtMorph(distance: number) {
+    const v = new THREE.Vector3();
+    morphDemoViz.group.getWorldPosition(v);
+    camera.position.set(v.x, v.y, v.z + distance);
+    camera.lookAt(v.x, v.y, v.z);
+    camera.updateMatrixWorld(true);
+  },
+
   // --- Ridgeline ---
   ridgelineTick(t: number) { ridgelineViz.tick(t); },
 
@@ -998,14 +1114,40 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
   setLiveHR(enabled: boolean) { liveHREnabled = enabled; },
 };
 
+// --- Morph demo mode ---
+let morphModeActive = false;
+let morphAutoTimer = 0;
+const MORPH_INTERVAL = 3; // seconds
+
+function startMorphMode() {
+  morphModeActive = true;
+  morphAutoTimer = 0;
+  galleryRoot.visible = false;
+  morphDemoViz.group.visible = true;
+  vizAnchor.visible = true;
+  uiAnchor.visible = false;
+  if (toolbar) toolbar.setActive('morph');
+}
+
+function stopMorphMode() {
+  morphModeActive = false;
+  galleryRoot.visible = true;
+  morphDemoViz.group.visible = true; // it's part of the gallery
+  if (toolbar) toolbar.setActive('gallery');
+}
+
+// morph group starts visible in gallery; separate morph mode hides gallery
+morphDemoViz.group.visible = true;
+
 window.addEventListener('keydown', e => {
   if (e.key === 'g' || e.key === 'G') showVizGallery(!vizAnchor.visible);
 });
 
 const toolbar = new Toolbar({
   buttons: [
-    { id: 'gallery', label: 'Gallery', active: defaultToGallery,  onSelect: () => { showVizGallery(true);  placeAnchorInFrontOfUser(); } },
-    { id: 'charts',  label: 'Charts',  active: !defaultToGallery, onSelect: () => { showVizGallery(false); placeAnchorInFrontOfUser(); } },
+    { id: 'gallery', label: 'Gallery', active: defaultToGallery,  onSelect: () => { stopMorphMode(); showVizGallery(true);  placeAnchorInFrontOfUser(); } },
+    { id: 'charts',  label: 'Charts',  active: !defaultToGallery, onSelect: () => { stopMorphMode(); showVizGallery(false); placeAnchorInFrontOfUser(); } },
+    { id: 'morph',   label: 'Morph',   onSelect: () => { startMorphMode(); placeAnchorInFrontOfUser(); } },
     { id: 'recenter', label: 'Recenter', onSelect: () => placeAnchorInFrontOfUser() },
     { id: 'floor', label: 'Set Floor', onSelect: () => placeFloorUnderHead() },
   ],
@@ -1107,6 +1249,16 @@ renderer.setAnimationLoop((time, frame) => {
     sunburstViz.tick();
     packViz.tick();
     ridgelineViz.tick(time / 1000);
+    morphDemoViz.tick();
+
+    // Morph auto-cycle
+    if (morphModeActive) {
+      morphAutoTimer += dt;
+      if (morphAutoTimer >= MORPH_INTERVAL) {
+        morphAutoTimer = 0;
+        morphDemoViz.nextLayout();
+      }
+    }
   }
 
   // Feature 3: Live HR data — update every 2 seconds
