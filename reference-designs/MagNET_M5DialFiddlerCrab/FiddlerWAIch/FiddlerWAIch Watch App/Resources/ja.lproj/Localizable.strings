@@ -1,0 +1,38 @@
+"app.name"                              = "Fiddlerウォッチ";
+
+"state.idle"                            = "待機";
+"state.working"                         = "作業中";
+"state.need_input"                      = "入力待ち";
+"state.finished"                        = "完了";
+"state.error"                           = "エラー";
+
+"conn.connecting"                       = "接続中";
+"conn.connected"                        = "接続済";
+"conn.disconnected"                     = "切断";
+
+"empty.no_sessions"                     = "セッションなし";
+
+"onboarding.title"                      = "ようこそ";
+"onboarding.device_id_prompt"           = "デバイスIDを入力";
+"onboarding.save"                       = "保存";
+
+"settings.title"                        = "設定";
+"settings.device_id"                    = "デバイスID";
+"settings.broker"                       = "ブローカー";
+"settings.feedback"                     = "フィードバック";
+"settings.close"                        = "閉じる";
+"settings.cancel"                       = "キャンセル";
+"settings.public_broker_warning_title"  = "注意：公開サーバー";
+"settings.public_broker_warning_body"   = "この通信は世界中から見える可能性があります。続行しますか？";
+"settings.public_broker_warning_confirm" = "理解した";
+
+"broker.localhost"                      = "ローカル";
+"broker.custom"                         = "プライベート";
+"broker.hivemq_public"                  = "HiveMQ 公開";
+
+"feedback.haptics"                      = "振動";
+"feedback.audio"                        = "音";
+"feedback.both"                         = "両方";
+"feedback.off"                          = "オフ";
+
+"brand.tagline"                         = "アイオートン";

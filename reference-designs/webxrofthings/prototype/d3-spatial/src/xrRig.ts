@@ -8,12 +8,20 @@ export interface XRRigEvents {
 const BEAM_COLOR_IDLE = 0xffd97a;
 const BEAM_COLOR_PRESS = 0xffffff;
 const RETICLE_COLOR = 0xffff66;
+const FINGERTIP_COLOR = 0x66ffcc;
+
+export interface HandJointInfo {
+  fingertipPos: THREE.Vector3;
+  pinchDistance: number;
+}
 
 interface HandSlot {
   controller: THREE.Group;
   grip: THREE.Group;
+  hand: THREE.Group;
   beam: THREE.Mesh;
   reticle: THREE.Mesh;
+  fingertipSphere: THREE.Mesh;
 }
 
 export class XRRig {
@@ -38,13 +46,19 @@ export class XRRig {
       const grip = renderer.xr.getControllerGrip(i);
       scene.add(grip);
 
+      const hand = renderer.xr.getHand(i);
+      scene.add(hand);
+
       const beam = this.makeBeam();
       scene.add(beam);
 
       const reticle = this.makeReticle();
       scene.add(reticle);
 
-      this.slots.push({ controller, grip, beam, reticle });
+      const fingertipSphere = this.makeFingertipSphere();
+      scene.add(fingertipSphere);
+
+      this.slots.push({ controller, grip, hand, beam, reticle, fingertipSphere });
     }
   }
 
@@ -60,6 +74,19 @@ export class XRRig {
     beam.userData.noHover = true;
     beam.visible = false;
     return beam;
+  }
+
+  private makeFingertipSphere(): THREE.Mesh {
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(0.005, 10, 10),
+      new THREE.MeshBasicMaterial({
+        color: FINGERTIP_COLOR, transparent: true, opacity: 0.8, depthTest: false,
+      }),
+    );
+    sphere.renderOrder = 998;
+    sphere.visible = false;
+    sphere.userData.noHover = true;
+    return sphere;
   }
 
   private makeReticle(): THREE.Mesh {
@@ -92,38 +119,75 @@ export class XRRig {
     this.events.onSelectEnd?.(i);
   }
 
+  /** Get hand-tracking joint state for a given hand (0 or 1). Returns null if joints not available. */
+  getHandJointState(i: number): HandJointInfo | null {
+    const slot = this.slots[i];
+    if (!slot) return null;
+    const hand = slot.hand as any;
+    if (!hand || !hand.joints) return null;
+    const indexTip = hand.joints['index-finger-tip'] as THREE.Object3D | undefined;
+    const thumbTip = hand.joints['thumb-tip'] as THREE.Object3D | undefined;
+    if (!indexTip || !thumbTip) return null;
+    // Only trust joints that have been updated (visible in the scene)
+    if (!indexTip.visible && !thumbTip.visible) return null;
+
+    const fingertipPos = new THREE.Vector3();
+    indexTip.getWorldPosition(fingertipPos);
+
+    const thumbPos = new THREE.Vector3();
+    thumbTip.getWorldPosition(thumbPos);
+
+    const pinchDistance = fingertipPos.distanceTo(thumbPos);
+    return { fingertipPos, pinchDistance };
+  }
+
   update(_frame: XRFrame | undefined) {
     const DEFAULT_LEN = 1.5;
     for (const slot of this.slots) {
-      const { controller, grip, beam, reticle } = slot;
+      const { controller, grip, hand, beam, reticle, fingertipSphere } = slot;
       const source = controller.visible ? controller : (grip.visible ? grip : null);
       if (!source) {
         beam.visible = false;
         reticle.visible = false;
-        continue;
+      } else {
+        this.tempMatrix.identity().extractRotation(source.matrixWorld);
+        const origin = new THREE.Vector3().setFromMatrixPosition(source.matrixWorld);
+        const direction = new THREE.Vector3(0, 0, -1).applyMatrix4(this.tempMatrix);
+
+        beam.position.copy(origin);
+        beam.quaternion.setFromRotationMatrix(this.tempMatrix);
+        beam.visible = true;
+
+        this.raycaster.ray.origin.copy(origin);
+        this.raycaster.ray.direction.copy(direction);
+        const hits = this.raycaster.intersectObjects(this.scene.children, true);
+        const hit = hits.find(h => !h.object.userData?.noHover && !(h.object as any).isLine);
+
+        if (hit) {
+          reticle.position.copy(hit.point);
+          reticle.quaternion.copy(source.quaternion);
+          reticle.visible = true;
+          beam.scale.z = hit.distance;
+        } else {
+          reticle.visible = false;
+          beam.scale.z = DEFAULT_LEN;
+        }
       }
 
-      this.tempMatrix.identity().extractRotation(source.matrixWorld);
-      const origin = new THREE.Vector3().setFromMatrixPosition(source.matrixWorld);
-      const direction = new THREE.Vector3(0, 0, -1).applyMatrix4(this.tempMatrix);
-
-      beam.position.copy(origin);
-      beam.quaternion.setFromRotationMatrix(this.tempMatrix);
-      beam.visible = true;
-
-      this.raycaster.ray.origin.copy(origin);
-      this.raycaster.ray.direction.copy(direction);
-      const hits = this.raycaster.intersectObjects(this.scene.children, true);
-      const hit = hits.find(h => !h.object.userData?.noHover && !(h.object as any).isLine);
-
-      if (hit) {
-        reticle.position.copy(hit.point);
-        reticle.quaternion.copy(source.quaternion);
-        reticle.visible = true;
-        beam.scale.z = hit.distance;
+      // Update fingertip sphere from hand-tracking joints
+      const handObj = hand as any;
+      if (handObj.joints) {
+        const indexTip = handObj.joints['index-finger-tip'] as THREE.Object3D | undefined;
+        if (indexTip && indexTip.visible) {
+          const pos = new THREE.Vector3();
+          indexTip.getWorldPosition(pos);
+          fingertipSphere.position.copy(pos);
+          fingertipSphere.visible = true;
+        } else {
+          fingertipSphere.visible = false;
+        }
       } else {
-        reticle.visible = false;
-        beam.scale.z = DEFAULT_LEN;
+        fingertipSphere.visible = false;
       }
     }
   }

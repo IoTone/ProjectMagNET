@@ -1,0 +1,92 @@
+{
+  "images" : [
+    {
+      "filename" : "icon_48.png",
+      "idiom" : "watch",
+      "role" : "notificationCenter",
+      "scale" : "2x",
+      "size" : "24.0x24.0",
+      "subtype" : "38mm"
+    },
+    {
+      "filename" : "icon_55.png",
+      "idiom" : "watch",
+      "role" : "notificationCenter",
+      "scale" : "2x",
+      "size" : "27.5x27.5",
+      "subtype" : "42mm"
+    },
+    {
+      "filename" : "icon_58.png",
+      "idiom" : "watch",
+      "role" : "companionSettings",
+      "scale" : "2x",
+      "size" : "29.0x29.0"
+    },
+    {
+      "filename" : "icon_87.png",
+      "idiom" : "watch",
+      "role" : "companionSettings",
+      "scale" : "3x",
+      "size" : "29.0x29.0"
+    },
+    {
+      "filename" : "icon_80.png",
+      "idiom" : "watch",
+      "role" : "appLauncher",
+      "scale" : "2x",
+      "size" : "40.0x40.0",
+      "subtype" : "38mm"
+    },
+    {
+      "filename" : "icon_88.png",
+      "idiom" : "watch",
+      "role" : "appLauncher",
+      "scale" : "2x",
+      "size" : "44.0x44.0",
+      "subtype" : "40mm"
+    },
+    {
+      "filename" : "icon_92.png",
+      "idiom" : "watch",
+      "role" : "appLauncher",
+      "scale" : "2x",
+      "size" : "46.0x46.0",
+      "subtype" : "41mm"
+    },
+    {
+      "filename" : "icon_100.png",
+      "idiom" : "watch",
+      "role" : "appLauncher",
+      "scale" : "2x",
+      "size" : "50.0x50.0",
+      "subtype" : "44mm"
+    },
+    {
+      "filename" : "icon_102.png",
+      "idiom" : "watch",
+      "role" : "appLauncher",
+      "scale" : "2x",
+      "size" : "51.0x51.0",
+      "subtype" : "45mm"
+    },
+    {
+      "filename" : "icon_108.png",
+      "idiom" : "watch",
+      "role" : "appLauncher",
+      "scale" : "2x",
+      "size" : "54.0x54.0",
+      "subtype" : "49mm"
+    },
+    {
+      "filename" : "icon_1024.png",
+      "idiom" : "watch-marketing",
+      "scale" : "1x",
+      "size" : "512.0x512.0"
+    }
+  ],
+  "info" : {
+    "author" : "FiddlerWAIch",
+    "version" : 1
+  }
+}

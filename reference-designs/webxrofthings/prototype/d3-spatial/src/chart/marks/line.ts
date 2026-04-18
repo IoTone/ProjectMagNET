@@ -40,3 +40,35 @@ export function buildLineMark(
 
   return g;
 }
+
+/**
+ * Rebuild the TubeGeometry inside an existing line-mark group with new points.
+ * Disposes old geometry and creates a new one for smooth data updates.
+ */
+export function updateLineMark(
+  group: THREE.Group,
+  points: THREE.Vector3[],
+  opts: LineMarkOptions = {},
+): void {
+  const {
+    radius = 0.004,
+    segments = 8,
+    tubularSegments,
+    curveTension = 0.5,
+  } = opts;
+
+  if (points.length < 2) return;
+
+  // Find the existing mesh
+  const oldMesh = group.children[0] as THREE.Mesh | undefined;
+  if (!oldMesh) return;
+
+  // Dispose old geometry
+  oldMesh.geometry.dispose();
+
+  // Build new geometry
+  const curve = new THREE.CatmullRomCurve3(points, false, 'catmullrom', curveTension);
+  const tubSeg = tubularSegments ?? Math.max(64, points.length * 2);
+  const newGeo = new THREE.TubeGeometry(curve, tubSeg, radius, segments, false);
+  oldMesh.geometry = newGeo;
+}

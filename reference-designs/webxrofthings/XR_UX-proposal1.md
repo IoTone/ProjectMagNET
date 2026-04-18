@@ -720,14 +720,16 @@ Skip list — marks we've decided *not* to ship in 3D because the extra dimensio
 
 ## 11. What Goes Into PROPOSAL.md "UI Spec V1"
 
-Once this proposal is reviewed and revised, the following sections should land in `PROPOSAL.md` under `### UI Spec V1`:
+Once this proposal is reviewed and revised, the following sections should land in `PROPOSAL.md` under `### UI Spec V1`. Status reflects what the `prototype/d3-spatial/` reference implementation has shipped as of 2026-04-18.
 
-- **V1.1** Join-code onboarding flow (from §2)
-- **V1.2** Continuous-awareness HUD spec (from §3)
-- **V1.3** Device introspection UX — the pin + control-puck pattern (R25, from UC2)
-- **V1.4** People introspection UX — the avatar sphere + name tag (R26, from UC2/UC3)
-- **V1.5** Service introspection UX — manifest-driven artifact bloom (R27, from UC3)
-- **V1.6** Data dashboard UX — `d3-spatial` charts as first-class scene objects (R28, from all UCs)
-- **V1.7** Shared-experience coordination model (R29, from UC2/UC3)
+- **V1.1** Join-code onboarding flow (from §2) — **not yet implemented.** The join panel, QR scanner, and rotating-code protocol exist only as design in §2. No code in the prototype.
+- **V1.2** Continuous-awareness HUD spec (from §3) — **partially implemented.** The dataspace chip strip (`DataspaceHud`), audio HUD, and debug HUD are shipped. Missing: latency sparkline, battery/device count, lock-state icon.
+- **V1.3** Device introspection UX — the pin + control-puck pattern (R25, from UC2) — **not yet implemented.** No device pins or control pucks exist. The room-scale scenario remains design-only.
+- **V1.4** People introspection UX — the avatar sphere + name tag (R26, from UC2/UC3) — **not yet implemented.** Multi-user presence is not wired.
+- **V1.5** Service introspection UX — manifest-driven artifact bloom (R27, from UC3) — **partially implemented.** The manifest schema (`DataspaceManifest`, `MarkSpec`) and manifest loader (`loadManifest`, `registerAllBuilders`) are shipped. Manifest-driven artifact *bloom* (proximity-triggered appearance within ~1 m of a poster) is not wired.
+- **V1.6** Data dashboard UX — `d3-spatial` charts as first-class scene objects (R28, from all UCs) — **implemented.** Four chart marks (line, bar, scatter, arc) plus seven spatial viz marks (tree, treemap, sunburst, circular packing, force graph, ridgeline, sankey) are shipped. Fluent Chart API, per-node interaction (hover, select, drag, drill-in/out), animated transitions, live data streaming, breadcrumb trails, and per-viz HUD buttons all work. Full interaction via desktop mouse and XR controller ray. Multi-hand support for force graph. FingertipGrab for hand-tracking direct manipulation. XRBrush for sweep-select.
+- **V1.7** Shared-experience coordination model (R29, from UC2/UC3) — **not yet implemented.** No multi-user synchronization, avatar mirroring, or coordination locks. Dataspace federation is visual-only (focus dim).
+- **V1.8** Spatial audio model (from §8) — **implemented.** `THREE.PositionalAudio` per mark with procedural sine-tick on hover. `AmbientBed` wraps Omnitone FOA renderer with head-pose rotation. In-memory 4-channel procedural drone ships as test bed. AudioListener re-parented to XR camera on session start. Manifest schema includes `ambisonicBedUrl` and `acousticEnvironment` fields. User opt-in required for ambient beds.
+- **V1.9** Manifest schema (from §9, §10) — **implemented.** `DataspaceManifest` type with `version`, `name`, `scaleTag`, `owner`, `ambisonicBedUrl`, `acousticEnvironment`, `marks[]`, and `joinCode` config. `MarkSpec` type covering all 11 shipped mark types plus 4 future types (`parallel`, `tangled-tree`, `edge-bundle`, `hexbin`). Inline and URL data sources. Builder registration pattern decouples manifest from rendering. Example manifest included in `src/manifest/schema.ts`.
 
 Each section in the final spec should include: a labeled wireframe, the three-mesh-ui component tree, the interaction state machine, and the minimum manifest schema the dataspace must publish for that surface to render.

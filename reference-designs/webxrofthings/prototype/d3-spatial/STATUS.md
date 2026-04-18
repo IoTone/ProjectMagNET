@@ -1,92 +1,155 @@
 # d3-spatial prototype — status
 
-Snapshot: 2026-04-15 · Vite + three.js 0.161 + three-mesh-ui 6.5.4 + troika-three-text + Omnitone FOA + d3 core modules.
+Snapshot: 2026-04-18 · Vite + three.js 0.161 + three-mesh-ui 6.5.4 + troika-three-text + Omnitone FOA + d3 core modules.
 
 ---
 
 ## What works
 
-**Render & session (M0)**
+### Render & session (M0)
+
 - WebXR `immersive-ar` boot, `local-floor` reference, passthrough via `alpha=0` clear color on `sessionstart`.
-- UI anchor that places 1.2 m in front of the user at eye level (camera y − 0.1 m). No hard-coded floor height.
+- UI anchor that places 1.2 m in front of the user at eye level (camera y - 0.1 m). No hard-coded floor height.
 - Controller ray + 25 mm yellow reticle with halo, `depthTest: false`, renders through everything.
 - Desktop fallback: solid-background preview on a non-XR page, full interaction via mouse.
+- Floor grid placed under head using `EYE_TO_FLOOR_M = 1.55` heuristic; "Set Floor" button re-calibrates.
 
-**Chart primitive (M1 / M1.1)**
+### Chart primitive (M1 / M1.1)
+
 - Fluent API: `new Chart().x(scale).y(scale).mark(type).data(arr).render()`.
 - Four marks: `line` (tube along CatmullRom), `bar` (InstancedMesh of boxes), `scatter` (InstancedMesh of spheres), `arc` (tube along a 2D curve; used for the TBOC breadcrumb).
 - Axis frame auto-built from scales' domains.
 - Per-chart invisible "brush plane" for hit-testing drag interactions.
 
-**Interaction (M2 / M4 / M5)**
-- Hover on any mark via desktop pointer OR XR controller ray — same state machine, different raycast source.
-- Dramatic feedback (per the best-practices issue): 1.05× scale, emissive bump +0.6, white outline box at `renderOrder 995`.
+### Interaction (M2 / M4 / M5)
+
+- Hover on any mark via desktop pointer OR XR controller ray -- same state machine, different raycast source.
+- Dramatic feedback (per the best-practices issue): 1.05x scale, emissive bump +0.6, white outline box at `renderOrder 995`.
+- 150 ms exit debounce prevents flicker when pointer briefly leaves a target.
 - Brush selection: drag across any chart to rubberband a translucent cyan rectangle. On release, indices of selected data are returned. Works both via `page.mouse` (smoke) and real pointer drag.
 - Inspector card floats adjacent to the hovered mark (three-mesh-ui Block + three troika Text children). Smart auto-placement flips the card to the side with clearance.
 
-**Dataspace federation (M7)**
-- `DataspaceRegistry` + `DataspaceHud` spatial chip strip with per-dataspace color/glyph.
-- Focus dims non-focused marks (scale 0.7, opacity 0.08, emissive suppressed).
-- Three demo dataspaces (UC1 wrist 👤, UC2 room 🏠, UC3 poster 🏛) with marks tagged.
+### Spatial audio (M6)
 
-**Audio (M3 / M6)**
 - `THREE.PositionalAudio` per mark with procedural sine-tick on hover-in. `AudioListener` re-parented to XR camera on `sessionstart`.
 - `AmbientBed` wraps Omnitone FOA renderer; in-memory 4-channel procedural drone as a test bed; rotation matrix updated per frame.
 - Visible audio HUD: "♪ ambient: ON · 4ch FOA · HRTF rotating".
 
-**Tooling**
+### Dataspace federation (M7)
+
+- `DataspaceRegistry` + `DataspaceHud` spatial chip strip with per-dataspace color/glyph.
+- Focus dims non-focused marks (scale 0.7, opacity 0.08, emissive suppressed).
+- Three demo dataspaces (UC1 wrist, UC2 room, UC3 poster) with marks tagged.
+
+### Gallery visualizations (M8-M11)
+
+Seven spatial marks implemented as a gallery scene accessible via toolbar or `G` key:
+
+- **Tree** (radial node-link) — `d3-hierarchy` cluster layout, InstancedMesh spheres, LineSegments edges, troika billboard labels.
+- **Treemap** (extruded city-block) — `d3-hierarchy` treemap layout, InstancedMesh boxes with per-instance color, extrusion height by value.
+- **Sunburst** (stacked discs) — `d3-hierarchy` partition layout, ExtrudeGeometry arc segments per node, z-offset by depth.
+- **Circular packing** (nested spheres) — `d3-hierarchy` pack layout, individual SphereGeometry meshes with depth-keyed opacity and wireframe root.
+- **Force graph** (d3-force-3d) — full 3D physics simulation, InstancedMesh nodes, LineSegments edges, live per-frame tick.
+- **Ridgeline** (animated mountain range) — depth-offset density ribbons with time-based animation, fill triangles + line overlay.
+- **Sankey** (3D flow tubes) — `d3-sankey` layout, InstancedMesh node boxes, TubeGeometry flow links with radius proportional to value.
+
+### Force graph interaction (M12)
+
+- Per-node hover with NodeHoverFx (halo + billboard label).
+- Drag any node: `pinNode(i, worldPos)` sets `fx/fy/fz`, physics keeps running around pinned node.
+- Live physics reflow on drag (reheat simulation alpha).
+
+### Tree per-node interaction (M13a)
+
+- Per-node hover with NodeHoverFx.
+- Pinch-select (toggleSelected) with translucent selection markers.
+- Select on non-leaf triggers drill-in.
+
+### Treemap / sunburst / pack per-node interaction (M13b)
+
+- Per-node/segment hover with NodeHoverFx.
+- Toggle-select with selection markers.
+- Select on parent-group triggers drill-in.
+
+### Drill-in transitions (M14)
+
+- All four hierarchy marks (tree, treemap, sunburst, pack) support animated drill-in and drill-out.
+- Tree and treemap: `tweenInstanced` / `tweenInstancedBoxes` with easeExpOut over 500 ms.
+- Sunburst and pack: `tweenMeshes` scale-from-zero animation on rebuild.
+- Focus path tracking: `getFocusPath()` / `getFocusLabels()` for breadcrumb trail.
+
+### Multi-hand interaction (M15)
+
+- Per-hand hover state: indices 0, 1 = XR hands; index 2 = mouse.
+- Two-hand simultaneous hover + drag on force graph (independent NodeHoverFx per hand).
+- Per-hand drag begin/end/move in the Interact state machine.
+- Per-hand press lock and select.
+
+### Sankey, ridgeline animation, breadcrumb, per-viz HUD (M16)
+
+- Sankey mark with `d3-sankey` layout, node hover, and flow tubes.
+- Ridgeline time-based animation (phase-shifted sample offset per row).
+- Breadcrumb trail (three-mesh-ui Block strip) on each hierarchy viz cell, clickable to navigate.
+- Per-viz VizHud with Back/Reset buttons; Back visible only when drilled in.
+- Manifest schema v1 (`DataspaceManifest`, `MarkSpec`, `MarkType`) covering all 11 mark types plus future types.
+
+### Fingertip grab, XR brush, live streaming (M17)
+
+- **FingertipGrab**: hand-tracking joint-based grab (index-finger-tip + thumb-tip distance < 0.02 m threshold, grab radius 0.025 m). Proximity and grab events fire per hand.
+- **XRBrush**: controller sweep-select — hold trigger > 200 ms to enter brush mode, sweep over force nodes to batch-select.
+- **Live data streaming**: HR line chart auto-updates every 2 s with synthetic data; `Chart.updateData()` rebuilds geometry with scale domain auto-expansion.
+
+---
+
+## Tooling
+
 - `npm run dev` — Vite dev server, allowed hosts include `*.trycloudflare.com` / `*.ngrok-free.app` / `*.ngrok.app` / `*.ngrok.io` / `*.loca.lt`.
-- `npm run smoke` — Playwright-driven headless capture, 30 shots across 7 milestone sections, writes `demo/shots/*.png` and `demo/index.html`.
-- `npm run typecheck` and `npm run build` — both pass.
-- README has tunnel docs (cloudflared / ngrok / mkcert) and troubleshooting.
+- `npm run smoke` — Playwright-driven headless capture, 79 screenshots across milestones M1.1-M17, writes `demo/shots/*.png` and `demo/index.html`.
+- `npm run typecheck` — `tsc --noEmit`, passes.
+- `npm run build` — Vite production build, passes.
+- Gallery default scene with toolbar (Gallery / Charts / Recenter / Set Floor). `G` key toggles.
 
 ---
 
-## Known bugs and rough edges
+## Platform support
 
-**Meta Quest 3 (primary reliable test platform)**
-- Meta Browser (Chromium-based) is the target. `immersive-ar` with passthrough works out of the box.
-- `local-floor` reference space is honored, so `camera.y` ≈ eye height above actual floor. The `EYE_TO_FLOOR_M = 1.55` heuristic is harmless but not strictly needed here; the "Set Floor" button is a no-op improvement over the correct default.
-- Hand tracking 2.0 and Touch Plus controllers both fire standard `selectstart`/`selectend`. Controller ray path is the most precise; hands are fine for most viz interactions.
-- Full 25-joint hand skeleton available via `renderer.xr.getHand(i)` — the roadmap's Level 2 direct-fingertip grab would land here first.
-- **Remote devtools:** plug Quest into a desktop, enable Developer Mode, visit `chrome://inspect` in Chromium on desktop — lets you inspect the in-headset page, see console logs, and set breakpoints. This is the single best convenience over any other device we're testing.
-- **Keyboard shortcut:** pair a Bluetooth keyboard → the `G` key toggle for gallery/charts works. Makes rapid iteration on scenes much faster than the toolbar buttons. Physical keyboards also let you dump live state from the browser console.
-- **Screenshot/record:** the system-level record feature captures passthrough + XR content, good for sharing results. The browser's own screenshot doesn't capture the XR frame — use the system capture instead.
-- **Performance:** 90 Hz target achievable; physics tick each frame at 28 force nodes is well under budget. Watch for frame drops when dragging a node (reflow tension increases CPU load).
-- **Audio:** WebAudio + PositionalAudio + Omnitone all work. First user gesture initializes the context — tap or pinch once before expecting sound.
-- **Limitations shared with Spectacles:** no WebBLE / WebUSB / WebSerial / WebHID in Meta Browser (mirrors the Wolvic gap, see `XR_UX-proposal1.md §7`). IoT device integration from WebXR is not possible without a bridge.
+### Meta Quest 3 (primary)
 
-**Snap Spectacles '24 (reported)**
-- Initial anchor placement was far overhead before the `Math.max(1.2, pos.y - 0.15)` clamp was removed. Post-fix, expected to spawn at eye level; re-verify.
-- Targeting was difficult — added: bigger reticle, always-visible ray, XR controller raycast wired into `Interact`, pinch-in-empty-air to recenter. Re-verify.
-- Audio not confirmed on device yet.
-- **Keyboard:** Spectacles has no paired keyboard, so `G` shortcut and DevTools console are unavailable. All scene control must go through the toolbar buttons or URL query (`?scene=charts`).
-- **Reference space:** local-floor may not be honored — floor grid uses `cam.y − 1.55` heuristic as a fallback. The "Set Floor" toolbar button lets the user re-calibrate if the estimate is off.
-- **Text palette:** Spectacles' optical waveguide attenuates blue disproportionately; the warm amber/cream palette (`src/ui/palette.ts`) is tuned for this. Applies equally well on Quest 3 but less critical there.
-- Debug HUD (`XR · cam y=… · ctrls=… · hover=…`) is now visible inside the UI panel bottom-right for on-device diagnostics.
+- Meta Browser (Chromium-based) target. `immersive-ar` with passthrough works out of the box.
+- `local-floor` reference space honored. "Set Floor" button for manual calibration.
+- Hand tracking 2.0 and Touch Plus controllers both fire standard `selectstart`/`selectend`.
+- Full 25-joint hand skeleton via `renderer.xr.getHand(i)` — used by FingertipGrab.
+- **Remote devtools:** `chrome://inspect` on desktop for in-headset debugging.
+- **Keyboard:** Bluetooth keyboard `G` key toggle for gallery/charts.
+- **Performance:** 90 Hz target achievable; force physics tick per frame at 28 nodes is well under budget.
+- **Audio:** WebAudio + PositionalAudio + Omnitone all work. First gesture initializes context.
 
-**Cross-device uncertainty**
-- Spectacles may emit input via `inputSourceChange` rather than standard `selectstart/end` controller events. If `ctrls=0` on device despite visible hands, need the `inputsourceschange` path.
-- Listener re-parenting on XR session assumes `renderer.xr.getCamera()` receives head-pose updates; verified under three.js 0.161, not under Spectacles builds.
-- Omnitone's FOA renderer has not been exercised on-device; initialization may block on an AudioContext in `suspended` state until first user gesture.
+### Snap Spectacles '24 (secondary)
 
-**Architectural rough edges**
-- `DragBrush` has no XR-controller drag path; on-device brushing is not wired.
-- `hover(null)` / `focusDataspace` must hard-clear all hover feedback because the state machine can be out of sync when the pointer moves during long-running events. Works but fragile.
-- `Material.visible = false` vs. `Object3D.visible = false` — raycaster honors the latter, not the former. The invisible brush plane tags itself via `userData.isBrushPlane` and is filtered in hit lists; this convention must propagate to any future invisible hit-targets.
-- `Raycaster.params.Line.threshold` default of 1.0 m was making axis `THREE.Line` segments hit-targets from across the room. Tightened to 0.0005 and `isLine`/`isLineSegments` are filtered from hover hits.
-- No accessibility layer — every audio cue should have a visible equivalent; we have not enforced this invariant.
+- Optical passthrough constraints: warm amber/cream palette (`src/ui/palette.ts`) tuned for waveguide attenuation.
+- No paired keyboard — all control via toolbar or URL query (`?scene=charts`).
+- `local-floor` may not be honored; floor grid uses heuristic fallback.
+- Debug HUD visible inside UI panel for on-device diagnostics.
+- Various visual issues deferred.
+
+### Desktop (full interaction)
+
+- Full mouse-based interaction: hover, click-select, drag-brush, force-drag.
+- Smoke test rendering via Playwright headless captures.
+
+---
+
+## Known issues
+
+- Quest Touch controllers may show no beam (grip-space fallback may not work for all controller types).
+- Spectacles: input may emit via `inputSourceChange` rather than `selectstart/end`. If `ctrls=0` despite visible hands, the `inputsourceschange` path is needed.
+- No accessibility layer enforced — audio cues lack guaranteed visible equivalents.
 - No persistent user prefs (volume, locale, reduced motion). All state is session-local.
-
----
-
-## What's NOT implemented yet
-
-- Real XR controller brush (drag across a chart with pinch-hold).
-- Security boundary for cross-dataspace interaction (currently a focus is just a visual dim; data-layer isolation is not enforced).
-- Manifest schema / loader — the demo marks are hard-coded; a dataspace-published manifest would let any of these renderers drop in.
-- Offline cache (UC4).
-- Any of the hierarchy / graph marks — see `../../XR_UX-proposal1.md` §9 for the design catalog that's next to land.
+- Bundle size not split — needs code splitting for production.
+- `DragBrush` has no XR-controller drag path; on-device chart brushing is desktop-only.
+- `hover(null)` / `focusDataspace` must hard-clear all hover feedback (fragile state sync).
+- Security boundary for cross-dataspace interaction is visual-only (focus dim); data-layer isolation not enforced.
+- Offline cache (UC4) not implemented.
 
 ---
 
@@ -94,36 +157,60 @@ Snapshot: 2026-04-15 · Vite + three.js 0.161 + three-mesh-ui 6.5.4 + troika-thr
 
 ```
 src/
-  main.ts                         session boot, anchor, demo wiring
-  xrRig.ts                        controllers + reticle + ray, select events
+  main.ts                         session boot, anchor, demo wiring, toolbar, live HR
+  xrRig.ts                        controllers + reticle + ray + fingertip sphere, select events, hand joints
   anchor.ts                       (unused after M1; kept for reference)
   chart/
-    Chart.ts                      fluent API, mark dispatch, brush, xFractionAt
+    Chart.ts                      fluent API, mark dispatch, brush, xFractionAt, updateData
     marks/line.ts                 TubeGeometry along CatmullRomCurve3
     marks/bar.ts                  InstancedMesh of boxes
     marks/scatter.ts              InstancedMesh of spheres
     marks/arc.ts                  TubeGeometry arc + tick spheres
+  viz/
+    tree.ts                       radial/wall tree, drill-in/out, selection, tween
+    treemap.ts                    extruded treemap, drill-in/out, selection, tween
+    sunburst.ts                   stacked-disc sunburst, drill-in/out, selection, tween
+    pack.ts                       circular packing nested spheres, drill-in/out, selection, tween
+    force.ts                      d3-force-3d graph, pin/unpin, reheat
+    ridgeline.ts                  animated depth-offset density ribbons
+    sankey.ts                     d3-sankey layout, flow tubes
   interact/
-    Interact.ts                   hover state machine, desktop + XR raycast
-    DragBrush.ts                  pointer-drag brush; XR drag not wired yet
+    Interact.ts                   hover state machine, desktop + XR raycast, per-hand state, drag
+    DragBrush.ts                  pointer-drag brush on charts (desktop)
+    FingertipGrab.ts              hand-tracking joint-based grab (index-finger-tip + thumb-tip)
+    XRBrush.ts                    XR controller sweep-select (hold-to-brush)
   ui/
-    InspectorCard.ts              three-mesh-ui Block + troika Text card
+    InspectorCard.ts              three-mesh-ui Block + troika Text card, placeNear auto-placement
+    NodeHoverFx.ts                halo sphere + billboard label, follows hovered node
+    Toolbar.ts                    horizontal button strip (Gallery/Charts/Recenter/Set Floor)
+    Breadcrumb.ts                 clickable breadcrumb trail for hierarchy drill navigation
+    VizHud.ts                     per-viz Back/Reset buttons, depth-aware visibility
+    palette.ts                    warm amber/cream text palette for optical passthrough
   audio/
     SpatialHoverAudio.ts          per-mark PositionalAudio + procedural tick
     AmbientBed.ts                 Omnitone FOA wrapper, load() or loadFromBuffer()
     proceduralBed.ts              in-memory 4-channel FOA drone
   dataspace/
     Dataspace.ts                  Registry + HUD chip strip + applyFocusDim
+  manifest/
+    schema.ts                     DataspaceManifest, MarkSpec, MarkType types + example
+    loader.ts                     loadManifest(), registerMarkBuilder(), data extractors
+    builders.ts                   registerAllBuilders() — bridges manifest to viz builders
+  util/
+    tween.ts                      tweenInstanced, tweenInstancedBoxes, tweenMeshes, easeExpOut
   demo/
-    marks.ts                      2×2 demo layout
-    heartRate.ts                  synthetic HR series
+    marks.ts                      2x2 demo layout (line, bar, scatter, arc)
+    heartRate.ts                  synthetic HR series generator
+    sampleHierarchy.ts            HNode / GraphData / SankeyData types + sample data
+    vizGallery.ts                 gallery layout for all 7 spatial marks
   types/
     troika-three-text.d.ts        type shim
     omnitone.d.ts                 type shim for esm + bare module
+    d3-force-3d.d.ts              type shim for d3-force-3d
 scripts/
   smoke.mjs                       Playwright capture, gallery generator
 demo/
   index.html                      auto-generated gallery
   shots.json                      shot manifest
-  shots/*.png                     30 screenshots across 7 milestones
+  shots/*.png                     79 screenshots across milestones M1.1-M17
 ```

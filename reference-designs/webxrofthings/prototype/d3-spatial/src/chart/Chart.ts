@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { buildLineMark, LineMarkOptions } from './marks/line';
-import { buildBarMark, BarMarkOptions } from './marks/bar';
+import { buildLineMark, updateLineMark, LineMarkOptions } from './marks/line';
+import { buildBarMark, updateBarMark, BarMarkOptions } from './marks/bar';
 import { buildScatterMark, ScatterMarkOptions } from './marks/scatter';
 import { buildArcMark, ArcMarkOptions } from './marks/arc';
 
@@ -38,6 +38,13 @@ export class Chart {
   private _brushLayer = new THREE.Group();
   private _brushPlane: THREE.Mesh | null = null;
   private _xRange: [number, number] = [0, 0];
+
+  // Live-update tween state
+  private _tweenStart = 0;
+  private _tweenDuration = 300; // ms
+  private _tweenOldPositions: THREE.Vector3[] = [];
+  private _tweenNewPositions: THREE.Vector3[] = [];
+  private _tweening = false;
 
   constructor(opts: ChartOptions = {}) {
     this._opts = opts;
@@ -176,6 +183,105 @@ export class Chart {
       const mat = m.material as THREE.Material | undefined;
       if (mat) mat.dispose();
       this._brushLayer.remove(c);
+    }
+  }
+
+  /**
+   * Update with new data and smoothly tween mark positions.
+   * For line marks: rebuilds geometry with crossfade.
+   * For bar marks: tweens instance heights.
+   * For scatter: rebuilds (no tween — point count may change).
+   */
+  updateData(newData: ChartDatum[]): void {
+    if (!this._x || !this._y || newData.length === 0) return;
+
+    const xa = this._opts.xAccessor ?? ((d: ChartDatum) => (d as { t: number }).t);
+    const ya = this._opts.yAccessor ?? ((d: ChartDatum) => (d as { v: number }).v);
+
+    // Recompute scale domains from new data
+    const xVals = newData.map(d => xa(d) as number);
+    const yVals = newData.map(d => ya(d) as number);
+    const xMin = Math.min(...xVals);
+    const xMax = Math.max(...xVals);
+    const yMin = Math.min(...yVals);
+    const yMax = Math.max(...yVals);
+
+    // Update scale domains if the scale has a domain setter
+    const xScale = this._x as any;
+    const yScale = this._y as any;
+    if (xScale.domain && typeof xScale.domain === 'function') {
+      xScale.domain([xMin, xMax]);
+    }
+    if (yScale.domain && typeof yScale.domain === 'function') {
+      // Keep the existing visual range stable (don't shrink/grow Y too much)
+      const existingYDomain = yScale.domain();
+      yScale.domain([
+        Math.min(existingYDomain[0], yMin - 5),
+        Math.max(existingYDomain[1], yMax + 5),
+      ]);
+    }
+
+    const newPoints = newData.map(d => new THREE.Vector3(
+      this._x!(xa(d) as number),
+      this._y!(ya(d) as number),
+      0,
+    ));
+
+    this._data = newData;
+
+    if (this._mark === 'line') {
+      // For line: rebuild the tube geometry within the existing marks group
+      const lineGroup = this._marks.children[0] as THREE.Group | undefined;
+      if (lineGroup) {
+        updateLineMark(lineGroup, newPoints, this._opts.markOptions as LineMarkOptions);
+      } else {
+        this._marks.clear();
+        this._marks.add(buildLineMark(newPoints, this._opts.markOptions as LineMarkOptions));
+      }
+    } else if (this._mark === 'bar') {
+      const barGroup = this._marks.children[0] as THREE.Group | undefined;
+      const baseline = this._opts.baseline ?? this._y!((this._y as unknown as { domain: () => [number, number] }).domain()[0]);
+      if (barGroup) {
+        updateBarMark(barGroup, newPoints, baseline, this._opts.markOptions as BarMarkOptions);
+      } else {
+        this._marks.clear();
+        this._marks.add(buildBarMark(newPoints, baseline, this._opts.markOptions as BarMarkOptions));
+      }
+    } else {
+      // For scatter/arc: full rebuild
+      this._marks.clear();
+      if (this._mark === 'scatter') {
+        this._marks.add(buildScatterMark(newPoints, this._opts.markOptions as ScatterMarkOptions));
+      }
+    }
+
+    // Rebuild axes and brush plane
+    this._axes.clear();
+    if (this._opts.showAxes !== false && this._mark !== 'arc') {
+      this._axes.add(buildAxes(this._x, this._y));
+    }
+
+    const xDomain = (this._x as unknown as { domain: () => [number, number] }).domain();
+    const yDomain = (this._y as unknown as { domain: () => [number, number] }).domain();
+    const xPx0 = this._x(xDomain[0]);
+    const xPx1 = this._x(xDomain[1]);
+    const yPx0 = this._y(yDomain[0]);
+    const yPx1 = this._y(yDomain[1]);
+    this._xRange = [Math.min(xPx0, xPx1), Math.max(xPx0, xPx1)];
+
+    const w = Math.abs(xPx1 - xPx0);
+    const h = Math.abs(yPx1 - yPx0);
+    if (this._brushPlane) this.object3D.remove(this._brushPlane);
+    if (this._mark !== 'arc' && w > 0 && h > 0) {
+      const plane = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, h),
+        new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }),
+      );
+      plane.position.set((xPx0 + xPx1) / 2, (yPx0 + yPx1) / 2, 0);
+      plane.userData.isBrushPlane = true;
+      plane.userData.chart = this;
+      this._brushPlane = plane;
+      this.object3D.add(plane);
     }
   }
 

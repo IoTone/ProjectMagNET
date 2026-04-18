@@ -300,6 +300,16 @@ const M16_SHOTS = [
     type: 'lookAt', viz: 'ridgeline', distance: 0.28 },
 ];
 
+// M17 — XR brush selection + live data
+const M17_SHOTS = [
+  { id: 'm17-xr-brush', ms: 'M17', title: 'XR brush · batch-select force nodes',
+    caption: 'Simulated brush selection across multiple force graph nodes (3, 5, 7, 9)',
+    distance: 0.22, action: 'brush-select', nodeIdxs: [3, 5, 7, 9] },
+  { id: 'm17-live-data', ms: 'M17', title: 'Live data · HR line chart updated',
+    caption: 'Heart rate line chart after one data-shift cycle — new sample on right, oldest scrolled off left',
+    action: 'live-update' },
+];
+
 // M16b — breadcrumb trail + VizHud per-cell buttons
 const M16B_SHOTS = [
   { id: 'm16-breadcrumb-drilled', ms: 'M16b', title: 'Breadcrumb · drilled into sensors',
@@ -718,6 +728,48 @@ try {
     const d = (window).__demo;
     while (d.treeFocusPath().length > 0) d.treeDrillOut();
   });
+
+  // M17 — XR brush selection + live data
+  for (const s of M17_SHOTS) {
+    if (s.action === 'brush-select') {
+      await page.evaluate(({ distance, nodeIdxs }) => {
+        const d = (window).__demo;
+        d.showVizGallery(true);
+        d.lookAtForce(distance);
+        d.forceHover(null);
+        // Simulate brush selection
+        const result = d.forceBrushSelect(nodeIdxs);
+        // Show hover on first selected node for visual
+        d.forceHover(nodeIdxs[0]);
+        return result;
+      }, s);
+      await sleep(500);
+    } else if (s.action === 'live-update') {
+      await page.evaluate(() => {
+        const d = (window).__demo;
+        d.showVizGallery(false);
+        d.setLiveHR(false); // Pause auto-updates for deterministic shot
+        // Trigger manual updates
+        d.updateHRData();
+        d.updateHRData();
+        d.updateHRData();
+      });
+      await sleep(600);
+      await page.evaluate(() => {
+        (window).__demo.setCameraPose([0, 1.3, 0.85], [0, 1.3, 0]);
+      });
+      await sleep(300);
+    }
+    const file = `${OUT_DIR}/${s.id}.png`;
+    await page.screenshot({ path: file, fullPage: false });
+    shots.push({
+      id: s.id, milestone: s.ms, title: s.title, caption: s.caption,
+      file: `shots/${s.id}.png`, ts: new Date().toISOString(),
+    });
+    console.log(`  shot -> ${file}`);
+  }
+  // Re-enable live HR
+  await page.evaluate(() => { (window).__demo.setLiveHR(true); });
 } catch (e) {
   console.error('capture failed:', e.message);
   errors.push(`capture: ${e.message}`);

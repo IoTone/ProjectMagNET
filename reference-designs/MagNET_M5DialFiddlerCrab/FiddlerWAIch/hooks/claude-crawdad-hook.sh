@@ -1,0 +1,1 @@
+../../M5StickCPlus-Blinky_Crawdad_OpenWR/hooks/claude-crawdad-hook.sh

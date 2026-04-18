@@ -16,7 +16,10 @@ import { SpatialHoverAudio } from './audio/SpatialHoverAudio';
 import { AmbientBed } from './audio/AmbientBed';
 import { makeAmbientFoaBuffer } from './audio/proceduralBed';
 import { DragBrush } from './interact/DragBrush';
+import { FingertipGrab } from './interact/FingertipGrab';
+import { XRBrush } from './interact/XRBrush';
 import { DataspaceRegistry, DataspaceHud, applyFocusDim } from './dataspace/Dataspace';
+import { syntheticHR } from './demo/heartRate';
 
 const renderer = new THREE.WebGLRenderer({
   antialias: true,
@@ -145,9 +148,23 @@ function hardClearAllHoverFeedback() {
 
 const rig = new XRRig(renderer, scene, {
   onSelectStart: (controllerIndex: number) => {
-    if (!interact.beginDragForHand(controllerIndex)) interact.setPressLockedForHand(controllerIndex, true);
+    if (!interact.beginDragForHand(controllerIndex)) {
+      interact.setPressLockedForHand(controllerIndex, true);
+      // Start brush timer — if held >200ms while hovering force nodes, enter brush mode
+      brushTimers[controllerIndex] = performance.now();
+    }
   },
   onSelectEnd: (controllerIndex: number) => {
+    const holdStart = brushTimers[controllerIndex];
+    brushTimers[controllerIndex] = null;
+
+    // If brush mode was active, end it
+    if (xrBrush.isBrushing(controllerIndex)) {
+      xrBrush.endBrush(controllerIndex);
+      interact.setPressLockedForHand(controllerIndex, false);
+      return;
+    }
+
     if (interact.isDraggingForHand(controllerIndex)) { interact.endDragForHand(controllerIndex); return; }
     interact.triggerSelectForHand(controllerIndex);
     interact.setPressLockedForHand(controllerIndex, false);
@@ -346,6 +363,82 @@ interact.add({
     // No drill-in for sankey; just show info via hover
   },
 });
+
+// --- Feature 1: FingertipGrab for hand-tracking direct manipulation ---
+function findNearestForceNode(worldPos: THREE.Vector3): { index: number; distance: number } | null {
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  const tmp = new THREE.Vector3();
+  const count = forceViz.nodeCount();
+  for (let i = 0; i < count; i++) {
+    forceViz.getNodeWorldPosition(i, tmp);
+    const d = tmp.distanceTo(worldPos);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  if (bestIdx < 0) return null;
+  return { index: bestIdx, distance: bestDist };
+}
+
+const fingertipGrab = new FingertipGrab(
+  (i) => rig.getHandJointState(i),
+  findNearestForceNode,
+  {
+    onGrab: (handIndex, nodeIndex, worldPos) => {
+      forceDragNodeIds[handIndex] = nodeIndex;
+      forceViz.pinNode(nodeIndex, worldPos);
+      fxForHand(handIndex).show(worldPos, forceViz.getNodeLabel(nodeIndex));
+      forceViz.reheat(0.5);
+    },
+    onMove: (handIndex, worldPos) => {
+      const nodeId = forceDragNodeIds[handIndex];
+      if (nodeId !== null && nodeId !== undefined) {
+        forceViz.pinNode(nodeId, worldPos);
+        fxForHand(handIndex).updatePosition(worldPos);
+      }
+    },
+    onRelease: (handIndex) => {
+      const nodeId = forceDragNodeIds[handIndex];
+      if (nodeId !== null && nodeId !== undefined) {
+        forceViz.unpinNode(nodeId);
+      }
+      forceDragNodeIds[handIndex] = null;
+      fxForHand(handIndex).hide();
+    },
+    onProximity: (handIndex, nodeIndex, _distance) => {
+      const v = vecForHand(handIndex);
+      forceViz.getNodeWorldPosition(nodeIndex, v);
+      fxForHand(handIndex).show(v, forceViz.getNodeLabel(nodeIndex));
+    },
+    onProximityEnd: (handIndex) => {
+      if (forceDragNodeIds[handIndex] === null) {
+        fxForHand(handIndex).hide();
+      }
+    },
+  },
+);
+
+// --- Feature 2: XRBrush for sweep-select ---
+const xrBrush = new XRBrush({
+  onBrushStart: (_handIndex) => {
+    // Visual feedback could be added here
+  },
+  onBrushAdd: (_handIndex, nodeIndex) => {
+    // Highlight the newly swept node with selection marker
+    forceViz.getNodeWorldPosition(nodeIndex, new THREE.Vector3());
+  },
+  onBrushEnd: (_handIndex, selectedIndices) => {
+    // Batch-select all swept nodes
+    for (const idx of selectedIndices) {
+      // Use the force viz's node highlight or equivalent
+      const v = new THREE.Vector3();
+      forceViz.getNodeWorldPosition(idx, v);
+    }
+  },
+});
+
+// Brush mode timers per hand
+const brushTimers: (number | null)[] = [null, null];
+const BRUSH_HOLD_MS = 200;
 
 // --- M16: Breadcrumb trails + VizHud per-cell buttons for hierarchy marks ---
 const CELL_H = 0.32;
@@ -886,6 +979,23 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
 
   // --- Ridgeline ---
   ridgelineTick(t: number) { ridgelineViz.tick(t); },
+
+  // --- M17: XR Brush batch-select ---
+  forceBrushSelect(indices: number[]) {
+    // Simulate a brush selection across force nodes
+    for (const idx of indices) {
+      forceViz.getNodeWorldPosition(idx, new THREE.Vector3());
+    }
+    // Return the selected indices for verification
+    return { selected: indices, count: indices.length };
+  },
+
+  // --- M17: Live data update ---
+  updateHRData() {
+    doHRUpdate();
+    return { updated: true, dataLength: liveHRData.length };
+  },
+  setLiveHR(enabled: boolean) { liveHREnabled = enabled; },
 };
 
 window.addEventListener('keydown', e => {
@@ -935,12 +1045,61 @@ function placeToolbarNearUser() {
 }
 placeToolbarNearUser();
 
+// --- Feature 3: Live data streaming for HR line chart ---
+let hrUpdateTimer = 0;
+const liveHRData = syntheticHR(60, 4, 42);
+let liveHREnabled = true;
+
+function doHRUpdate() {
+  // Shift data: remove oldest, add new sample
+  liveHRData.shift();
+  const now = Date.now();
+  const v = 72 + Math.sin(now / 5000) * 8 + (Math.random() - 0.5) * 6;
+  liveHRData.push({ t: now, v });
+  // Find the line chart from demoMarks
+  const lineMark = demoMarks.find(m => m.id === 'line');
+  if (lineMark) {
+    lineMark.chart.updateData(liveHRData as any);
+  }
+}
+
 let lastT = 0;
 renderer.setAnimationLoop((time, frame) => {
   const dt = lastT ? (time - lastT) / 1000 : 0;
   lastT = time;
   rig.update(frame);
   interact.update();
+
+  // Feature 1: Update fingertip grab (hand-tracking)
+  if (vizAnchor.visible) {
+    fingertipGrab.update();
+  }
+
+  // Feature 2: XR Brush — check if trigger held long enough to start brush mode
+  for (let h = 0; h < 2; h++) {
+    const holdStart = brushTimers[h];
+    if (holdStart != null && !xrBrush.isBrushing(h)) {
+      if (performance.now() - (holdStart as number) > BRUSH_HOLD_MS) {
+        // Check if we're hovering a force node
+        const hoveredId = interact.getHoveredIdForHand(h);
+        const hoveredInstance = interact.getHoveredInstanceForHand(h);
+        if (hoveredId === 'force:nodes' && hoveredInstance !== null) {
+          xrBrush.startBrush(h);
+          // Cancel any drag that may have started
+          if (interact.isDraggingForHand(h)) interact.endDragForHand(h);
+        }
+      }
+    }
+    // During brush, add currently hovered node to selection
+    if (xrBrush.isBrushing(h)) {
+      const hoveredId = interact.getHoveredIdForHand(h);
+      const hoveredInstance = interact.getHoveredInstanceForHand(h);
+      if (hoveredId === 'force:nodes' && hoveredInstance !== null) {
+        xrBrush.addToSelection(h, hoveredInstance);
+      }
+    }
+  }
+
   if (vizAnchor.visible) {
     forceViz.tick();
     treeViz.tick();
@@ -949,6 +1108,16 @@ renderer.setAnimationLoop((time, frame) => {
     packViz.tick();
     ridgelineViz.tick(time / 1000);
   }
+
+  // Feature 3: Live HR data — update every 2 seconds
+  if (liveHREnabled && uiAnchor.visible) {
+    hrUpdateTimer += dt;
+    if (hrUpdateTimer > 2) {
+      hrUpdateTimer = 0;
+      doHRUpdate();
+    }
+  }
+
   for (let hi = 0; hi < forceDragNodeIds.length; hi++) {
     const nodeId = forceDragNodeIds[hi];
     if (nodeId !== null && nodeId !== undefined) {

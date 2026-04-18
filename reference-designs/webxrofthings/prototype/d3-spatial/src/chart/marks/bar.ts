@@ -42,3 +42,44 @@ export function buildBarMark(
   g.add(mesh);
   return g;
 }
+
+/**
+ * Update an existing bar-mark group's InstancedMesh with new data points.
+ * Rebuilds the InstancedMesh if the count changed, otherwise just updates matrices.
+ */
+export function updateBarMark(
+  group: THREE.Group,
+  points: THREE.Vector3[],
+  baseline: number,
+  opts: BarMarkOptions = {},
+): void {
+  const { color = 0x66ccff, width = 0.008, depth = 0.008 } = opts;
+  if (points.length === 0) return;
+
+  const oldMesh = group.children[0] as THREE.InstancedMesh | undefined;
+
+  if (!oldMesh || oldMesh.count !== points.length) {
+    // Count changed — full rebuild
+    group.clear();
+    if (oldMesh) {
+      oldMesh.geometry.dispose();
+      (oldMesh.material as THREE.Material).dispose();
+    }
+    group.add(buildBarMark(points, baseline, opts).children[0]!);
+    return;
+  }
+
+  // Same count — just update matrices (tween-like instant update)
+  const m = new THREE.Matrix4();
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i]!;
+    const h = Math.max(1e-4, p.y - baseline);
+    m.compose(
+      new THREE.Vector3(p.x, baseline + h / 2, 0),
+      new THREE.Quaternion(),
+      new THREE.Vector3(width, h, depth),
+    );
+    oldMesh.setMatrixAt(i, m);
+  }
+  oldMesh.instanceMatrix.needsUpdate = true;
+}

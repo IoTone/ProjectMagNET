@@ -105,6 +105,16 @@ export class Interact {
     return null;
   }
 
+  /** Returns the hovered id for a specific hand slot. */
+  getHoveredIdForHand(handIndex: number): string | null {
+    return this.handStates[handIndex]?.hoveredId ?? null;
+  }
+
+  /** Returns the hovered instance id for a specific hand slot. */
+  getHoveredInstanceForHand(handIndex: number): number | null {
+    return this.handStates[handIndex]?.hoveredInstance ?? null;
+  }
+
   /** Legacy: triggers select on whatever the mouse hand is hovering. */
   triggerSelectOnHovered() {
     this.triggerSelectForHand(HAND_MOUSE);
