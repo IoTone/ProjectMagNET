@@ -260,6 +260,119 @@ interface SankeyViz {
 
 Input data shape: `{ nodes: Array<{id, name, group}>, links: Array<{source, target, value}> }`.
 
+### `buildTidyTree(root, opts?) -> TidyTreeViz`
+
+`src/viz/tidyTree.ts`
+
+```ts
+interface TidyTreeOptions {
+  cylinderRadius?: number;       // default: 0.08
+  height?: number;               // default: 0.22
+}
+
+interface TidyTreeViz {
+  group: THREE.Group;
+  nodeMesh: THREE.InstancedMesh;
+  nodeCount(): number;
+  getNodeWorldPosition(i: number, out?: THREE.Vector3): THREE.Vector3;
+  getNodeLabel(i: number): string;
+  getNodeInfo(i: number): { name: string; depth: number; childCount: number; isLeaf: boolean; value?: number };
+  tick(): void;
+}
+```
+
+Reingold-Tilford tree layout (via `d3-hierarchy` tree) mapped onto a cylindrical surface. Theta = x, height = y. Nodes as InstancedMesh spheres (parent 6mm, leaf 5mm), LineSegments edges in `EDGE.link`, troika labels for depth 0-2.
+
+### `buildTangledTree(root, tangles, opts?) -> TangledTreeViz`
+
+`src/viz/tangledTree.ts`
+
+```ts
+interface TangledTreeOptions {
+  width?: number;                // default: 0.3
+  height?: number;               // default: 0.22
+}
+
+interface TangledTreeViz {
+  group: THREE.Group;
+  nodeMesh: THREE.InstancedMesh;
+  nodeCount(): number;
+  getNodeWorldPosition(i: number, out?: THREE.Vector3): THREE.Vector3;
+  getNodeLabel(i: number): string;
+  getNodeInfo(i: number): { name: string; depth: number; childCount: number; isLeaf: boolean; value?: number };
+  tick(): void;
+}
+```
+
+Standard tree spine (d3 tree layout, flat) with z-separated CatmullRom tangle arcs overlaid. Tangle colors: `control` = `0xff5577` (red), `sync` = `0x66ccff` (blue). Arc depth proportional to level span between source and target. Tube radius 1.2 mm.
+
+Input `tangles`: `Array<{ source: string; target: string; type: string }>` — node names referencing the tree. Use `sampleTangles()` from `sampleHierarchy.ts`.
+
+### `buildParallel(data, opts?) -> ParallelViz`
+
+`src/viz/parallel.ts`
+
+```ts
+interface ParallelOptions {
+  width?: number;                // default: 0.28
+  height?: number;               // default: 0.2
+}
+
+interface ParallelViz {
+  group: THREE.Group;
+  nodeCount(): number;
+  getNodeWorldPosition(i: number, out?: THREE.Vector3): THREE.Vector3;
+  getNodeLabel(i: number): string;
+  tick(): void;
+}
+```
+
+Parallel coordinates with vertical axis rods (CylinderGeometry, 1mm radius), axis labels at top (`TEXT.primary`, fontSize 0.009), and scale markers (0/1) at bottom. Data lines drawn as LineSegments colored by group (`0xff5577`, `0x66ccff`, `0xffcc66`). `nodeCount()` returns number of data points (not dots).
+
+Input: `{ dimensions: string[]; points: ParallelDataPoint[] }` where `ParallelDataPoint = { id: string; group: number; values: number[] }`. Use `sampleParallel()`.
+
+### `buildEdgeBundle(treeRoot, graph, opts?) -> EdgeBundleViz`
+
+`src/viz/edgeBundle.ts`
+
+```ts
+interface EdgeBundleOptions {
+  radius?: number;               // default: 0.12
+  beta?: number;                 // bundling factor, default: 0.85
+}
+
+interface EdgeBundleViz {
+  group: THREE.Group;
+  nodeMesh: THREE.InstancedMesh;
+  nodeCount(): number;
+  getNodeWorldPosition(i: number, out?: THREE.Vector3): THREE.Vector3;
+  getNodeLabel(i: number): string;
+  tick(): void;
+}
+```
+
+Hierarchical edge bundling. Leaves arranged on a circle via `d3-cluster`. Graph links are routed through the tree's LCA path, then bundled with factor `beta` (1.0 = full bundling, 0.0 = straight lines). Edges rendered as CatmullRom TubeGeometry (radius 0.3mm), colored by source group. Max 25 edges for readability. Per-instance color on nodes by depth.
+
+Input: `treeRoot: HNode` (hierarchy) + `graph: GraphData` (nodes/links to overlay).
+
+### `buildMorphDemo(rootData) -> MorphDemo`
+
+`src/demo/morphDemo.ts`
+
+```ts
+interface MorphDemo {
+  group: THREE.Group;
+  tick(): void;                  // call each frame; advances active tween
+  nextLayout(): void;            // cycle to the next layout type
+  currentType(): string;         // current layout type name
+  dispose(): void;               // clean up all geometry + materials
+}
+```
+
+Single InstancedMesh that cycles through four hierarchy layouts: `tree` (radial cluster), `sunburst` (ring), `treemap` (area), `pack` (circle packing). Transitions use `tweenInstanced` with 800 ms duration and `easeExpOut` easing. Edges are hidden during the morph and rebuilt on completion. Per-instance color by depth. Layout label (troika Text) updates on each transition.
+
+Layout cycle: `tree -> sunburst -> treemap -> pack -> tree -> ...`
+
 ---
 
 ## Interaction system
@@ -630,7 +743,7 @@ function registerMarkBuilder(type: MarkType, builder: (spec: MarkSpec) => Loaded
 
 `src/manifest/builders.ts`
 
-Registers builders for: `tree`, `treemap`, `sunburst`, `pack`, `force`, `ridgeline`. Call once at startup.
+Registers builders for: `tree`, `treemap`, `sunburst`, `pack`, `force`, `ridgeline`, `sankey`. Call once at startup.
 
 Helper extractors: `extractHierarchy(spec)`, `extractGraph(spec)`, `extractFlow(spec)`, `extractSeries(spec)`, `extractDistributions(spec)`.
 
@@ -872,6 +985,41 @@ Testing and debugging hooks available at runtime. Used by the smoke test and use
 - `updateHRData() -> { updated, dataLength }` — manually trigger an HR data update.
 - `setLiveHR(enabled: boolean)` — enable/disable automatic 2s HR updates.
 
+### Tidy tree
+
+- `tidyTreeNodeCount() -> number`
+- `lookAtTidyTree(distance: number)` — aim camera at tidy tree center.
+
+### Tangled tree
+
+- `tangledTreeNodeCount() -> number`
+- `lookAtTangledTree(distance: number)` — aim camera at tangled tree center.
+
+### Parallel coordinates
+
+- `parallelNodeCount() -> number`
+- `lookAtParallel(distance: number)` — aim camera at parallel coordinates center.
+
+### Edge bundle
+
+- `edgeBundleNodeCount() -> number`
+- `lookAtEdgeBundle(distance: number)` — aim camera at edge bundle center.
+
+### Morph demo
+
+- `startMorph()` — enter morph mode (hides gallery, starts auto-cycle).
+- `nextMorph()` — advance to the next layout in the cycle.
+- `stopMorph()` — exit morph mode (returns to gallery).
+- `morphCurrentType() -> string` — current layout type (`'tree'`, `'sunburst'`, `'treemap'`, `'pack'`).
+- `lookAtMorph(distance: number)` — aim camera at morph demo center.
+
 ### Gallery
 
 - `galleryItems() -> Array<{ id, title, worldPos }>` — list gallery cells.
+
+### Join panel (M20)
+
+- `showJoinPanel()` — show the join-code onboarding panel.
+- `hideJoinPanel()` — hide the join panel.
+- `fillJoinCode(code: string)` — programmatically fill the code slots (e.g. `'ABC123'`).
+- `submitJoinCode()` — trigger the submit action.

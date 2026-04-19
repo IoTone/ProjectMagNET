@@ -20,6 +20,8 @@ import { FingertipGrab } from './interact/FingertipGrab';
 import { XRBrush } from './interact/XRBrush';
 import { DataspaceRegistry, DataspaceHud, applyFocusDim } from './dataspace/Dataspace';
 import { syntheticHR } from './demo/heartRate';
+import { createJoinPanel } from './onboarding/JoinPanel';
+import { JoinState } from './onboarding/types';
 
 const renderer = new THREE.WebGLRenderer({
   antialias: true,
@@ -1112,6 +1114,13 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
     return { updated: true, dataLength: liveHRData.length };
   },
   setLiveHR(enabled: boolean) { liveHREnabled = enabled; },
+
+  // --- M20: Join panel ---
+  showJoinPanel() { showJoinPanel(); },
+  hideJoinPanel() { hideJoinPanel(); },
+  fillJoinCode(code: string) { joinPanel.fillCode(code); },
+  submitJoinCode() { joinPanel.submit(); },
+  joinPanelState() { return joinPanel.state(); },
 };
 
 // --- Morph demo mode ---
@@ -1119,10 +1128,16 @@ let morphModeActive = false;
 let morphAutoTimer = 0;
 const MORPH_INTERVAL = 3; // seconds
 
+const morphCell = galleryItems.find(i => i.id === 'morph')?.group;
+
 function startMorphMode() {
   morphModeActive = true;
   morphAutoTimer = 0;
   galleryRoot.visible = false;
+  // Re-parent morph out of the gallery tree so it isn't hidden by galleryRoot.visible=false
+  if (morphCell) morphCell.remove(morphDemoViz.group);
+  vizAnchor.add(morphDemoViz.group);
+  morphDemoViz.group.position.set(0, 0, 0);
   morphDemoViz.group.visible = true;
   vizAnchor.visible = true;
   uiAnchor.visible = false;
@@ -1131,13 +1146,83 @@ function startMorphMode() {
 
 function stopMorphMode() {
   morphModeActive = false;
+  // Re-parent morph back into its gallery cell
+  vizAnchor.remove(morphDemoViz.group);
+  if (morphCell) {
+    morphCell.add(morphDemoViz.group);
+    morphDemoViz.group.position.set(0, 0, 0);
+  }
   galleryRoot.visible = true;
-  morphDemoViz.group.visible = true; // it's part of the gallery
+  morphDemoViz.group.visible = true;
   if (toolbar) toolbar.setActive('gallery');
 }
 
-// morph group starts visible in gallery; separate morph mode hides gallery
-morphDemoViz.group.visible = true;
+// --- M20: Join-code onboarding panel ---
+const joinPanelAnchor = new THREE.Group();
+joinPanelAnchor.name = 'joinPanelAnchor';
+scene.add(joinPanelAnchor);
+
+const joinPanel = createJoinPanel({
+  onAccepted: (_code: string) => {
+    // Wait 1.5s, then hide panel and show gallery with demo data
+    setTimeout(() => {
+      hideJoinPanel();
+      showVizGallery(true);
+    }, 1500);
+  },
+  onRejected: (_code: string, _reason: string) => {
+    // Panel handles visual feedback internally
+  },
+});
+joinPanelAnchor.add(joinPanel.group);
+
+// Register join panel interactables with Interact
+function registerJoinInteractables() {
+  for (const { id, block, onSelect } of joinPanel.getInteractables()) {
+    interact.add({
+      id,
+      object: block,
+      onHoverIn: () => {
+        (block as any).set({ backgroundOpacity: 1.0 });
+      },
+      onHoverOut: () => {
+        (block as any).set({ backgroundOpacity: 0.88 });
+      },
+      onSelect: () => onSelect(),
+    });
+  }
+}
+registerJoinInteractables();
+
+function showJoinPanel() {
+  // Hide gallery and charts
+  vizAnchor.visible = false;
+  uiAnchor.visible = false;
+  stopMorphMode();
+
+  // Position the panel in front of the user
+  const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const pos = new THREE.Vector3();
+  xrCam.getWorldPosition(pos);
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.quaternion);
+  fwd.y = 0;
+  if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
+  fwd.normalize();
+  joinPanelAnchor.position.set(
+    pos.x + fwd.x * 1.2,
+    pos.y - 0.05,
+    pos.z + fwd.z * 1.2,
+  );
+  joinPanelAnchor.lookAt(pos.x, joinPanelAnchor.position.y, pos.z);
+
+  joinPanel.show();
+  if (toolbar) toolbar.setActive('join');
+}
+
+function hideJoinPanel() {
+  joinPanel.hide();
+  // Don't auto-show anything; let the toolbar buttons handle it
+}
 
 window.addEventListener('keydown', e => {
   if (e.key === 'g' || e.key === 'G') showVizGallery(!vizAnchor.visible);
@@ -1145,9 +1230,10 @@ window.addEventListener('keydown', e => {
 
 const toolbar = new Toolbar({
   buttons: [
-    { id: 'gallery', label: 'Gallery', active: defaultToGallery,  onSelect: () => { stopMorphMode(); showVizGallery(true);  placeAnchorInFrontOfUser(); } },
-    { id: 'charts',  label: 'Charts',  active: !defaultToGallery, onSelect: () => { stopMorphMode(); showVizGallery(false); placeAnchorInFrontOfUser(); } },
-    { id: 'morph',   label: 'Morph',   onSelect: () => { startMorphMode(); placeAnchorInFrontOfUser(); } },
+    { id: 'join',    label: 'Join',    onSelect: () => { showJoinPanel(); } },
+    { id: 'gallery', label: 'Gallery', active: defaultToGallery,  onSelect: () => { hideJoinPanel(); stopMorphMode(); showVizGallery(true);  placeAnchorInFrontOfUser(); } },
+    { id: 'charts',  label: 'Charts',  active: !defaultToGallery, onSelect: () => { hideJoinPanel(); stopMorphMode(); showVizGallery(false); placeAnchorInFrontOfUser(); } },
+    { id: 'morph',   label: 'Morph',   onSelect: () => { hideJoinPanel(); startMorphMode(); placeAnchorInFrontOfUser(); } },
     { id: 'recenter', label: 'Recenter', onSelect: () => placeAnchorInFrontOfUser() },
     { id: 'floor', label: 'Set Floor', onSelect: () => placeFloorUnderHead() },
   ],

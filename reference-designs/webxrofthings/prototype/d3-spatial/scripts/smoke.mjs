@@ -342,6 +342,19 @@ const M19_SHOTS = [
     viz: 'edgeBundle', distance: 0.28 },
 ];
 
+// M20 — join-code onboarding panel
+const M20_SHOTS = [
+  { id: 'm20-join-idle', ms: 'M20', title: 'Join panel · idle',
+    caption: 'Join-code onboarding panel with empty slots, warm palette, no blue',
+    action: 'show' },
+  { id: 'm20-join-partial', ms: 'M20', title: 'Join panel · partial code',
+    caption: '3 of 6 characters filled via programmatic fillCode',
+    action: 'fill-partial', code: 'ABC' },
+  { id: 'm20-join-accepted', ms: 'M20', title: 'Join panel · accepted',
+    caption: 'Success state after submitting a complete 6-char code',
+    action: 'fill-submit', code: 'ABC123' },
+];
+
 // M16b — breadcrumb trail + VizHud per-cell buttons
 const M16B_SHOTS = [
   { id: 'm16-breadcrumb-drilled', ms: 'M16b', title: 'Breadcrumb · drilled into sensors',
@@ -849,6 +862,42 @@ try {
   }
   // Re-enable live HR
   await page.evaluate(() => { (window).__demo.setLiveHR(true); });
+
+  // M20 — join-code onboarding panel
+  for (const s of M20_SHOTS) {
+    if (s.action === 'show') {
+      await page.evaluate(() => {
+        const d = (window).__demo;
+        d.showJoinPanel();
+        d.setCameraPose([0, 1.3, 0.85], [0, 1.3, 0]);
+      });
+    } else if (s.action === 'fill-partial') {
+      await page.evaluate(({ code }) => {
+        const d = (window).__demo;
+        d.showJoinPanel();
+        d.fillJoinCode(code);
+        d.setCameraPose([0, 1.3, 0.85], [0, 1.3, 0]);
+      }, s);
+    } else if (s.action === 'fill-submit') {
+      await page.evaluate(({ code }) => {
+        const d = (window).__demo;
+        d.showJoinPanel();
+        d.fillJoinCode(code);
+        d.submitJoinCode();
+        d.setCameraPose([0, 1.3, 0.85], [0, 1.3, 0]);
+      }, s);
+    }
+    await sleep(s.action === 'fill-submit' ? 800 : 400);
+    const file = `${OUT_DIR}/${s.id}.png`;
+    await page.screenshot({ path: file, fullPage: false });
+    shots.push({
+      id: s.id, milestone: s.ms, title: s.title, caption: s.caption,
+      file: `shots/${s.id}.png`, ts: new Date().toISOString(),
+    });
+    console.log(`  shot -> ${file}`);
+  }
+  // Clean up join panel
+  await page.evaluate(() => { (window).__demo.hideJoinPanel(); });
 } catch (e) {
   console.error('capture failed:', e.message);
   errors.push(`capture: ${e.message}`);

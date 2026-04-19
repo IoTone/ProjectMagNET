@@ -1,6 +1,6 @@
 # d3-spatial prototype — status
 
-Snapshot: 2026-04-18 · Vite + three.js 0.161 + three-mesh-ui 6.5.4 + troika-three-text + Omnitone FOA + d3 core modules.
+Snapshot: 2026-04-19 · Vite + three.js 0.161 + three-mesh-ui 6.5.4 + troika-three-text + Omnitone FOA + d3 core modules.
 
 ---
 
@@ -99,15 +99,41 @@ Seven spatial marks implemented as a gallery scene accessible via toolbar or `G`
 - **XRBrush**: controller sweep-select — hold trigger > 200 ms to enter brush mode, sweep over force nodes to batch-select.
 - **Live data streaming**: HR line chart auto-updates every 2 s with synthetic data; `Chart.updateData()` rebuilds geometry with scale domain auto-expansion.
 
+### Layout morph demo (M18)
+
+- `src/demo/morphDemo.ts` — single InstancedMesh for all hierarchy nodes, cycles through four layouts: tree, sunburst, treemap, pack.
+- 800 ms tweened transitions (`tweenInstanced` with `easeExpOut`) between layouts; edges hidden during morph, rebuilt on completion.
+- "Morph" toolbar button enters/exits morph mode; gallery is hidden during morph mode.
+- Auto-cycles every 3 s in morph mode; pinch (or `nextMorph()` hook) advances manually.
+- Per-instance color by depth; layout-type label updates on each transition.
+
+### Join-Code Onboarding Phase 1 (M20)
+
+- **JoinPanel** (`src/onboarding/JoinPanel.ts`) — spatial panel with 6-character code entry, "Join" toolbar button opens/closes it.
+- **SlotWheel** (`src/onboarding/SlotWheel.ts`) — per-slot character selector with scroll/pointer input.
+- **types** (`src/onboarding/types.ts`) — `JoinState` enum and shared onboarding types.
+- State machine: `IDLE → ENTERING → SUBMITTING → ACCEPTED / REJECTED`.
+- Mock validation on submit; keyboard input wired through for desktop/Bluetooth keyboard.
+- Panel dismisses on ACCEPTED; REJECTED shakes and resets to ENTERING.
+
+### Four new section 9 marks (M19)
+
+- **Tidy tree** (`src/viz/tidyTree.ts`) — Reingold-Tilford layout on a cylindrical surface. Nodes wrapped via theta/height -> (cos, y, sin). InstancedMesh spheres, LineSegments edges, troika labels for depth 0-2.
+- **Tangled tree** (`src/viz/tangledTree.ts`) — standard tree spine + z-separated CatmullRom tangle arcs. Red (`0xff5577`) for control links, blue (`0x66ccff`) for sync links. Tube radius 1.2 mm, arc depth proportional to level span.
+- **Parallel coordinates** (`src/viz/parallel.ts`) — 5 vertical axis rods (CylinderGeometry), 18 data lines across dimensions. Lines colored by group (red/blue/amber). Axis labels at top, scale markers at bottom.
+- **Edge bundling** (`src/viz/edgeBundle.ts`) — radial dendrogram (d3-cluster) with leaves on a circle. Graph links routed through hierarchy LCA path, bundled with beta=0.85. CatmullRom tubes colored by source group, max 25 edges for readability.
+- Gallery expanded from 7 cells to 4x3 (12 cells) including morph demo.
+- Sample data generators: `sampleTangles()` and `sampleParallel()` added to `sampleHierarchy.ts`.
+
 ---
 
 ## Tooling
 
 - `npm run dev` — Vite dev server, allowed hosts include `*.trycloudflare.com` / `*.ngrok-free.app` / `*.ngrok.app` / `*.ngrok.io` / `*.loca.lt`.
-- `npm run smoke` — Playwright-driven headless capture, 79 screenshots across milestones M1.1-M17, writes `demo/shots/*.png` and `demo/index.html`.
+- `npm run smoke` — Playwright-driven headless capture, 97 screenshots across milestones M1.1-M20, writes `demo/shots/*.png` and `demo/index.html`.
 - `npm run typecheck` — `tsc --noEmit`, passes.
 - `npm run build` — Vite production build, passes.
-- Gallery default scene with toolbar (Gallery / Charts / Recenter / Set Floor). `G` key toggles.
+- Gallery default scene with toolbar (Gallery / Charts / Morph / Join / Recenter / Set Floor). `G` key toggles.
 
 ---
 
@@ -141,6 +167,9 @@ Seven spatial marks implemented as a gallery scene accessible via toolbar or `G`
 
 ## Known issues
 
+- ~~Morph demo smoke screenshots appear blank~~ **FIXED** — `morphDemoViz.group` is now re-parented from `galleryRoot` to `vizAnchor` on morph mode entry; smoke screenshots and Quest render correctly.
+- ~~Morph blank render on Quest~~ **FIXED** — same re-parenting fix resolves blank frame on device.
+- Spectacles floor grid visibility improved but may still need tuning for optical passthrough.
 - Quest Touch controllers may show no beam (grip-space fallback may not work for all controller types).
 - Spectacles: input may emit via `inputSourceChange` rather than `selectstart/end`. If `ctrls=0` despite visible hands, the `inputsourceschange` path is needed.
 - No accessibility layer enforced — audio cues lack guaranteed visible equivalents.
@@ -156,8 +185,8 @@ Seven spatial marks implemented as a gallery scene accessible via toolbar or `G`
 ## File map
 
 ```
-src/
-  main.ts                         session boot, anchor, demo wiring, toolbar, live HR
+src/                                              48 files
+  main.ts                         session boot, anchor, demo wiring, toolbar, live HR, morph mode
   xrRig.ts                        controllers + reticle + ray + fingertip sphere, select events, hand joints
   anchor.ts                       (unused after M1; kept for reference)
   chart/
@@ -174,6 +203,10 @@ src/
     force.ts                      d3-force-3d graph, pin/unpin, reheat
     ridgeline.ts                  animated depth-offset density ribbons
     sankey.ts                     d3-sankey layout, flow tubes
+    tidyTree.ts                   Reingold-Tilford on cylindrical surface (M19)
+    tangledTree.ts                tree spine + z-separated tangle arcs (M19)
+    parallel.ts                   5 vertical axis rods, 18 data lines across dimensions (M19)
+    edgeBundle.ts                 radial dendrogram with beta=0.85 bundled edges (M19)
   interact/
     Interact.ts                   hover state machine, desktop + XR raycast, per-hand state, drag
     DragBrush.ts                  pointer-drag brush on charts (desktop)
@@ -182,7 +215,7 @@ src/
   ui/
     InspectorCard.ts              three-mesh-ui Block + troika Text card, placeNear auto-placement
     NodeHoverFx.ts                halo sphere + billboard label, follows hovered node
-    Toolbar.ts                    horizontal button strip (Gallery/Charts/Recenter/Set Floor)
+    Toolbar.ts                    horizontal button strip (Gallery/Charts/Morph/Join/Recenter/Set Floor)
     Breadcrumb.ts                 clickable breadcrumb trail for hierarchy drill navigation
     VizHud.ts                     per-viz Back/Reset buttons, depth-aware visibility
     palette.ts                    warm amber/cream text palette for optical passthrough
@@ -201,8 +234,13 @@ src/
   demo/
     marks.ts                      2x2 demo layout (line, bar, scatter, arc)
     heartRate.ts                  synthetic HR series generator
-    sampleHierarchy.ts            HNode / GraphData / SankeyData types + sample data
-    vizGallery.ts                 gallery layout for all 7 spatial marks
+    sampleHierarchy.ts            HNode / GraphData / SankeyData / ParallelDataPoint types + sample data + sampleTangles + sampleParallel
+    vizGallery.ts                 gallery layout for all 12 spatial marks (4x3 grid)
+    morphDemo.ts                  single InstancedMesh cycling through 4 hierarchy layouts (M18)
+  onboarding/
+    types.ts                      JoinState enum, shared types (M20)
+    JoinPanel.ts                  join-code onboarding panel (M20)
+    SlotWheel.ts                  per-slot character selector (M20)
   types/
     troika-three-text.d.ts        type shim
     omnitone.d.ts                 type shim for esm + bare module
@@ -212,5 +250,5 @@ scripts/
 demo/
   index.html                      auto-generated gallery
   shots.json                      shot manifest
-  shots/*.png                     79 screenshots across milestones M1.1-M17
+  shots/*.png                     97 screenshots across milestones M1.1-M20  (97 files)
 ```
