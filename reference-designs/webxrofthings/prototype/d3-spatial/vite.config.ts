@@ -11,6 +11,12 @@ export default defineConfig({
       '.ngrok.io',
       '.loca.lt',
     ],
+    proxy: {
+      '/api/v1': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     target: 'es2022',

@@ -15,6 +15,12 @@ export interface HandJointInfo {
   pinchDistance: number;
 }
 
+export interface WristInfo {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+  palmNormal: THREE.Vector3;  // upward normal from the palm
+}
+
 interface HandSlot {
   controller: THREE.Group;
   grip: THREE.Group;
@@ -139,6 +145,23 @@ export class XRRig {
 
     const pinchDistance = fingertipPos.distanceTo(thumbPos);
     return { fingertipPos, pinchDistance };
+  }
+
+  /** Get wrist joint state for a given hand (0 or 1). Returns null if wrist joint not available. */
+  getWristState(i: number): WristInfo | null {
+    const slot = this.slots[i];
+    if (!slot) return null;
+    const hand = slot.hand as any;
+    if (!hand || !hand.joints) return null;
+    const wrist = hand.joints['wrist'] as THREE.Object3D | undefined;
+    if (!wrist || !wrist.visible) return null;
+    const position = new THREE.Vector3();
+    wrist.getWorldPosition(position);
+    const quaternion = new THREE.Quaternion();
+    wrist.getWorldQuaternion(quaternion);
+    // Palm normal: wrist's local Y axis in world space
+    const palmNormal = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
+    return { position, quaternion, palmNormal };
   }
 
   update(_frame: XRFrame | undefined) {

@@ -50,11 +50,12 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   g.name = 'join-panel';
   g.visible = false;
 
-  let currentState: JoinState = JoinState.IDLE;
+  let currentState: JoinState = JoinState.ENTERING;
   let activeSlotIndex = -1;
 
   // Slot values (empty string = unfilled)
-  const slotValues: string[] = Array(SLOT_COUNT).fill('');
+  const DEFAULT_CODE = 'AAAAAA';
+  const slotValues: string[] = DEFAULT_CODE.split('');
 
   // --- Root panel block ---
   const rootBlock = new ThreeMeshUI.Block({
@@ -112,7 +113,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
     slotBlocks.push(block);
 
     const charText = new Text();
-    charText.text = '';
+    charText.text = slotValues[i] || '';
     charText.fontSize = 0.028;
     charText.color = TEXT.emphasis;
     charText.anchorX = 'center';
@@ -125,7 +126,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
 
   // --- Status text ---
   const statusText = new Text();
-  statusText.text = 'Enter the code shown on the host device';
+  statusText.text = 'Press Submit to join with code AAAAAA';
   statusText.fontSize = 0.014;
   statusText.color = TEXT.muted;
   statusText.anchorX = 'center';
@@ -333,12 +334,44 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
       return;
     }
 
-    // Mock validation: all filled = accepted
+    // Real fetch to /api/v1/join
     setState(JoinState.SUBMITTING);
-    setTimeout(() => {
-      setState(JoinState.ACCEPTED);
-      events.onAccepted?.(code);
-    }, 500);
+    fetch('/api/v1/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    })
+      .then(resp => resp.json())
+      .then((data: { status: string; token?: string; manifest_url?: string; dataspace?: string; reason?: string }) => {
+        if (data.status === 'accepted') {
+          setState(JoinState.ACCEPTED);
+          events.onAccepted?.(code, data.token, data.manifest_url, data.dataspace);
+        } else {
+          setState(JoinState.REJECTED);
+          const reason = data.reason ?? 'unknown';
+          if (reason === 'rate_limited') {
+            updateStatus('Too many attempts. Wait a moment.', TEXT.error);
+          } else if (reason === 'expired') {
+            updateStatus('Code expired. Try the new one.', TEXT.error);
+          } else {
+            updateStatus('Code not recognized', TEXT.error);
+          }
+          events.onRejected?.(code, reason);
+          // Return to entering after 2s
+          setTimeout(() => {
+            if (currentState === JoinState.REJECTED) {
+              setState(JoinState.ENTERING);
+              updateSlotVisuals();
+            }
+          }, 2000);
+        }
+      })
+      .catch(() => {
+        // Server not running — fall back to mock validation (accept any complete code)
+        console.warn('[join] Server not reachable, using mock validation');
+        setState(JoinState.ACCEPTED);
+        events.onAccepted?.(code);
+      });
   }
 
   function clearSlots() {

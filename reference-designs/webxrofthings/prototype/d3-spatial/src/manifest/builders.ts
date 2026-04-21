@@ -15,6 +15,8 @@ import { buildSunburst } from '../viz/sunburst';
 import { buildCircularPack } from '../viz/pack';
 import { buildForceGraph } from '../viz/force';
 import { buildRidgeline } from '../viz/ridgeline';
+import { buildSankey } from '../viz/sankey';
+import { buildVideoPanel } from '../viz/videoPanel';
 
 function makeMark(spec: MarkSpec, group: THREE.Group, viz: unknown, defaults?: Partial<LoadedMark>): LoadedMark {
   return {
@@ -70,6 +72,29 @@ export function registerAllBuilders() {
     const data = extractDistributions(spec);
     if (!data) return null;
     const viz = buildRidgeline(data);
+    return makeMark(spec, viz.group, viz);
+  });
+
+  registerMarkBuilder('sankey', (spec) => {
+    const data = extractFlow(spec);
+    if (!data) return null;
+    const viz = buildSankey(data);
+    return makeMark(spec, viz.group, viz, { hoverable: true });
+  });
+
+  registerMarkBuilder('video', (spec) => {
+    if (spec.data.source !== 'url') return null;
+    const url = (spec.data as any).url as string;
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const viz = buildVideoPanel({
+      url,
+      type: (cfg.type as any) ?? 'hls',
+      width: (cfg.width as number) ?? 0.4,
+      aspectRatio: (cfg.aspectRatio as number) ?? 16 / 9,
+      title: spec.title,
+      autoplay: (cfg.autoplay as boolean) ?? true,
+      muted: (cfg.muted as boolean) ?? true,
+    });
     return makeMark(spec, viz.group, viz);
   });
 }

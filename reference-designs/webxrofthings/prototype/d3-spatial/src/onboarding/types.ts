@@ -17,7 +17,7 @@ export const CHAR_SET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'.split('');
 export const SLOT_COUNT = 6;
 
 export interface JoinPanelEvents {
-  onAccepted?: (code: string) => void;
+  onAccepted?: (code: string, token?: string, manifestUrl?: string, dataspace?: string) => void;
   onRejected?: (code: string, reason: string) => void;
   onCancel?: () => void;
 }

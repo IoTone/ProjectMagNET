@@ -1,0 +1,180 @@
+import * as THREE from 'three';
+import { Text } from 'troika-three-text';
+import { TEXT, EDGE } from '../ui/palette';
+
+export interface VideoPanelOptions {
+  url: string;
+  type?: 'hls' | 'mjpeg' | 'frames';
+  width?: number;
+  aspectRatio?: number;
+  title?: string;
+  autoplay?: boolean;
+  muted?: boolean;
+}
+
+export interface VideoPanelViz {
+  group: THREE.Group;
+  mesh: THREE.Mesh;
+  tick(): void;
+  play(): void;
+  pause(): void;
+  isPlaying(): boolean;
+  dispose(): void;
+}
+
+export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
+  const {
+    url,
+    type = 'hls',
+    width = 0.4,
+    aspectRatio = 16 / 9,
+    title,
+    autoplay = true,
+    muted = true,
+  } = opts;
+
+  const height = width / aspectRatio;
+  const group = new THREE.Group();
+  group.name = 'video-panel';
+
+  // Video element (hidden, used as texture source)
+  const video = document.createElement('video');
+  video.crossOrigin = 'anonymous';
+  video.playsInline = true;
+  video.muted = muted;
+  video.loop = true;
+  video.style.display = 'none';
+  document.body.appendChild(video);
+
+  let hlsInstance: any = null;
+  let playing = false;
+
+  // Initialize based on type
+  if (type === 'hls') {
+    initHLS(video, url).then(() => { if (autoplay) doPlay(); });
+  } else if (type === 'mjpeg') {
+    // MJPEG: set video src directly (some browsers handle it)
+    video.src = url;
+    if (autoplay) doPlay();
+  }
+
+  // Video texture
+  const videoTexture = new THREE.VideoTexture(video);
+  videoTexture.minFilter = THREE.LinearFilter;
+  videoTexture.magFilter = THREE.LinearFilter;
+  videoTexture.colorSpace = THREE.SRGBColorSpace;
+
+  // Panel mesh
+  const panelGeo = new THREE.PlaneGeometry(width, height);
+  const panelMat = new THREE.MeshBasicMaterial({
+    map: videoTexture,
+    side: THREE.FrontSide,
+  });
+  const mesh = new THREE.Mesh(panelGeo, panelMat);
+  group.add(mesh);
+
+  // Border frame
+  const borderGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(width + 0.006, height + 0.006, 0.002));
+  const border = new THREE.LineSegments(
+    borderGeo,
+    new THREE.LineBasicMaterial({ color: EDGE.link, transparent: true, opacity: 0.7 }),
+  );
+  border.renderOrder = 995;
+  group.add(border);
+
+  // Title label
+  if (title) {
+    const label = new Text();
+    label.text = title;
+    label.fontSize = 0.016;
+    label.color = TEXT.primary;
+    label.anchorX = 'center';
+    label.anchorY = 'bottom';
+    label.position.set(0, height / 2 + 0.012, 0.005);
+    label.sync();
+    group.add(label);
+  }
+
+  // Status badge (shows loading / playing / error)
+  const statusText = new Text();
+  statusText.text = 'loading...';
+  statusText.fontSize = 0.01;
+  statusText.color = TEXT.warn;
+  statusText.anchorX = 'center';
+  statusText.anchorY = 'top';
+  statusText.position.set(0, -height / 2 - 0.008, 0.005);
+  statusText.sync();
+  group.add(statusText);
+
+  function updateStatus(text: string, color: number) {
+    statusText.text = text;
+    statusText.color = color;
+    statusText.sync();
+  }
+
+  function doPlay() {
+    const p = video.play();
+    if (p) {
+      p.then(() => {
+        playing = true;
+        updateStatus('▶ playing', TEXT.accent);
+      }).catch((e: Error) => {
+        updateStatus('tap to play', TEXT.warn);
+        // Retry on next user gesture
+        const retryPlay = () => {
+          video.play().then(() => {
+            playing = true;
+            updateStatus('▶ playing', TEXT.accent);
+          }).catch(() => {});
+          document.removeEventListener('pointerdown', retryPlay);
+        };
+        document.addEventListener('pointerdown', retryPlay, { once: true });
+      });
+    }
+  }
+
+  return {
+    group,
+    mesh,
+    tick() {
+      if (playing && video.readyState >= video.HAVE_CURRENT_DATA) {
+        videoTexture.needsUpdate = true;
+      }
+    },
+    play() { doPlay(); },
+    pause() { video.pause(); playing = false; updateStatus('⏸ paused', TEXT.muted); },
+    isPlaying() { return playing; },
+    dispose() {
+      video.pause();
+      video.src = '';
+      if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+      document.body.removeChild(video);
+      videoTexture.dispose();
+      panelGeo.dispose();
+      panelMat.dispose();
+      borderGeo.dispose();
+    },
+  };
+}
+
+async function initHLS(video: HTMLVideoElement, url: string): Promise<void> {
+  // Dynamic import so hls.js isn't in the critical path
+  const Hls = (await import('hls.js')).default;
+  if (Hls.isSupported()) {
+    const hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      console.log('[video] HLS manifest parsed, ready to play');
+    });
+    hls.on(Hls.Events.ERROR, (_: any, data: any) => {
+      if (data.fatal) console.error('[video] HLS fatal error:', data.type, data.details);
+    });
+    (video as any).__hlsInstance = hls;
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Safari native HLS
+    video.src = url;
+  } else {
+    console.error('[video] HLS not supported in this browser');
+  }
+}

@@ -39,18 +39,31 @@ export function registerMarkBuilder(type: MarkType, builder: Builder) {
 }
 
 /** Load a manifest and instantiate all its marks. */
-export async function loadManifest(manifest: DataspaceManifest): Promise<LoadResult> {
+export async function loadManifest(manifest: DataspaceManifest, token?: string): Promise<LoadResult> {
   const marks: LoadedMark[] = [];
 
   for (const spec of manifest.marks) {
     if (spec.data.source === 'url') {
       const urlData = spec.data;
+      const url = urlData.url;
+
+      // Handle WebSocket data sources (wss:// or ws://)
+      if (url.startsWith('wss://') || url.startsWith('ws://')) {
+        // Skip WebSocket sources for now — they require a live server
+        console.warn(`[manifest] skipping WebSocket source ${url} (not yet connected)`);
+        continue;
+      }
+
       try {
-        const resp = await fetch(urlData.url);
+        const headers: Record<string, string> = {};
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        const resp = await fetch(url, { headers });
         const json = await resp.json();
         (spec.data as any) = { source: 'inline', ...shapeToField(urlData.shape, json) };
       } catch (e) {
-        console.warn(`[manifest] failed to fetch ${urlData.url}:`, e);
+        console.warn(`[manifest] failed to fetch ${url}:`, e);
         continue;
       }
     }

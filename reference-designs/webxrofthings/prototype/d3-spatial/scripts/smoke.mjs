@@ -365,6 +365,16 @@ const M16B_SHOTS = [
     viz: 'tree', distance: 0.35, action: 'drill-in', nodeIdx: 1 },
 ];
 
+// M21 — dataspace context menu (P1.3)
+const M21_SHOTS = [
+  { id: 'm21-dataspace-menu-floating', ms: 'M21', title: 'Dataspace menu · floating panel',
+    caption: 'Per-dataspace context menu visible as a floating panel below the demo gallery, warm palette',
+    action: 'show-menu' },
+  { id: 'm21-dataspace-menu-items', ms: 'M21', title: 'Dataspace menu · close-up items',
+    caption: 'Close-up showing default menu items: Recenter, Reset, Leave — vertical stack with emoji icons',
+    action: 'show-menu-closeup' },
+];
+
 const server = spawn('npx', ['vite', '--port', '5179', '--host', '127.0.0.1'], {
   stdio: ['ignore', 'pipe', 'pipe'],
   env: { ...process.env, NO_COLOR: '1' },
@@ -898,6 +908,37 @@ try {
   }
   // Clean up join panel
   await page.evaluate(() => { (window).__demo.hideJoinPanel(); });
+
+  // M21 — dataspace context menu (P1.3)
+  for (const s of M21_SHOTS) {
+    if (s.action === 'show-menu') {
+      await page.evaluate(() => {
+        const d = (window).__demo;
+        d.showVizGallery(true);
+        d.showDataspaceMenu();
+        d.setCameraPose([0, 1.3, 1.4], [0, 1.3, 0]);
+      });
+    } else if (s.action === 'show-menu-closeup') {
+      await page.evaluate(() => {
+        const d = (window).__demo;
+        d.showVizGallery(true);
+        d.showDataspaceMenu();
+        // Position camera close to the menu area (below gallery)
+        d.setCameraPose([0, 1.0, 0.6], [0, 1.0, 0]);
+      });
+    }
+    await sleep(500);
+    const file = `${OUT_DIR}/${s.id}.png`;
+    await page.screenshot({ path: file, fullPage: false });
+    shots.push({
+      id: s.id, milestone: s.ms, title: s.title, caption: s.caption,
+      file: `shots/${s.id}.png`, ts: new Date().toISOString(),
+    });
+    console.log(`  shot -> ${file}`);
+  }
+  // Clean up
+  await page.evaluate(() => { (window).__demo.hideDataspaceMenu(); });
+
 } catch (e) {
   console.error('capture failed:', e.message);
   errors.push(`capture: ${e.message}`);

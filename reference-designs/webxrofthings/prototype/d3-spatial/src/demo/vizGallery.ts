@@ -12,6 +12,7 @@ import { buildTangledTree, TangledTreeViz } from '../viz/tangledTree';
 import { buildParallel, ParallelViz } from '../viz/parallel';
 import { buildEdgeBundle, EdgeBundleViz } from '../viz/edgeBundle';
 import { buildMorphDemo, MorphDemo } from './morphDemo';
+import { buildVideoPanel, VideoPanelViz } from '../viz/videoPanel';
 import { sampleTree, sampleGraph, sampleRidgeline, sampleSankey, sampleTangles, sampleParallel } from './sampleHierarchy';
 import { TEXT } from '../ui/palette';
 
@@ -48,6 +49,8 @@ export interface GalleryResult {
   edgeBundleCell: THREE.Group;
   morphDemo: MorphDemo;
   morphCell: THREE.Group;
+  videoPanel: VideoPanelViz;
+  videoCell: THREE.Group;
 }
 
 export function buildVizGallery(): GalleryResult {
@@ -67,6 +70,13 @@ export function buildVizGallery(): GalleryResult {
   const parallel = buildParallel(sampleParallel());
   const edgeBundle = buildEdgeBundle(sampleTree, sampleGraph(28));
   const morphDemo = buildMorphDemo(sampleTree);
+  const videoPanel = buildVideoPanel({
+    url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    type: 'hls',
+    width: 0.28,
+    aspectRatio: 16 / 9,
+    title: 'video · HLS stream',
+  });
 
   const specs = [
     { id: 'tree',       title: 'tree \u00b7 radial',              viz: tree.group,          sublabel: '\u00a79.1 hierarchy \u00b7 node-link' },
@@ -81,6 +91,7 @@ export function buildVizGallery(): GalleryResult {
     { id: 'parallel',   title: 'parallel coords',            viz: parallel.group,      sublabel: '\u00a79 multivariate axes' },
     { id: 'edgeBundle', title: 'edge bundling',               viz: edgeBundle.group,    sublabel: '\u00a79 hierarchical routing' },
     { id: 'morph',      title: 'morph \u00b7 layout transition',  viz: morphDemo.group,     sublabel: 'tree \u2192 sunburst \u2192 treemap \u2192 pack' },
+    { id: 'video',      title: 'video \u00b7 HLS stream',         viz: videoPanel.group,    sublabel: 'live camera / test stream' },
   ];
 
   const cols = 4;
@@ -134,6 +145,7 @@ export function buildVizGallery(): GalleryResult {
   const parallelCell = items.find(i => i.id === 'parallel')!.group;
   const edgeBundleCell = items.find(i => i.id === 'edgeBundle')!.group;
   const morphCell = items.find(i => i.id === 'morph')!.group;
+  const videoCell = items.find(i => i.id === 'video')!.group;
 
   return {
     root, items, force, forceCell, tree, treeCell, treemap, treemapCell,
@@ -141,5 +153,6 @@ export function buildVizGallery(): GalleryResult {
     tidyTree, tidyTreeCell, tangledTree, tangledTreeCell,
     parallel, parallelCell, edgeBundle, edgeBundleCell,
     morphDemo, morphCell,
+    videoPanel, videoCell,
   };
 }

@@ -37,7 +37,42 @@ export interface DataspaceManifest {
     charSet: 'alphanumeric-unambiguous';
     length: number;
   };
+
+  /** Optional HUD menu configuration for this dataspace. */
+  hud?: DataspaceHudConfig;
 }
+
+/** Configuration for a per-dataspace HUD context menu. */
+export interface DataspaceHudConfig {
+  items: DataspaceHudItem[];
+  position?: 'bottom' | 'side' | 'wrist';
+}
+
+/** A single item in the dataspace HUD context menu. */
+export interface DataspaceHudItem {
+  id: string;
+  label: string;
+  icon?: string;  // emoji or text icon
+  action: DataspaceHudAction;
+}
+
+/** Built-in dataspace HUD actions. Custom string actions are also allowed. */
+export type DataspaceHudAction =
+  | 'reload-marks'      // re-fetch manifest and rebuild marks
+  | 'toggle-ambient'    // toggle ambient audio bed
+  | 'show-join-code'    // show the join code for sharing
+  | 'leave-dataspace'   // disconnect and return to join panel
+  | 'recenter'          // recenter the dataspace anchor
+  | 'toggle-labels'     // show/hide node labels
+  | 'reset-view'        // reset drill-in state + selections
+  | string;             // custom actions (extensible)
+
+/** Default HUD items used when the manifest doesn't specify a hud field. */
+export const DEFAULT_HUD_ITEMS: DataspaceHudItem[] = [
+  { id: 'recenter', label: 'Recenter', icon: '\u2295', action: 'recenter' },
+  { id: 'reset', label: 'Reset', icon: '\u21BA', action: 'reset-view' },
+  { id: 'leave', label: 'Leave', icon: '\u2715', action: 'leave-dataspace' },
+];
 
 /** A single mark (visualization) within a dataspace manifest. */
 export interface MarkSpec {
@@ -74,7 +109,8 @@ export type MarkType =
   | 'line' | 'bar' | 'scatter' | 'arc'
   | 'tree' | 'treemap' | 'sunburst' | 'pack'
   | 'force' | 'ridgeline' | 'sankey'
-  | 'parallel' | 'tangled-tree' | 'edge-bundle' | 'hexbin';
+  | 'parallel' | 'tangled-tree' | 'edge-bundle' | 'hexbin'
+  | 'video';
 
 /** Inline data embedded in the manifest. */
 export interface InlineData {

@@ -47,21 +47,25 @@
       "hoverable": true
     },
     {
-      "id": "temp-history",
-      "type": "bar",
-      "title": "Temperature (last 6h)",
-      "subtitle": "Living room sensor",
+      "id": "sensor-map",
+      "type": "treemap",
+      "title": "Sensor Readings",
+      "subtitle": "Current values by device",
       "data": {
         "source": "inline",
-        "series": [
-          { "t": 0,  "v": 20.1 },
-          { "t": 1,  "v": 20.4 },
-          { "t": 2,  "v": 21.0 },
-          { "t": 3,  "v": 21.8 },
-          { "t": 4,  "v": 22.3 },
-          { "t": 5,  "v": 22.0 }
-        ]
+        "hierarchy": {
+          "name": "sensors",
+          "children": [
+            { "name": "temp-living", "value": 22 },
+            { "name": "temp-bedroom", "value": 19 },
+            { "name": "humidity", "value": 45 },
+            { "name": "motion", "value": 1 },
+            { "name": "light-level", "value": 80 },
+            { "name": "CO2", "value": 420 }
+          ]
+        }
       },
+      "drillable": true,
       "hoverable": true
     },
     {
@@ -100,5 +104,15 @@
       "hoverable": true,
       "draggable": true
     }
-  ]
+  ],
+  "hud": {
+    "items": [
+      { "id": "refresh", "label": "Refresh data", "icon": "\ud83d\udd04", "action": "reload-marks" },
+      { "id": "audio", "label": "Ambient sound", "icon": "\ud83d\udd0a", "action": "toggle-ambient" },
+      { "id": "share", "label": "Share code", "icon": "\ud83d\udce4", "action": "show-join-code" },
+      { "id": "recenter", "label": "Recenter", "icon": "\u2295", "action": "recenter" },
+      { "id": "leave", "label": "Leave room", "icon": "\ud83d\udeaa", "action": "leave-dataspace" }
+    ],
+    "position": "wrist"
+  }
 }

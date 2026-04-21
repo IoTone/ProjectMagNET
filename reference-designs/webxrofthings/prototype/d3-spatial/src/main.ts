@@ -22,6 +22,13 @@ import { DataspaceRegistry, DataspaceHud, applyFocusDim } from './dataspace/Data
 import { syntheticHR } from './demo/heartRate';
 import { createJoinPanel } from './onboarding/JoinPanel';
 import { JoinState } from './onboarding/types';
+import { registerAllBuilders } from './manifest/builders';
+import { loadManifest } from './manifest/loader';
+import { renderManifestToScene } from './manifest/renderManifest';
+import type { DataspaceManifest } from './manifest/schema';
+import { DEFAULT_HUD_ITEMS } from './manifest/schema';
+import { DataspaceMenu } from './ui/DataspaceMenu';
+import { HandMenu } from './ui/HandMenu';
 
 const renderer = new THREE.WebGLRenderer({
   antialias: true,
@@ -89,7 +96,7 @@ uiAnchor.add(demoRoot);
 const vizAnchor = new THREE.Group();
 vizAnchor.name = 'vizAnchor';
 scene.add(vizAnchor);
-const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz } = buildVizGallery();
+const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz, videoPanel: videoPanelViz } = buildVizGallery();
 vizAnchor.add(galleryRoot);
 
 // Per-hand NodeHoverFx: indices 0, 1 = XR hands; 2 = mouse/desktop
@@ -102,15 +109,45 @@ for (let i = 0; i < 3; i++) {
 // Convenience alias for desktop / legacy paths
 const nodeHoverFx: NodeHoverFx = nodeHoverFxs[2]!;
 vizAnchor.position.set(0, 1.3, 0);
-const urlScene = new URLSearchParams(window.location.search).get('scene');
-const defaultToGallery = urlScene !== 'charts';
-vizAnchor.visible = defaultToGallery;
-uiAnchor.visible = !defaultToGallery;
+const urlParams = new URLSearchParams(window.location.search);
+const urlScene = urlParams.get('scene');
+const urlManifest = urlParams.get('manifest');
+// Determine initial scene mode
+// No query params -> show Join panel (default)
+// ?scene=demo or ?scene=gallery -> show hard-coded gallery
+// ?scene=charts -> show charts scene
+// ?manifest=<url> -> fetch manifest, render gallery from it
+const isManifestMode = urlManifest !== null;
+const isJoinMode = !isManifestMode && urlScene === null;
+const defaultToGallery = urlScene === 'demo' || urlScene === 'gallery';
+const defaultToCharts = urlScene === 'charts';
+
+// Register manifest builders at startup
+registerAllBuilders();
+
+// Initial visibility depends on mode
+if (isJoinMode) {
+  vizAnchor.visible = false;
+  uiAnchor.visible = false;
+} else if (defaultToCharts) {
+  vizAnchor.visible = false;
+  uiAnchor.visible = true;
+} else {
+  vizAnchor.visible = true;
+  uiAnchor.visible = false;
+}
+
+// Forward reference for join panel (created later in file)
+let _joinPanelRef: { visible(): boolean; hide(): void } | null = null;
 
 function showVizGallery(show: boolean) {
   vizAnchor.visible = show;
   uiAnchor.visible = !show;
+  // Hide join panel when switching to gallery/charts
+  if (_joinPanelRef?.visible()) _joinPanelRef.hide();
   if (toolbar) toolbar.setActive(show ? 'gallery' : 'charts');
+  // Show/hide the dataspace menu with the gallery
+  if (show) showDataspaceMenu(); else hideDataspaceMenu();
   if (show) {
     const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
     const pos = new THREE.Vector3();
@@ -821,6 +858,35 @@ function placeAnchorInFrontOfUser() {
   active.lookAt(pos.x, active.position.y, pos.z);
   anchorPlaced = true;
   console.log('[anchor] placed at', target.toArray(), 'cam y=', pos.y.toFixed(2), 'gallery=', vizAnchor.visible);
+  repositionDataspaceMenu();
+}
+
+function repositionDataspaceMenu() {
+  if (!dataspaceMenu || !dataspaceMenuAnchor) return;
+  const menuPos = dataspaceMenu.getPosition?.() ?? 'bottom';
+  if (menuPos === 'wrist') return;
+  const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const camPos = new THREE.Vector3();
+  xrCam.getWorldPosition(camPos);
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.quaternion);
+  fwd.y = 0;
+  if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
+  fwd.normalize();
+  if (menuPos === 'side') {
+    const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+    dataspaceMenuAnchor.position.set(
+      camPos.x - right.x * 0.5 + fwd.x * 0.9,
+      camPos.y - 0.15,
+      camPos.z - right.z * 0.5 + fwd.z * 0.9,
+    );
+  } else {
+    dataspaceMenuAnchor.position.set(
+      camPos.x + fwd.x * 0.9,
+      camPos.y - 0.3,
+      camPos.z + fwd.z * 0.9,
+    );
+  }
+  dataspaceMenuAnchor.lookAt(camPos.x, dataspaceMenuAnchor.position.y, camPos.z);
 }
 
 window.addEventListener('resize', () => {
@@ -1121,6 +1187,10 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
   fillJoinCode(code: string) { joinPanel.fillCode(code); },
   submitJoinCode() { joinPanel.submit(); },
   joinPanelState() { return joinPanel.state(); },
+
+  // --- P1.3: Dataspace Menu ---
+  showDataspaceMenu() { showDataspaceMenu(); },
+  hideDataspaceMenu() { hideDataspaceMenu(); },
 };
 
 // --- Morph demo mode ---
@@ -1163,18 +1233,39 @@ joinPanelAnchor.name = 'joinPanelAnchor';
 scene.add(joinPanelAnchor);
 
 const joinPanel = createJoinPanel({
-  onAccepted: (_code: string) => {
-    // Wait 1.5s, then hide panel and show gallery with demo data
+  onAccepted: async (_code: string, token?: string, manifestUrl?: string, _dataspace?: string) => {
+    if (token && manifestUrl) {
+      // Real server flow: fetch manifest with token, then render
+      try {
+        const headers: Record<string, string> = {
+          'Authorization': `Bearer ${token}`,
+        };
+        const resp = await fetch(manifestUrl, { headers });
+        const manifest = await resp.json() as DataspaceManifest;
+        const result = await loadManifest(manifest, token);
+        renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
+        vizAnchor.position.set(0, 1.3, 0);
+        console.log(`[join] Manifest loaded: ${result.marks.length} marks from "${result.name}"`);
+        // Create dataspace menu from manifest HUD config
+        createDataspaceMenu(manifest.hud?.items, manifest.hud?.position);
+      } catch (e) {
+        console.error('[join] Failed to load manifest:', e);
+      }
+    }
+    // Wait 1s, then hide panel and show the viz
     setTimeout(() => {
       hideJoinPanel();
-      showVizGallery(true);
-    }, 1500);
+      vizAnchor.visible = true;
+      uiAnchor.visible = false;
+      showDataspaceMenu();
+    }, 1000);
   },
   onRejected: (_code: string, _reason: string) => {
     // Panel handles visual feedback internally
   },
 });
 joinPanelAnchor.add(joinPanel.group);
+_joinPanelRef = joinPanel;
 
 // Register join panel interactables with Interact
 function registerJoinInteractables() {
@@ -1231,8 +1322,8 @@ window.addEventListener('keydown', e => {
 const toolbar = new Toolbar({
   buttons: [
     { id: 'join',    label: 'Join',    onSelect: () => { showJoinPanel(); } },
-    { id: 'gallery', label: 'Gallery', active: defaultToGallery,  onSelect: () => { hideJoinPanel(); stopMorphMode(); showVizGallery(true);  placeAnchorInFrontOfUser(); } },
-    { id: 'charts',  label: 'Charts',  active: !defaultToGallery, onSelect: () => { hideJoinPanel(); stopMorphMode(); showVizGallery(false); placeAnchorInFrontOfUser(); } },
+    { id: 'gallery', label: 'Gallery', active: defaultToGallery && !isJoinMode,  onSelect: () => { hideJoinPanel(); stopMorphMode(); showVizGallery(true);  placeAnchorInFrontOfUser(); } },
+    { id: 'charts',  label: 'Charts',  active: defaultToCharts, onSelect: () => { hideJoinPanel(); stopMorphMode(); showVizGallery(false); placeAnchorInFrontOfUser(); } },
     { id: 'morph',   label: 'Morph',   onSelect: () => { hideJoinPanel(); startMorphMode(); placeAnchorInFrontOfUser(); } },
     { id: 'recenter', label: 'Recenter', onSelect: () => placeAnchorInFrontOfUser() },
     { id: 'floor', label: 'Set Floor', onSelect: () => placeFloorUnderHead() },
@@ -1273,6 +1364,119 @@ function placeToolbarNearUser() {
 }
 placeToolbarNearUser();
 
+// --- P1.3: Configurable Dataspace HUD / Hand Menu ---
+let dataspaceMenu: DataspaceMenu | null = null;
+let handMenu: HandMenu | null = null;
+const dataspaceMenuAnchor = new THREE.Group();
+dataspaceMenuAnchor.name = 'dataspaceMenuAnchor';
+scene.add(dataspaceMenuAnchor);
+
+function handleDataspaceMenuAction(actionId: string) {
+  switch (actionId) {
+    case 'recenter':
+      placeAnchorInFrontOfUser();
+      break;
+    case 'reset-view':
+      // Reset drill-in state + selections on all hierarchy marks
+      for (const entry of hierarchyVizEntries) {
+        while (entry.viz.getFocusPath().length > 0) entry.viz.drillOut();
+        entry.viz.clearSelection();
+        updateBreadcrumbAndHud(entry);
+      }
+      break;
+    case 'leave-dataspace':
+      vizAnchor.visible = false;
+      hideDataspaceMenu();
+      showJoinPanel();
+      break;
+    case 'toggle-ambient':
+      if (ambientState === 'on') stopAmbient();
+      else startAmbient();
+      break;
+    case 'reload-marks':
+      console.log('[dataspace-menu] reload-marks action triggered');
+      break;
+    case 'show-join-code':
+      console.log('[dataspace-menu] show-join-code action triggered');
+      break;
+    case 'toggle-labels':
+      console.log('[dataspace-menu] toggle-labels action triggered');
+      break;
+    default:
+      console.warn(`[dataspace-menu] unhandled custom action: ${actionId}`);
+      break;
+  }
+}
+
+function createDataspaceMenu(items?: import('./manifest/schema').DataspaceHudItem[], position?: 'bottom' | 'side' | 'wrist') {
+  // Clean up existing menu registrations
+  if (dataspaceMenu) {
+    for (const { id } of dataspaceMenu.getBlocks()) {
+      interact.remove(id);
+    }
+  }
+
+  const menuItems = items ?? DEFAULT_HUD_ITEMS;
+  dataspaceMenu = new DataspaceMenu({
+    items: menuItems,
+    onAction: handleDataspaceMenuAction,
+    position: position ?? 'bottom',
+  });
+
+  dataspaceMenuAnchor.add(dataspaceMenu.group);
+
+  // Register menu blocks with Interact
+  for (const { block, id, onSelect } of dataspaceMenu.getBlocks()) {
+    interact.add({
+      id,
+      object: block,
+      onHoverIn: () => { dataspaceMenu!.hoverIn(block); },
+      onHoverOut: () => { dataspaceMenu!.hoverOut(block); },
+      onSelect: () => onSelect(),
+    });
+  }
+
+  // Create HandMenu for wrist mode
+  if (dataspaceMenu.getPosition() === 'wrist') {
+    handMenu = new HandMenu({
+      menu: dataspaceMenu,
+      rig,
+      headCamera: camera,
+      handIndex: 0,
+    });
+    // HandMenu manages visibility via palm-up detection
+  }
+
+  return dataspaceMenu;
+}
+
+function showDataspaceMenu() {
+  if (!dataspaceMenu) {
+    createDataspaceMenu();
+  }
+
+  // Position depends on mode
+  const pos = dataspaceMenu!.getPosition();
+  if (pos === 'wrist' && handMenu) {
+    // HandMenu will manage position/visibility per-frame
+    dataspaceMenuAnchor.visible = true;
+    return;
+  }
+
+  // Position in front of the user and show
+  dataspaceMenuAnchor.visible = true;
+  repositionDataspaceMenu();
+  dataspaceMenu!.show();
+}
+
+function hideDataspaceMenu() {
+  if (dataspaceMenu) dataspaceMenu.hide();
+  dataspaceMenuAnchor.visible = false;
+}
+
+// Create default dataspace menu for the demo gallery
+createDataspaceMenu();
+
 // --- Feature 3: Live data streaming for HR line chart ---
 let hrUpdateTimer = 0;
 const liveHRData = syntheticHR(60, 4, 42);
@@ -1291,6 +1495,32 @@ function doHRUpdate() {
   }
 }
 
+// ─── Startup: manifest mode or join mode ───────────────────────────
+if (isManifestMode && urlManifest) {
+  // Direct manifest URL — skip join, fetch and render immediately
+  (async () => {
+    try {
+      const resp = await fetch(urlManifest);
+      const manifest = await resp.json() as DataspaceManifest;
+      const result = await loadManifest(manifest);
+      renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
+      vizAnchor.position.set(0, 1.3, 0);
+      vizAnchor.visible = true;
+      console.log(`[manifest] Loaded ${result.marks.length} marks from "${result.name}"`);
+      // Create dataspace menu from manifest HUD config
+      createDataspaceMenu(manifest.hud?.items, manifest.hud?.position);
+      showDataspaceMenu();
+    } catch (e) {
+      console.error('[manifest] Failed to load manifest from URL:', e);
+      // Fall back to gallery
+      vizAnchor.visible = true;
+    }
+  })();
+} else if (isJoinMode) {
+  // Show join panel on startup
+  showJoinPanel();
+}
+
 let lastT = 0;
 renderer.setAnimationLoop((time, frame) => {
   const dt = lastT ? (time - lastT) / 1000 : 0;
@@ -1301,6 +1531,11 @@ renderer.setAnimationLoop((time, frame) => {
   // Feature 1: Update fingertip grab (hand-tracking)
   if (vizAnchor.visible) {
     fingertipGrab.update();
+  }
+
+  // P1.3: Update hand menu (wrist-anchored dataspace menu)
+  if (handMenu && dataspaceMenuAnchor.visible) {
+    handMenu.update();
   }
 
   // Feature 2: XR Brush — check if trigger held long enough to start brush mode
@@ -1336,6 +1571,7 @@ renderer.setAnimationLoop((time, frame) => {
     packViz.tick();
     ridgelineViz.tick(time / 1000);
     morphDemoViz.tick();
+    videoPanelViz.tick();
 
     // Morph auto-cycle
     if (morphModeActive) {

@@ -60,9 +60,57 @@
           "description": "Number of characters in the join code."
         }
       }
+    },
+    "hud": {
+      "$ref": "#/$defs/DataspaceHudConfig",
+      "description": "Optional HUD menu configuration for this dataspace."
     }
   },
   "$defs": {
+    "DataspaceHudConfig": {
+      "type": "object",
+      "description": "Configuration for a per-dataspace HUD context menu.",
+      "required": ["items"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Menu items to display in the HUD.",
+          "items": {
+            "$ref": "#/$defs/DataspaceHudItem"
+          }
+        },
+        "position": {
+          "type": "string",
+          "enum": ["bottom", "side", "wrist"],
+          "description": "Where to position the menu relative to the dataspace anchor."
+        }
+      }
+    },
+    "DataspaceHudItem": {
+      "type": "object",
+      "description": "A single item in the dataspace HUD context menu.",
+      "required": ["id", "label", "action"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this menu item."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human-readable label shown on the menu item."
+        },
+        "icon": {
+          "type": "string",
+          "description": "Emoji or text icon shown beside the label."
+        },
+        "action": {
+          "type": "string",
+          "description": "Action to fire when the item is selected. Built-in actions: reload-marks, toggle-ambient, show-join-code, leave-dataspace, recenter, toggle-labels, reset-view. Custom strings are also allowed."
+        }
+      }
+    },
     "MarkSpec": {
       "type": "object",
       "description": "A single mark (visualization) within a dataspace manifest.",
