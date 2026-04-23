@@ -14,12 +14,22 @@
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_mac.h"
+#include "esp_netif_sntp.h"
+#include "esp_sntp.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/pulse_cnt.h"
 #include "driver/usb_serial_jtag.h"
 #include "forth_core.h"
 #include "forth_version.h"
+
+extern "C" {
+#include "craw_nvs.h"
+#include "craw_wifi.h"
+#include "craw_ble_provision.h"
+#include "craw_hive.h"
+}
+#include <time.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -446,6 +456,56 @@ static int cx = 120, cy = 120;
 static int ring_ro = 102, ring_ri = 80;
 static int play_area_r = 64;
 
+// ----------------------------------------------------------------------------
+// Phase-4 ruler state (M5Dial = ruler in the hive)
+// ----------------------------------------------------------------------------
+typedef enum { BLE_UI_OFF, BLE_UI_ADVERT, BLE_UI_CONNECTED } ble_ui_t;
+typedef enum { WIFI_UI_OFF, WIFI_UI_CONNECTING, WIFI_UI_CONNECTED, WIFI_UI_FAILED } wifi_ui_t;
+
+static volatile ble_ui_t   ble_ui  = BLE_UI_OFF;
+static volatile wifi_ui_t  wifi_ui = WIFI_UI_OFF;
+static char                hive_ip_str[20]     = "N/A";
+static volatile bool       ble_teardown_requested = false;
+static volatile bool       ble_torn_down          = false;
+static bool                sntp_started           = false;
+static bool                time_synced            = false;
+#define TIME_SYNC_EPOCH_THRESHOLD 1577836800 // 2020-01-01
+
+// Ruler peer table. Populated by the on_hello callback; polled from the
+// main loop for the status bar. 8 slots matches craw_hive_ruler's MAX_SESSIONS.
+#define MAX_PEERS 8
+struct PeerRec {
+    bool     in_use;
+    char     node_id[33];
+    char     role[17];
+    int64_t  joined_ms;
+};
+static PeerRec peers[MAX_PEERS] = {};
+static int peer_count = 0;
+static bool ruler_started = false;
+
+static void peers_record(const char *node_id, const char *role) {
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    // Update existing or add new
+    for (int i = 0; i < MAX_PEERS; i++) {
+        if (peers[i].in_use && strcmp(peers[i].node_id, node_id) == 0) {
+            strncpy(peers[i].role, role, sizeof(peers[i].role) - 1);
+            peers[i].joined_ms = now_ms;
+            return;
+        }
+    }
+    for (int i = 0; i < MAX_PEERS; i++) {
+        if (!peers[i].in_use) {
+            peers[i].in_use = true;
+            strncpy(peers[i].node_id, node_id, sizeof(peers[i].node_id) - 1);
+            strncpy(peers[i].role,    role,    sizeof(peers[i].role) - 1);
+            peers[i].joined_ms = now_ms;
+            peer_count++;
+            return;
+        }
+    }
+}
+
 // Sleep / wake state. When true, display backlight is off and main loop
 // skips rendering. Any encoder tick, touch press, or button press returns
 // the display to the normal dial program via wake_from_sleep().
@@ -470,6 +530,156 @@ static void play_invert();
 static void effect_starburst();
 
 // ---------------------------------------------------------------------------
+// Phase-4 ruler: WiFi / BLE provisioning / hive callbacks
+// ---------------------------------------------------------------------------
+static char ruler_id[40]  = "MagNET-ruler";
+static char ruler_mac4[8] = "0000";
+static const char *HIVE_ID = "beehive-1";
+
+static void derive_ruler_id(void) {
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(ruler_mac4, sizeof(ruler_mac4), "%02x%02x", mac[4], mac[5]);
+    snprintf(ruler_id,   sizeof(ruler_id),   "MagNET-ruler-%s", ruler_mac4);
+}
+
+static void on_hive_hello(const char *node_id, const char *role_requested,
+                          const char *hive_id, bool *accept, char *role_out,
+                          size_t role_out_len, void *ctx) {
+    (void)ctx; (void)hive_id;
+    // v1 consensus stub: accept everyone, grant the role they asked for.
+    *accept = true;
+    strncpy(role_out, role_requested, role_out_len - 1);
+    role_out[role_out_len - 1] = '\0';
+    peers_record(node_id, role_out);
+    ESP_LOGI(TAG, "[HIVE] peer joined: %s as %s", node_id, role_out);
+    usb_printf("[HIVE] peer joined: %s as %s\r\n", node_id, role_out);
+}
+
+static void maybe_start_ruler(void) {
+    if (ruler_started) return;
+    if (!craw_wifi_is_connected()) return;
+    if (time(NULL) < TIME_SYNC_EPOCH_THRESHOLD) return;
+    derive_ruler_id();
+    static uint8_t secret[32];
+    memcpy(secret, CRAW_HIVE_DEV_SECRET, 32);
+    static craw_hive_ruler_config_t rcfg;
+    rcfg = {};
+    rcfg.port         = CRAW_HIVE_DEFAULT_PORT;
+    rcfg.hive_id      = HIVE_ID;
+    rcfg.ruler_id     = ruler_id;
+    rcfg.secret       = secret;
+    rcfg.on_hello     = on_hive_hello;
+    rcfg.on_hello_ctx = nullptr;
+    if (craw_hive_ruler_start(&rcfg) == 0) {
+        ruler_started = true;
+        usb_printf("[HIVE] ruler started as '%s' (hive=%s)\r\n", ruler_id, HIVE_ID);
+    } else {
+        usb_print("[HIVE] ruler_start failed\r\n");
+    }
+}
+
+static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
+    (void)ctx;
+    switch (event) {
+    case CRAW_WIFI_EVENT_CONNECTED:
+        craw_wifi_get_ip_str(hive_ip_str, sizeof(hive_ip_str));
+        wifi_ui = WIFI_UI_CONNECTED;
+        usb_printf("\r\n[WiFi] connected, IP: %s\r\n", hive_ip_str);
+        craw_ble_provision_set_ip(hive_ip_str);
+        craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTED);
+        // BLE still uses ~50 KB and couples into audio on some boards. The
+        // Dial uses LEDC buzzer (not I2S amp) so coupling is less audible,
+        // but the memory is still better spent on mDNS + TCP + hive.
+        craw_ble_provision_stop_advertising();
+        ble_ui = BLE_UI_OFF;
+        ble_teardown_requested = true;
+        if (!sntp_started) {
+            esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            esp_netif_sntp_init(&sntp_cfg);
+            sntp_started = true;
+            usb_print("[SNTP] sync kicked off\r\n");
+        }
+        break;
+    case CRAW_WIFI_EVENT_DISCONNECTED:
+        wifi_ui = WIFI_UI_OFF;
+        usb_print("\r\n[WiFi] disconnected\r\n");
+        strncpy(hive_ip_str, "N/A", sizeof(hive_ip_str));
+        if (!ble_torn_down) {
+            craw_ble_provision_set_ip(hive_ip_str);
+            craw_ble_provision_advertise();
+            ble_ui = BLE_UI_ADVERT;
+        }
+        break;
+    case CRAW_WIFI_EVENT_CONNECT_FAILED:
+        wifi_ui = WIFI_UI_FAILED;
+        usb_print("\r\n[WiFi] failed\r\n");
+        strncpy(hive_ip_str, "N/A", sizeof(hive_ip_str));
+        if (!ble_torn_down) {
+            craw_ble_provision_set_ip(hive_ip_str);
+            craw_ble_provision_set_status(CRAW_BLE_PROV_FAILED);
+            craw_ble_provision_advertise();
+            ble_ui = BLE_UI_ADVERT;
+        }
+        break;
+    }
+}
+
+static void on_prov_event(craw_ble_prov_state_t state,
+                          const char *ssid, const char *pass, void *ctx) {
+    (void)ctx;
+    switch (state) {
+    case CRAW_BLE_PROV_CREDS_RECEIVED:
+        ble_ui = BLE_UI_CONNECTED;
+        usb_printf("\r\n[PROV] creds: ssid='%s'\r\n", ssid);
+        break;
+    case CRAW_BLE_PROV_COMMIT_REQUESTED:
+        if (!ssid || !ssid[0]) break;
+        usb_printf("\r\n[PROV] commit -> '%s'\r\n", ssid);
+        craw_nvs_save_wifi_creds(ssid, pass ? pass : "");
+        wifi_ui = WIFI_UI_CONNECTING;
+        craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
+        craw_wifi_connect(ssid, pass ? pass : "");
+        break;
+    default:
+        break;
+    }
+}
+
+// Background task: performs deferred BLE teardown (outside NimBLE callback
+// context), polls SNTP completion, starts the ruler when all preconditions
+// are satisfied. Runs at low priority so it never interferes with the
+// playground loop / encoder / touch.
+static void hive_housekeeping_task(void *arg) {
+    (void)arg;
+    while (1) {
+        if (ble_teardown_requested && !ble_torn_down) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            size_t before = esp_get_free_heap_size();
+            craw_ble_provision_deinit();
+            ble_torn_down = true;
+            size_t after = esp_get_free_heap_size();
+            usb_printf("[BLE] torn down. Heap: %u -> %u (+%d bytes)\r\n",
+                       (unsigned)before, (unsigned)after,
+                       (int)after - (int)before);
+        }
+        if (sntp_started && !time_synced) {
+            time_t now = time(NULL);
+            if (now > TIME_SYNC_EPOCH_THRESHOLD) {
+                time_synced = true;
+                struct tm t;
+                localtime_r(&now, &t);
+                char buf[32];
+                strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &t);
+                usb_printf("[SNTP] time synced: %s UTC\r\n", buf);
+            }
+        }
+        maybe_start_ruler();
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Drawing functions
 // ---------------------------------------------------------------------------
 static void draw_status()
@@ -480,9 +690,46 @@ static void draw_status()
     (void)mute;
 }
 
+// Tiny status bar near the top of the dial: 3 colored dots + peer count.
+// Called from draw_center_label so every redraw reflects current state.
+static void draw_hive_status_bar()
+{
+    auto &t = THEMES[theme_idx];
+    int y = cy - 64;
+    int dot_r = 4;
+    // BLE dot
+    uint16_t ble_col = t.bg;
+    switch (ble_ui) {
+        case BLE_UI_ADVERT:    ble_col = rgb(0, 200, 255); break; // cyan
+        case BLE_UI_CONNECTED: ble_col = rgb(255, 255, 255); break; // white
+        default: ble_col = rgb(40, 40, 40); break;
+    }
+    display.fillCircle(cx - 30, y, dot_r, ble_col);
+    // WiFi dot
+    uint16_t wifi_col = t.bg;
+    switch (wifi_ui) {
+        case WIFI_UI_CONNECTING: wifi_col = rgb(255, 180, 0); break;
+        case WIFI_UI_CONNECTED:  wifi_col = rgb(0, 255, 80);  break;
+        case WIFI_UI_FAILED:     wifi_col = rgb(255, 60, 60); break;
+        default: wifi_col = rgb(40, 40, 40); break;
+    }
+    display.fillCircle(cx - 10, y, dot_r, wifi_col);
+    // Hive dot (lit when ruler is running)
+    uint16_t hive_col = ruler_started ? rgb(120, 255, 120) : rgb(40, 40, 40);
+    display.fillCircle(cx + 10, y, dot_r, hive_col);
+    // Peer count
+    display.setTextDatum(lgfx::textdatum_t::middle_left);
+    display.setTextColor(t.text, t.bg);
+    display.setTextSize(1);
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%d", peer_count);
+    display.drawString(buf, cx + 20, y);
+}
+
 static void draw_center_label()
 {
     auto &t = THEMES[theme_idx];
+    draw_hive_status_bar();
     display.setTextDatum(lgfx::textdatum_t::middle_center);
     display.setTextColor(t.primary, t.bg);
     display.setTextSize(2);
@@ -939,19 +1186,56 @@ static void w_appdevinfo(void) {
                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
+// ( -- ) Print BLE / WiFi / ruler state to USB serial.
+static void w_prov_status(void) {
+    char ssid[33], pass[65];
+    bool has = craw_nvs_load_wifi_creds(ssid, pass);
+    usb_printf("\r\nble:    %s\r\n", craw_ble_provision_device_name());
+    usb_printf("wifi:   %s\r\n", craw_wifi_is_connected() ? "connected" : "down");
+    usb_printf("ssid:   %s\r\n", has ? ssid : "(none)");
+    usb_printf("ip:     %s\r\n", hive_ip_str);
+    usb_printf("time:   %s\r\n", time_synced ? "synced" : "pending");
+    usb_printf("ruler:  %s\r\n", ruler_started ? ruler_id : "(not started)");
+}
+
+// ( -- ) Clear stored WiFi creds and reboot so BLE provisioning restarts.
+static void w_prov_reset(void) {
+    char ssid[33], pass[65];
+    craw_nvs_clear_wifi_creds(ssid, pass);
+    usb_print("\r\nCreds cleared. Rebooting to re-enter provisioning...\r\n");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+}
+
+// ( -- ) Print the peer table to USB serial.
+static void w_ruler_status(void) {
+    usb_printf("\r\nruler:   %s\r\n", ruler_started ? ruler_id : "(not started)");
+    usb_printf("hive:    %s\r\n", HIVE_ID);
+    usb_printf("peers:   %d\r\n", peer_count);
+    for (int i = 0; i < MAX_PEERS; i++) {
+        if (!peers[i].in_use) continue;
+        int64_t ago_s = (esp_timer_get_time() / 1000 - peers[i].joined_ms) / 1000;
+        usb_printf("  [%d] %-32s %-12s %llds ago\r\n",
+                   i, peers[i].node_id, peers[i].role, (long long)ago_s);
+    }
+}
+
 static void register_forth_words(void) {
-    forth_register_word("theme",       w_theme);
-    forth_register_word("brightness",  w_brightness);
-    forth_register_word("ping",        w_ping);
-    forth_register_word("starburst",   w_starburst);
-    forth_register_word("invert",      w_invert);
-    forth_register_word("mute",        w_mute);
-    forth_register_word("theme?",      w_theme_get);
-    forth_register_word("bright?",     w_bright_get);
-    forth_register_word("appbeep",     w_appbeep);
-    forth_register_word("appsleep",    w_appsleep);
-    forth_register_word("appshowmem",  w_appshowmem);
-    forth_register_word("appdevinfo",  w_appdevinfo);
+    forth_register_word("theme",        w_theme);
+    forth_register_word("brightness",   w_brightness);
+    forth_register_word("ping",         w_ping);
+    forth_register_word("starburst",    w_starburst);
+    forth_register_word("invert",       w_invert);
+    forth_register_word("mute",         w_mute);
+    forth_register_word("theme?",       w_theme_get);
+    forth_register_word("bright?",      w_bright_get);
+    forth_register_word("appbeep",      w_appbeep);
+    forth_register_word("appsleep",     w_appsleep);
+    forth_register_word("appshowmem",   w_appshowmem);
+    forth_register_word("appdevinfo",   w_appdevinfo);
+    forth_register_word("prov-status",  w_prov_status);
+    forth_register_word("prov-reset",   w_prov_reset);
+    forth_register_word("ruler-status", w_ruler_status);
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,6 +1294,32 @@ extern "C" void app_main(void)
     usb_printf("Free heap: %lu bytes\r\n\r\n",
         (unsigned long)esp_get_free_heap_size());
 
+    // ----- Phase-4 ruler: NVS + WiFi + BLE provisioning -----
+    craw_nvs_init_flash();
+    craw_nvs_migrate_wifi_profiles();
+    craw_wifi_init("MagNET-ruler", on_wifi_event, NULL);
+    craw_ble_provision_config_t pcfg = {};
+    pcfg.name_prefix = "MagNET-ruler";
+    pcfg.role        = "ruler";
+    craw_ble_provision_init(&pcfg, on_prov_event, NULL);
+    ble_ui = BLE_UI_ADVERT;
+    usb_printf("BLE: %s\r\n", craw_ble_provision_device_name());
+
+    xTaskCreate(hive_housekeeping_task, "hive_hk", 6144, NULL, 4, NULL);
+
+    // Auto-connect if creds stored from a previous boot
+    {
+        char ssid[33], pass[65];
+        if (craw_nvs_load_wifi_creds(ssid, pass) && ssid[0]) {
+            usb_printf("Stored WiFi '%s' — auto-connect\r\n", ssid);
+            wifi_ui = WIFI_UI_CONNECTING;
+            craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
+            craw_wifi_connect(ssid, pass);
+        } else {
+            usb_print("No stored WiFi — provision via BLE before ruler can start.\r\n");
+        }
+    }
+
     usb_print("Forth commands:\r\n");
     usb_print("  N theme      -- set theme (0-5)\r\n");
     usb_print("  N brightness -- set brightness (0-100)\r\n");
@@ -1022,7 +1332,10 @@ extern "C" void app_main(void)
     usb_print("  appbeep      -- play a short beep\r\n");
     usb_print("  appsleep     -- blank display until touch/turn/press\r\n");
     usb_print("  appshowmem   -- display heap state\r\n");
-    usb_print("  appdevinfo   -- display chip / CPU info\r\n\r\n");
+    usb_print("  appdevinfo   -- display chip / CPU info\r\n");
+    usb_print("  prov-status  -- BLE / WiFi / IP / ruler state\r\n");
+    usb_print("  prov-reset   -- clear WiFi, reboot into BLE provisioning\r\n");
+    usb_print("  ruler-status -- list connected hive peers\r\n\r\n");
 
     // Start Forth REPL in background task
     xTaskCreate(forth_repl_task, "forth_repl", 8192, NULL, 3, NULL);

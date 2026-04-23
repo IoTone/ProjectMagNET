@@ -82,10 +82,66 @@ To get comfortable with FORTH as an alternative language, please see: https://es
 
 Create M5Stamp3CU_Blinky_E4TH, based on ESPIDFORTH and use it as a component.  The project then is just handling blink functions in Forth, via native libraries.
 
+**Status**: Done. `M5Stamp3CU_Blinky_E4TH/` blinks a SK6812 via Forth words on the ESP32-C3. Later extended in Phase 4A to consume `craw_ble_provision` and `craw_hive` as a smoke-test consumer.
+
 ### Phase 3: ESPIDFORTH Port of the existing source
 
 The existing project that exists in this repository, in the subfolder M5StackDial-m5gfx-demo, is a nice implementation of touch interface with graphics, and utilizes nearly all of the features of an M5Stack Dial, other than networking.  Take the work from Phase 2, and re-implement M5StackDial-m5gfx-demo using ESPIDFORTH as a component and the language.  Let's call the new application M5StackDial-m5gfx-demo-ESPIDFORTH.  Put it in a new project directory.  The validation will be that it compiles and is successfully installed, and that it runs in the roughly the same manner as the original C++ code.  The expectation is this will be using an FFI to interact with ESP-IDF libraries in C.  If there is a way to leverage existing ESP-IDF libraries via platofrm IO we should try to do that.  Please add commands for "appbeep", "appsleep" to shut off the display until the screen or buttons are touched, and "appshowmem" to dump the mem state to the display and "appdevinfo" to dump all device / cpu info to the display.  Any movements of the dial should resume the normal dial program on the display.
 
-### Phase 4: Implementation of Design section
+**Status**: Done. `M5StackDial-m5gfx-demo-ESPIDFORTH/` reproduces the original playground (ring, touch crosshair, ping ripple, starburst, 6 themes, LEDC buzzer, rotary encoder) atop ESP-IDF + ESPIDFORTH. The four required FFI words (`appbeep`, `appsleep`, `appshowmem`, `appdevinfo`) are implemented. As of Phase-4 Milestone B, the same binary also serves as the hive ruler — see below.
 
-TODO.
+### Phase 4: Hive intelligence
+
+Hive protocol spec: [`docs/MagNET-HiveProtocol-v1.md`](docs/MagNET-HiveProtocol-v1.md).
+
+#### Milestone A — BLE WiFi provisioning (R3, R4)
+
+Reusable `components/craw_ble_provision/` — NimBLE GATT service with characteristics for WiFi SSID, password, commit trigger, IP-address notify, and status notify. On any fresh node, a phone running nRF Connect can provision WiFi in under a minute; creds persist in NVS via `craw_nvs`.
+
+**Status**: Done. Validated end-to-end on ESP32-C3 (`M5Stamp3CU_Blinky_E4TH/`), classic ESP32 (`M5Atom_Echo_Hex_Hive_Test/`, `M5Atom_Matrix_Hive_Test/`), and ESP32-S3 (the Dial project itself as a ruler). See service UUID map in any sub-project README.
+
+#### Milestone B — ruler discovery + HMAC join (R5, R6, R7)
+
+Reusable `components/craw_hive/` — both sides of the protocol in one component (`craw_hive_node_start()` / `craw_hive_ruler_start()`). Discovery via mDNS service type `_magnet-ruler._tcp` on port 7447 with TXT records `ver=1 hive=<id>`. Transport is length-prefixed JSON frames over TCP; authentication is HMAC-SHA256 over a canonicalized `type|nonce|ts|payload` string with a 32-byte pre-shared secret. The ruler auto-accepts any valid HELLO (v1 consensus stub).
+
+**Status**: Done. Validated end-to-end with:
+- **Ruler**: the M5Dial project (`M5StackDial-m5gfx-demo-ESPIDFORTH/`) — advertises via mDNS, maintains up to 8 peer sessions, shows BLE/WiFi/hive status as colored dots on the round display, peer table via `ruler-status` Forth word.
+- **Node**: the M5Atom Echo project (`M5Atom_Echo_Hex_Hive_Test/`) — provisioned via BLE, joins the Dial's hive, shows state color on the 37-LED Unit Hex, plays I2S chirps on state transitions.
+- **Dev harness**: `scripts/fake_ruler.py` — a ~220-line laptop script that speaks the protocol, useful for isolating node-side bugs when no real ruler is flashed.
+
+The post-WiFi bringup order is non-obvious and load-bearing: **BLE teardown → SNTP sync → hive start**. Without BLE teardown mDNS OOMs (~55 KB reclaim); without SNTP the HMAC timestamps are ~1.8 billion seconds off real time.
+
+#### Milestone C — signed Forth role bundles (R8-R12)
+
+**Status**: TODO. Next step from the current position.
+
+Role bundles are the payload `ROLE_GRANT` carries. Each is a JSON envelope containing a version, an author tag, a list of capabilities it provides, Ed25519 signature over a Forth source blob, and the blob itself. The node validates (signature, version monotonic, hash), then executes via `forth_eval_n()`. Ten stock roles from the design section (Ruler, Worker, Parrot, Scribe, Beeper, Warrior, Spy, Pet, ML PhD, Spawn) will ship as signed bundles in `bundles/`.
+
+## Topology at the current checkpoint
+
+```
+┌────────────────────┐              ┌────────────────────┐
+│  M5Dial (S3)       │              │  M5Atom Echo (ESP) │
+│  role = ruler      │              │  role = spawn      │
+│  - craw_wifi       │              │  - craw_wifi       │
+│  - craw_ble_prov   │◄─BLE prov────┤  - craw_ble_prov   │
+│  - craw_hive_ruler │◄─mDNS + TCP──┤  - craw_hive_node  │
+│  - playground UI   │   HMAC auth  │  - hex status      │
+│  - peer dots       │              │  - I2S chirps      │
+└────────────────────┘              └────────────────────┘
+                  ▲
+                  │ (optional) dev harness
+                  │ scripts/fake_ruler.py
+```
+
+## Shared components (`components/`)
+
+| Component | Purpose |
+|---|---|
+| `craw_serial` | USB-serial-JTAG / UART0 console abstraction |
+| `craw_nvs` | WiFi profile + credential persistence |
+| `craw_wifi` | WiFi STA lifecycle with event callback |
+| `craw_ble_provision` | Phase 4A — BLE provisioning GATT service + advertising/teardown control |
+| `craw_hive` | Phase 4B — mDNS + TCP + HMAC-SHA256 protocol, node + ruler sides |
+| `craw_mdns` | Simple mDNS hostname publisher (pre-Phase-4, retained for other projects) |
+| `craw_mqtt`, `craw_http`, `craw_speaker` | Earlier-phase helpers still in use by the M5StickC and M5Dial crawdad projects |

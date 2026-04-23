@@ -2,11 +2,23 @@
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_FREERTOS_HZ=1000
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
-CONFIG_PARTITION_TABLE_SINGLE_APP=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# Custom partition table — extra room for BLE + WiFi + mbedTLS + mDNS + hive
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # M5Dial has NO PSRAM — must disable
 # CONFIG_SPIRAM is not set
 
 # USB-serial-JTAG console
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# BLE — NimBLE only (classic BT not on S3 anyway).
+# BLE is used for WiFi provisioning; torn down once online (see main.cpp).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+
+# Save RAM
+CONFIG_LWIP_IPV6=n

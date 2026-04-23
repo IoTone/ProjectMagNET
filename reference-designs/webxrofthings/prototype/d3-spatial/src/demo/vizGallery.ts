@@ -71,11 +71,11 @@ export function buildVizGallery(): GalleryResult {
   const edgeBundle = buildEdgeBundle(sampleTree, sampleGraph(28));
   const morphDemo = buildMorphDemo(sampleTree);
   const videoPanel = buildVideoPanel({
-    url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
-    type: 'hls',
+    url: 'http://10.0.0.185/stream',
+    type: 'mjpeg',
     width: 0.28,
-    aspectRatio: 16 / 9,
-    title: 'video · HLS stream',
+    aspectRatio: 4 / 3,
+    title: 'video · ESP32-CAM',
   });
 
   const specs = [
@@ -91,7 +91,7 @@ export function buildVizGallery(): GalleryResult {
     { id: 'parallel',   title: 'parallel coords',            viz: parallel.group,      sublabel: '\u00a79 multivariate axes' },
     { id: 'edgeBundle', title: 'edge bundling',               viz: edgeBundle.group,    sublabel: '\u00a79 hierarchical routing' },
     { id: 'morph',      title: 'morph \u00b7 layout transition',  viz: morphDemo.group,     sublabel: 'tree \u2192 sunburst \u2192 treemap \u2192 pack' },
-    { id: 'video',      title: 'video \u00b7 HLS stream',         viz: videoPanel.group,    sublabel: 'live camera / test stream' },
+    { id: 'video',      title: 'video \u00b7 ESP32-CAM',          viz: videoPanel.group,    sublabel: 'live MJPEG camera feed' },
   ];
 
   const cols = 4;

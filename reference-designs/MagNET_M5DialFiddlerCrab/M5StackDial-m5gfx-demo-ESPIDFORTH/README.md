@@ -1,8 +1,8 @@
 # M5StackDial-m5gfx-demo-ESPIDFORTH
 
-Phase 3 of the MagNET Hive AI prototype: the M5Stack Dial playground demo ported from Arduino to ESP-IDF with ESPIDFORTH integration.
+Phase 3 **and** Phase-4-Milestone-B of the MagNET Hive AI prototype. Playground demo + ESPIDFORTH REPL, and — once provisioned to WiFi — acts as the **hive ruler**: advertises `_magnet-ruler._tcp` via mDNS and accepts node joins over the protocol documented in `../docs/MagNET-HiveProtocol-v1.md`.
 
-Uses M5GFX (LovyanGFX) natively on ESP-IDF for the round 240x240 GC9A01 display and FT5x06 touch, ESP-IDF PCNT for the rotary encoder, LEDC for the buzzer, and GPIO for the button. The Forth REPL runs in a background task over USB-serial-JTAG.
+Uses M5GFX (LovyanGFX) natively on ESP-IDF for the round 240x240 GC9A01 display and FT5x06 touch, ESP-IDF PCNT for the rotary encoder, LEDC for the buzzer, and GPIO for the button. The Forth REPL runs in a background task over USB-serial-JTAG. NimBLE hosts a BLE provisioning service at boot; once WiFi is up the BLE stack is torn down to free ~50 KB for mDNS + TCP.
 
 ## Hardware
 
@@ -51,6 +51,22 @@ In addition to all standard ESPIDFORTH words (see `ESPIDFORTH/README.md`), this 
 | `appsleep` | ( -- ) | Blank display + drop backlight to 0. Wake on touch, encoder, or button |
 | `appshowmem` | ( -- ) | Full-screen overlay: free heap / internal / min-free / largest block / uptime. Exit on any input |
 | `appdevinfo` | ( -- ) | Full-screen overlay: chip model + rev, cores, flash size, MAC, IDF / Forth versions. Exit on any input |
+| `prov-status` | ( -- ) | Print BLE / WiFi / IP / SNTP / ruler state to serial |
+| `prov-reset` | ( -- ) | Clear WiFi creds and reboot into BLE provisioning mode |
+| `ruler-status` | ( -- ) | Print hive peer table: `[idx] <node_id> <role> <joined-Ns-ago>` |
+
+## Ruler Mode (Phase 4 Milestone B)
+
+At boot the Dial advertises BLE name `MagNET-ruler-<MAC4>` with the `craw_ble_provision` GATT service (same UUIDs as every other MagNET node — see `../M5Atom_Echo_Hex_Hive_Test/README.md` for the table). Connect with nRF Connect, write SSID/password/commit, and the Dial will:
+
+1. Connect to WiFi
+2. Tear down BLE (frees ~50 KB)
+3. Sync time via SNTP (`pool.ntp.org`)
+4. Start the hive ruler: advertise `_magnet-ruler._tcp` on port 7447 via mDNS with TXT `ver=1 hive=beehive-1`, listen for TCP, validate HMAC-SHA256 on HELLO, auto-accept up to 8 peers
+
+The top of the dial display shows three 4-pixel status dots (BLE / WiFi / hive) plus the current peer count. Full peer details are available via `ruler-status` at the REPL.
+
+All Phase-3 playground behavior (rotate → brightness, tap → ping, button → theme, hold → starburst, long-press → invert) is preserved unchanged.
 
 ### Examples
 

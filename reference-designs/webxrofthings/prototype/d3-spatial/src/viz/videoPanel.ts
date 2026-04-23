@@ -49,25 +49,48 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
   let hlsInstance: any = null;
   let playing = false;
 
+  // MJPEG uses <img> directly as a texture source (no canvas — avoids tainted-canvas WebGL issue)
+  let mjpegImg: HTMLImageElement | null = null;
+  let imgTexture: THREE.Texture | null = null;
+
   // Initialize based on type
   if (type === 'hls') {
     initHLS(video, url).then(() => { if (autoplay) doPlay(); });
   } else if (type === 'mjpeg') {
-    // MJPEG: set video src directly (some browsers handle it)
-    video.src = url;
-    if (autoplay) doPlay();
+    mjpegImg = document.createElement('img');
+    mjpegImg.crossOrigin = 'anonymous';
+    mjpegImg.style.display = 'none';
+    document.body.appendChild(mjpegImg);
+    mjpegImg.onload = () => {
+      playing = true;
+      updateStatus('▶ streaming', TEXT.accent);
+    };
+    mjpegImg.onerror = () => {
+      updateStatus('camera offline', TEXT.error);
+    };
+    mjpegImg.src = url;
   }
 
-  // Video texture
-  const videoTexture = new THREE.VideoTexture(video);
-  videoTexture.minFilter = THREE.LinearFilter;
-  videoTexture.magFilter = THREE.LinearFilter;
-  videoTexture.colorSpace = THREE.SRGBColorSpace;
+  // Texture: VideoTexture for HLS, plain Texture from img for MJPEG
+  const videoTexture = type !== 'mjpeg'
+    ? new THREE.VideoTexture(video)
+    : null;
+  if (videoTexture) {
+    videoTexture.minFilter = THREE.LinearFilter;
+    videoTexture.magFilter = THREE.LinearFilter;
+    videoTexture.colorSpace = THREE.SRGBColorSpace;
+  }
+  if (type === 'mjpeg' && mjpegImg) {
+    imgTexture = new THREE.Texture(mjpegImg);
+    imgTexture.minFilter = THREE.LinearFilter;
+    imgTexture.magFilter = THREE.LinearFilter;
+    imgTexture.colorSpace = THREE.SRGBColorSpace;
+  }
 
   // Panel mesh
   const panelGeo = new THREE.PlaneGeometry(width, height);
   const panelMat = new THREE.MeshBasicMaterial({
-    map: videoTexture,
+    map: (type === 'mjpeg' ? imgTexture : videoTexture) ?? undefined,
     side: THREE.FrontSide,
   });
   const mesh = new THREE.Mesh(panelGeo, panelMat);
@@ -137,19 +160,29 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
     group,
     mesh,
     tick() {
-      if (playing && video.readyState >= video.HAVE_CURRENT_DATA) {
+      if (type === 'mjpeg' && mjpegImg && imgTexture) {
+        if (mjpegImg.complete && mjpegImg.naturalWidth > 0) {
+          imgTexture.needsUpdate = true;
+        }
+      } else if (playing && video.readyState >= video.HAVE_CURRENT_DATA && videoTexture) {
         videoTexture.needsUpdate = true;
       }
     },
     play() { doPlay(); },
-    pause() { video.pause(); playing = false; updateStatus('⏸ paused', TEXT.muted); },
+    pause() {
+      if (type === 'mjpeg' && mjpegImg) { mjpegImg.src = ''; playing = false; }
+      else { video.pause(); playing = false; }
+      updateStatus('⏸ paused', TEXT.muted);
+    },
     isPlaying() { return playing; },
     dispose() {
       video.pause();
       video.src = '';
       if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-      document.body.removeChild(video);
-      videoTexture.dispose();
+      if (video.parentElement) document.body.removeChild(video);
+      if (mjpegImg?.parentElement) document.body.removeChild(mjpegImg);
+      videoTexture?.dispose();
+      imgTexture?.dispose();
       panelGeo.dispose();
       panelMat.dispose();
       borderGeo.dispose();

@@ -16,6 +16,11 @@ export default defineConfig({
         target: 'http://localhost:3001',
         changeOrigin: true,
       },
+      '/camera': {
+        target: 'http://10.0.0.185',
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/camera/, ''),
+      },
     },
   },
   build: {
