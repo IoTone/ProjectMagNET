@@ -82,15 +82,53 @@ pio run -e m5cams3 -t upload -t monitor
 | Word | Stack | Description |
 |---|---|---|
 | `cam-snap` | ( -- size ) | Capture one JPEG; prints `JPEG <N> bytes <WxH>`; pushes size onto the Forth stack |
-| `cam-quality` | ( q -- ) | Set JPEG quality 0–63 (lower = better) |
-| `cam-framesize` | ( fs -- ) | Set frame size (enum, 0=QQVGA, 5=VGA, 8=SVGA, 10=UXGA) |
+| `cam-quality` | ( q -- ) | Set JPEG quality 0–63 (lower = better). Persisted to NVS |
+| `cam-framesize` | ( fs -- ) | Set frame size enum (see table below). Persisted to NVS |
+| `cam-vflip` | ( n -- ) | 1 = vertical flip (upside-down), 0 = off. Persisted to NVS |
+| `cam-hmirror` | ( n -- ) | 1 = horizontal mirror, 0 = off. Persisted to NVS |
+| `cam-reset-settings` | ( -- ) | Wipe persisted camera settings from NVS. Takes effect on next boot. Does **not** touch WiFi creds |
+| `cam-xclk-mhz` | ( mhz -- ) | Persist XCLK override (4–24 MHz). Takes effect on next boot. Use 10 or 8 if you see `NO-SOI` / frame-timeout errors on AI-Thinker |
 | `flash-on` / `flash-off` | ( -- ) | Toggle bright LED (AI-Thinker GPIO 4) or status LED (CamS3 GPIO 14) |
 | `stream-url` | ( -- ) | Print the two URLs you can hit from a browser |
-| `prov-status` | ( -- ) | BLE / WiFi / SSID / IP / SNTP / hostname / board / hive state |
+| `prov-status` | ( -- ) | BLE / WiFi / SSID / IP / SNTP / hostname / board / camera / hive state |
 | `prov-reset` | ( -- ) | Clear WiFi creds and reboot into BLE provisioning mode |
 | `hive-status` | ( -- ) | Print hive node state + session id |
 
 All standard ESPIDFORTH words are available too — use `words` to list them.
+
+### Framesize values
+
+`cam-framesize` takes an integer from the table below. Firmware default on a fresh boot is **8 (VGA 640×480)** — chosen as the stability sweet spot on the AI-Thinker board where larger frames correlate with PSRAM bandwidth saturation and power-supply brownout artifacts (color flashes, dropped frames). Values are persisted to NVS the moment you set them, so after `10 cam-framesize` the board comes back up at XGA on every subsequent boot until you say otherwise.
+
+| Value | Name | Resolution | JPEG typical size @ q12 |
+|---|---|---|---|
+| 0 | QQVGA | 160×120 | ~2 KB |
+| 3 | HQVGA | 240×176 | ~3 KB |
+| 5 | QVGA | 320×240 | ~6 KB |
+| 6 | CIF | 400×296 | ~10 KB |
+| 7 | HVGA | 480×320 | ~14 KB |
+| **8** | **VGA** | **640×480** | **~20 KB — default** |
+| 9 | SVGA | 800×600 | ~32 KB |
+| 10 | XGA | 1024×768 | ~55 KB |
+| 12 | HD | 1280×720 | ~70 KB |
+| 13 | SXGA | 1280×1024 | ~90 KB |
+| 14 | UXGA | 1600×1200 | ~130 KB |
+
+**Stability guidance:**
+
+- **QVGA / VGA (5 / 8)**: rock-solid on both AI-Thinker and CamS3 even with weak USB power. Choose this if you see color flashes or frame drops.
+- **SVGA / XGA (9 / 10)**: fine on a clean 5 V supply and a stable WiFi link. If you're seeing artifacts here, first try a better USB cable or a powered hub before blaming the firmware.
+- **HD / SXGA / UXGA (12–14)**: works only on M5 Unit CamS3 (8 MB OPI PSRAM) in practice. AI-Thinker's 4 MB QSPI PSRAM is too slow to sustain >1 MP streaming.
+
+### Persistence & factory-reset
+
+Camera settings live in NVS namespace `craw_camera` (keys `fs`, `q`, `vf`, `hm`) — completely separate from the `craw_config` namespace used by `craw_nvs` for WiFi credentials. You can blow away camera tuning without re-provisioning:
+
+- **`cam-reset-settings`** at the REPL → clears camera NVS only
+- **`prov-reset`** at the REPL → clears WiFi creds only (reboots)
+- **Full `esptool.py erase_flash`** → both, plus everything else
+
+Same `/control` HTTP endpoints (`/control?var=framesize&val=8`, `/control?var=quality&val=10`, `/control?var=vflip&val=1`, etc.) also persist — anything you tune from the web UI sticks across reboots.
 
 ## HTTP endpoints (stock CameraWebServer compatible)
 
@@ -121,6 +159,8 @@ The node publishes two records:
 - **No on-device AI inference yet**. The future path is Milestone-C role bundles: the ruler sends a signed Forth bundle carrying an ESP-DL inference graph + glue words, and the camera node evaluates it per frame. Not in scope for v0.1.
 - **`/control` parameter coverage is a subset** of the Arduino CameraWebServer: we expose framesize, quality, brightness, contrast, saturation, hmirror, vflip, flash. Special effects (sepia, AEC/AGC/AWB modes, exposure / gain ceiling) are not wired yet — easy to add by extending `http_stream.c` `control_handler()`.
 - **MJPEG under WiFi load**: pulling `/stream` saturates the WiFi uplink, which can cause hive PINGs to timeout. Acceptable for single-stream viewing; for multi-viewer deployments, consider running a local MJPEG relay and reducing frame size.
+- **AI-Thinker color-flash / dropped frames at high resolution**: the AI-Thinker board's 3.3 V regulator brown-outs during WiFi TX bursts that coincide with frame capture, producing color-flash artifacts or crashes. Lower the framesize (`8 cam-framesize` = VGA, or `5` = QVGA) until stable. Hardware workaround: add a bulk cap (100 µF+) across 3.3V/GND or power via a beefier USB cable/supply. The VGA default is chosen to avoid this on typical setups.
+- **`cam_hal: NO-SOI - JPEG start marker missing` (sensor output corruption)**: the sensor is transmitting but the bytes don't start with `0xFFD8`. Usually a clock-phase issue: lower XCLK gives the ESP32's I2S DMA more margin to latch PCLK edges cleanly. Fix: `10 cam-xclk-mhz` (or `8` for a more conservative fallback) at the REPL, then reboot. Pairs well with dropping framesize. If errors persist at 8 MHz, check the 24-pin FFC ribbon cable seating — it's a common physical culprit on AI-Thinker.
 
 ## Related projects in this repo
 

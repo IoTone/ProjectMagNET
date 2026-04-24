@@ -273,19 +273,29 @@ static void housekeeping_task(void *arg) {
         }
         if (ble_torn_down && !camera_ready) {
             /* Now that the BLE stack is gone, internal RAM is unfragmented
-             * and there's plenty of headroom for esp32-camera DMA. */
+             * and there's plenty of headroom for esp32-camera DMA.
+             *
+             * Default to VGA (640x480) rather than SVGA — this is the
+             * stability sweet spot on AI-Thinker ESP32-CAM: bigger frames
+             * cause PSRAM bandwidth saturation and correlate with WiFi-TX
+             * brownouts that manifest as color-flash artifacts and dropped
+             * frames. Users can override via `cam-framesize N` at the REPL
+             * (0=QQVGA .. 10=UXGA) — the setting is persisted to NVS. */
             craw_camera_config_t ccfg = {
                 .board        = (craw_camera_board_t)BOARD_ENUM,
                 .xclk_freq_hz = 20000000,
                 .jpeg_quality = 12,
-                .frame_size   = FRAMESIZE_SVGA,
+                .frame_size   = FRAMESIZE_VGA,
                 .fb_count     = 2,
                 .pixel_format = PIXFORMAT_JPEG,
             };
             int rc = craw_camera_init(&ccfg);
             if (rc == 0) {
+                /* Apply any persisted settings (framesize / quality / flip /
+                 * mirror). Silently falls through if NVS is empty. */
+                craw_camera_apply_saved_settings();
                 camera_ready = true;
-                uprintf("[cam] %s ready  SVGA JPEG q=12  flash GPIO=%d\r\n",
+                uprintf("[cam] %s ready  (defaults VGA/q12, NVS overrides applied)  flash GPIO=%d\r\n",
                         craw_camera_board_name(), craw_camera_flash_gpio());
             } else {
                 uprintf("[cam] init failed rc=0x%x — check wiring / PSRAM\r\n", rc);
@@ -359,6 +369,22 @@ static void w_cam_hmirror(void) {
 static void w_flash_on(void)  { craw_camera_flash_on();  uprint("\r\nflash on\r\n"); }
 static void w_flash_off(void) { craw_camera_flash_off(); uprint("\r\nflash off\r\n"); }
 
+/* ( -- ) Clear persisted camera settings (framesize / quality / flips / xclk).
+ * Defaults resume on next boot. */
+static void w_cam_reset_settings(void) {
+    craw_camera_clear_saved_settings();
+    uprint("\r\nCamera settings cleared from NVS (takes effect on reboot).\r\n");
+}
+
+/* ( mhz -- ) Override XCLK frequency. Typical values: 20 (default / fastest,
+ * OV2640 rated), 16, 10 (stability fallback), 8 (ultra-conservative).
+ * Persisted — takes effect on next boot (XCLK is locked at camera init). */
+static void w_cam_xclk_mhz(void) {
+    int mhz = (int)forth_pop();
+    craw_camera_set_xclk_mhz(mhz);
+    uprintf("\r\ncam-xclk-mhz=%d saved. Reboot to apply.\r\n", mhz);
+}
+
 static void w_stream_url(void) {
     if (!http_started) { uprint("\r\n(no WiFi yet)\r\n"); return; }
     uprintf("\r\nhttp://%s.local/stream\r\nhttp://%s/stream\r\n", hostname, ip_str);
@@ -402,6 +428,8 @@ static void register_forth_words(void) {
     forth_register_word("cam-framesize", w_cam_framesize);
     forth_register_word("cam-vflip",     w_cam_vflip);
     forth_register_word("cam-hmirror",   w_cam_hmirror);
+    forth_register_word("cam-reset-settings", w_cam_reset_settings);
+    forth_register_word("cam-xclk-mhz",       w_cam_xclk_mhz);
     forth_register_word("flash-on",      w_flash_on);
     forth_register_word("flash-off",     w_flash_off);
     forth_register_word("stream-url",    w_stream_url);

@@ -61,10 +61,27 @@ void craw_camera_release(camera_fb_t *fb);
 
 // Runtime sensor controls. Wrap sensor_t *s = esp_camera_sensor_get() and
 // call s->set_quality / s->set_framesize. Return 0 on success.
+/* Sensor mutators. Every one of these also writes the updated value to NVS
+ * (namespace "craw_camera"), so runtime changes survive reboot. If NVS
+ * write fails, the sensor change still applies — we only log the miss. */
 int craw_camera_set_quality(int q);
 int craw_camera_set_framesize(int fs);
 int craw_camera_set_vflip(int on);    /* 0/1 — vertical flip (upside-down) */
 int craw_camera_set_hmirror(int on);  /* 0/1 — horizontal mirror */
+
+/* Read NVS-persisted settings (if any) and apply them to the current
+ * sensor. Call once after craw_camera_init. No-op if NVS has no entries. */
+void craw_camera_apply_saved_settings(void);
+
+/* Clear persisted settings (revert to firmware defaults on next boot). */
+void craw_camera_clear_saved_settings(void);
+
+/* Persist an XCLK override (in MHz, valid 4..24). Takes effect on NEXT
+ * boot — XCLK is locked at esp_camera_init time and can't be changed
+ * live. Dropping from 20 → 10 often fixes NO-SOI / frame-timeout errors
+ * on AI-Thinker ESP32-CAM when the 3.3 V rail dips under WiFi + camera
+ * load. Value is stored in NVS under key "xclk". */
+void craw_camera_set_xclk_mhz(int mhz);
 
 // Flash / status LED helpers. No-op if the board has no LED_GPIO_NUM.
 void craw_camera_flash_on(void);

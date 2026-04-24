@@ -10,8 +10,33 @@
 #include <string.h>
 #include "esp_log.h"
 #include "driver/gpio.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
 static const char *TAG = "craw_camera";
+
+#define NVS_NS        "craw_camera"
+#define NVS_KEY_FS    "fs"
+#define NVS_KEY_Q     "q"
+#define NVS_KEY_VF    "vf"
+#define NVS_KEY_HM    "hm"
+#define NVS_KEY_XCLK  "xclk"   /* XCLK in MHz; 0 or missing = use cfg default */
+
+static void nvs_save_u8(const char *key, uint8_t v) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, key, v);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static bool nvs_load_u8(const char *key, uint8_t *out) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return false;
+    esp_err_t err = nvs_get_u8(h, key, out);
+    nvs_close(h);
+    return err == ESP_OK;
+}
 
 static craw_camera_board_t s_board     = CRAW_CAMERA_BOARD_AI_THINKER;
 static int                 s_led_gpio  = -1;
@@ -98,6 +123,14 @@ int craw_camera_init(const craw_camera_config_t *cfg) {
     camera_config_t c;
     build_cfg(cfg, &c);
 
+    /* If NVS has an XCLK override (set via craw_camera_set_xclk_mhz), apply
+     * it before esp_camera_init. XCLK cannot be changed after init. */
+    uint8_t xclk_mhz = 0;
+    if (nvs_load_u8(NVS_KEY_XCLK, &xclk_mhz) && xclk_mhz >= 4 && xclk_mhz <= 24) {
+        c.xclk_freq_hz = xclk_mhz * 1000000;
+        ESP_LOGI(TAG, "NVS override: XCLK=%d MHz", xclk_mhz);
+    }
+
     esp_err_t err = esp_camera_init(&c);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_camera_init failed: 0x%x", err);
@@ -132,25 +165,71 @@ int craw_camera_set_quality(int q) {
     if (!s || !s->set_quality) return -1;
     if (q < 0)  q = 0;
     if (q > 63) q = 63;
-    return s->set_quality(s, q);
+    int rc = s->set_quality(s, q);
+    if (rc == 0) nvs_save_u8(NVS_KEY_Q, (uint8_t)q);
+    return rc;
 }
 
 int craw_camera_set_framesize(int fs) {
     sensor_t *s = esp_camera_sensor_get();
     if (!s || !s->set_framesize) return -1;
-    return s->set_framesize(s, (framesize_t)fs);
+    int rc = s->set_framesize(s, (framesize_t)fs);
+    if (rc == 0) nvs_save_u8(NVS_KEY_FS, (uint8_t)fs);
+    return rc;
 }
 
 int craw_camera_set_vflip(int on) {
     sensor_t *s = esp_camera_sensor_get();
     if (!s || !s->set_vflip) return -1;
-    return s->set_vflip(s, on ? 1 : 0);
+    int rc = s->set_vflip(s, on ? 1 : 0);
+    if (rc == 0) nvs_save_u8(NVS_KEY_VF, on ? 1 : 0);
+    return rc;
 }
 
 int craw_camera_set_hmirror(int on) {
     sensor_t *s = esp_camera_sensor_get();
     if (!s || !s->set_hmirror) return -1;
-    return s->set_hmirror(s, on ? 1 : 0);
+    int rc = s->set_hmirror(s, on ? 1 : 0);
+    if (rc == 0) nvs_save_u8(NVS_KEY_HM, on ? 1 : 0);
+    return rc;
+}
+
+void craw_camera_apply_saved_settings(void) {
+    sensor_t *s = esp_camera_sensor_get();
+    if (!s) return;
+    uint8_t v;
+    if (nvs_load_u8(NVS_KEY_FS, &v) && s->set_framesize) {
+        s->set_framesize(s, (framesize_t)v);
+        ESP_LOGI(TAG, "restored framesize=%d from NVS", v);
+    }
+    if (nvs_load_u8(NVS_KEY_Q,  &v) && s->set_quality) {
+        s->set_quality(s, v);
+        ESP_LOGI(TAG, "restored quality=%d from NVS", v);
+    }
+    if (nvs_load_u8(NVS_KEY_VF, &v) && s->set_vflip) {
+        s->set_vflip(s, v ? 1 : 0);
+        ESP_LOGI(TAG, "restored vflip=%d from NVS", v);
+    }
+    if (nvs_load_u8(NVS_KEY_HM, &v) && s->set_hmirror) {
+        s->set_hmirror(s, v ? 1 : 0);
+        ESP_LOGI(TAG, "restored hmirror=%d from NVS", v);
+    }
+}
+
+void craw_camera_clear_saved_settings(void) {
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_all(h);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "cleared NVS settings");
+}
+
+void craw_camera_set_xclk_mhz(int mhz) {
+    if (mhz < 4)  mhz = 4;
+    if (mhz > 24) mhz = 24;
+    nvs_save_u8(NVS_KEY_XCLK, (uint8_t)mhz);
+    ESP_LOGI(TAG, "XCLK override saved: %d MHz (takes effect on reboot)", mhz);
 }
 
 void craw_camera_flash_on(void) {

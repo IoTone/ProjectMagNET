@@ -41,13 +41,25 @@ static const char INDEX_HTML[] =
     "<code>/control?var=quality&amp;val=10</code> (0–63, lower=better).</p>"
     "</body></html>";
 
+/* Every endpoint emits permissive CORS headers so browser-hosted viewers
+ * on any origin (localhost dev pages, file://, other LAN devices) can
+ * read images and sensor state. Access-Control-Allow-Methods advertises
+ * GET, OPTIONS so preflight-strict clients don't 405. */
+static void set_cors(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin",  "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
+}
+
 static esp_err_t index_handler(httpd_req_t *req) {
+    set_cors(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     return httpd_resp_sendstr(req, INDEX_HTML);
 }
 
 /* ----- /capture ----- */
 static esp_err_t capture_handler(httpd_req_t *req) {
+    set_cors(req);
     camera_fb_t *fb = craw_camera_capture();
     if (!fb) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "capture fail");
@@ -71,7 +83,7 @@ static const char *STREAM_PART     =
 static esp_err_t stream_handler(httpd_req_t *req) {
     esp_err_t rc = httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
     if (rc != ESP_OK) return rc;
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    set_cors(req);
     httpd_resp_set_hdr(req, "X-Framerate", "60");
 
     char part_buf[64];
@@ -95,6 +107,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
 
 /* ----- /control ----- */
 static esp_err_t control_handler(httpd_req_t *req) {
+    set_cors(req);
     char query[96] = {0};
     char var[24]   = {0};
     char val[24]   = {0};
@@ -131,6 +144,7 @@ static esp_err_t control_handler(httpd_req_t *req) {
 
 /* ----- /status ----- */
 static esp_err_t status_handler(httpd_req_t *req) {
+    set_cors(req);
     sensor_t *s = esp_camera_sensor_get();
     char buf[384];
     int framesize = s ? s->status.framesize : -1;
@@ -157,11 +171,14 @@ int cam_http_start(void) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port       = 80;
     cfg.ctrl_port         = 32768;
-    /* 7 slots: Chrome opens 2–3 speculative connections per host, and the
-     * /stream handler holds one slot per active viewer for the life of the
-     * stream. 4 was too low — Chrome would starve out other requests. */
-    cfg.max_open_sockets  = 7;
-    cfg.stack_size        = 8192;
+    /* 13 slots: Chrome opens 2–3 speculative connections per host, MJPEG
+     * /stream holds a slot per active viewer for the life of the stream,
+     * and we want headroom for OPTIONS preflights + concurrent /control
+     * requests from a webapp. lru_purge_enable auto-closes the oldest
+     * idle socket when a new one arrives → immune to browser socket leaks. */
+    cfg.max_open_sockets  = 13;
+    cfg.max_uri_handlers  = 16;   /* currently ~5 in use; room to grow */
+    cfg.stack_size        = 16384;
     cfg.lru_purge_enable  = true;
     cfg.recv_wait_timeout = 5;
     cfg.send_wait_timeout = 5;
