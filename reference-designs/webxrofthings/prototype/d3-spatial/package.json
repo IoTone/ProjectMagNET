@@ -10,7 +10,8 @@
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
-    "server": "npx tsx server/mock-join-server.ts"
+    "server": "npx tsx server/mock-join-server.ts",
+    "camera-proxy": "npx tsx server/camera-proxy.ts"
   },
   "dependencies": {
     "@types/d3-hierarchy": "^3.1.7",

@@ -70,12 +70,18 @@ export function buildVizGallery(): GalleryResult {
   const parallel = buildParallel(sampleParallel());
   const edgeBundle = buildEdgeBundle(sampleTree, sampleGraph(28));
   const morphDemo = buildMorphDemo(sampleTree);
+  // Camera URL. Default: /camera/capture (served via Vite proxy). This keeps
+  // the camera on the LAN and only tunnels the app — cloudflared never sees
+  // the camera directly, avoiding header-buffer overruns and connection resets.
+  const CAMERA_URL = import.meta.env.VITE_CAMERA_URL ?? '/camera/capture';
+  const CAMERA_MODE = (import.meta.env.VITE_CAMERA_MODE as 'mjpeg' | 'frames') ?? 'frames';
   const videoPanel = buildVideoPanel({
-    url: 'http://10.0.0.185/stream',
-    type: 'mjpeg',
+    url: CAMERA_URL,
+    type: CAMERA_MODE,
     width: 0.28,
     aspectRatio: 4 / 3,
     title: 'video · ESP32-CAM',
+    frameIntervalMs: 1000,
   });
 
   const specs = [

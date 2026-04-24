@@ -1,4 +1,7 @@
 import { defineConfig } from 'vite';
+import http from 'http';
+
+const cameraAgent = new http.Agent({ family: 4, keepAlive: false, timeout: 30000 });
 
 export default defineConfig({
   server: {
@@ -20,7 +23,8 @@ export default defineConfig({
         target: 'http://10.0.0.185',
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/camera/, ''),
-      },
+        agent: cameraAgent,
+      } as any,
     },
   },
   build: {
