@@ -46,7 +46,7 @@ Since this is design concept v1 we expect there to be future ideas to enhance an
 
 Roles for Nodes in this demo design concept will be 10 different roles:
 
-- Role 1: Ruler.  If No Ruler is found, any node can request nomination to Ruler.  Ruler should display a Fiddler Crab on its screen if available.
+- Role 1: Ruler.  If No Ruler is found, any node can request nomination to Ruler.  Ruler should display a Fiddler Crab with a crown on its screen if available.
 - Role 2: Worker: It receives commands from the Ruler via /chat , and carries out the tasks.  Should display a robot with a pick axe.
 - Role 3: Parrot: A parrot only echoes commands received.  Should display a robot parrot.
 - Role 4: Scribe: A scribe's only job is to save data to its internal memory and recall it from shared memory if asked.  Should display an old scholar with a stone tablet.
@@ -56,7 +56,9 @@ Roles for Nodes in this demo design concept will be 10 different roles:
 - Role 8: Pet: Just a cute animal and belongs to the ruler.  It has a special skill of barking at strangers.  Should display a cute pet.
 - Role 9: ML PhD: A PhD that designs modifications to roles and distributes them for review by the ruler and scribe, eventually upgrading the hive.
 - Role 10: Spawn: Any new member of this tribe will first be a spawn.  It will have no responsibilities other than to learn anything it needs from the scribe and other roles before taking a new role.
-
+- Role 11: Eye: An eye is anything that can see, capture, scan, or otherwise cake a picture or video.  Should display a pair of cute eyes.
+- Role 12: Boombox: any speakers or audio playback device.  Different than the beeper, it can play full sounds, music, or recordings.  Should display an 80s style boombox.
+- 
 ## Development
 
 
@@ -145,3 +147,7 @@ Role bundles are the payload `ROLE_GRANT` carries. Each is a JSON envelope conta
 | `craw_hive` | Phase 4B — mDNS + TCP + HMAC-SHA256 protocol, node + ruler sides |
 | `craw_mdns` | Simple mDNS hostname publisher (pre-Phase-4, retained for other projects) |
 | `craw_mqtt`, `craw_http`, `craw_speaker` | Earlier-phase helpers still in use by the M5StickC and M5Dial crawdad projects |
+
+## Dev-environment gotchas
+
+- **[macOS LAN networking](docs/macOS-LAN-networking.md)** — Local Network permission, iCloud Private Relay, Private Wi-Fi MAC, and the macOS firewall each silently break LAN connectivity (mDNS discovery, pings, HTTP to `.local` hosts). Read this first if symptoms look like "device is online on the phone but not from my Mac."

@@ -162,6 +162,10 @@ The node publishes two records:
 - **AI-Thinker color-flash / dropped frames at high resolution**: the AI-Thinker board's 3.3 V regulator brown-outs during WiFi TX bursts that coincide with frame capture, producing color-flash artifacts or crashes. Lower the framesize (`8 cam-framesize` = VGA, or `5` = QVGA) until stable. Hardware workaround: add a bulk cap (100 µF+) across 3.3V/GND or power via a beefier USB cable/supply. The VGA default is chosen to avoid this on typical setups.
 - **`cam_hal: NO-SOI - JPEG start marker missing` (sensor output corruption)**: the sensor is transmitting but the bytes don't start with `0xFFD8`. Usually a clock-phase issue: lower XCLK gives the ESP32's I2S DMA more margin to latch PCLK edges cleanly. Fix: `10 cam-xclk-mhz` (or `8` for a more conservative fallback) at the REPL, then reboot. Pairs well with dropping framesize. If errors persist at 8 MHz, check the 24-pin FFC ribbon cable seating — it's a common physical culprit on AI-Thinker.
 
+## Troubleshooting on macOS
+
+If the camera is clearly online (serial shows IP, hive ruler sees it join) but you can't reach `http://magnet-cam-<mac4>.local/` or `.local` resolution fails from your Mac, it's almost certainly a macOS privacy-layer issue (Local Network permission, iCloud Private Relay, Private Wi-Fi MAC, firewall). See **[`../docs/macOS-LAN-networking.md`](../docs/macOS-LAN-networking.md)** for a symptom → cause lookup and step-by-step fix.
+
 ## Related projects in this repo
 
 - `../M5Atom_Echo_Hex_Hive_Test/` — reference implementation of the same post-WiFi bringup sequence on classic ESP32 with I2S audio + Unit Hex display

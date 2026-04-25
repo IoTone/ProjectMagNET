@@ -215,10 +215,12 @@ static volatile bool s_ble_torn_down          = false;
 
 /* SNTP must complete before the hive node can speak the protocol — HMAC
  * payloads include a unix-timestamp field and the ruler rejects anything
- * more than 30 s off. Without SNTP the ESP32 thinks time() ≈ boot uptime. */
+ * more than 30 s off. We watch sntp_get_sync_status() for COMPLETED rather
+ * than just checking time > 2020 — a partial / NAT-mangled first response
+ * can give us a year-2024+ value that's still wrong by minutes. */
 static bool s_sntp_started = false;
 static bool s_time_synced  = false;
-#define TIME_SYNC_EPOCH_THRESHOLD 1577836800 /* 2020-01-01 — anything > this is real time */
+#define TIME_SYNC_EPOCH_THRESHOLD 1577836800 /* 2020-01-01 — used as a coarse fallback */
 
 /* Hash of last-painted state. Refresh the physical LEDs only when any of
  * ble/wifi/hive status or the heartbeat-flash window has changed; otherwise
@@ -423,10 +425,10 @@ static void derive_node_id(void) {
 static void maybe_start_hive(void) {
     if (s_hive_started) return;
     if (!craw_wifi_is_connected()) return;
-    /* Block hive start until the system clock is past 2020 — before SNTP
-     * completes, time() returns seconds since boot, and the HMAC timestamp
-     * would be off by billions of seconds. */
-    if (time(NULL) < TIME_SYNC_EPOCH_THRESHOLD) return;
+    /* Block hive start until SNTP has fully synced (s_time_synced is set
+     * only after sntp_get_sync_status() == COMPLETED). Otherwise a
+     * partial/wrong first response yields rc=3 (ts_skew) at the ruler. */
+    if (!s_time_synced) return;
     derive_node_id();
     static craw_hive_node_config_t ncfg;
     ncfg = (craw_hive_node_config_t){
@@ -469,8 +471,13 @@ static void housekeeping_task(void *arg) {
                         (int)after - (int)before);
         }
         if (s_sntp_started && !s_time_synced) {
+            /* Hard gate: wait until SNTP itself reports COMPLETED. Without
+             * this, a single partial/incorrect first response can let the
+             * hive start with a clock that's still off by minutes, leading
+             * to ruler-side rc=3 (ts_skew) rejects. */
+            sntp_sync_status_t st = sntp_get_sync_status();
             time_t now = time(NULL);
-            if (now > TIME_SYNC_EPOCH_THRESHOLD) {
+            if (st == SNTP_SYNC_STATUS_COMPLETED && now > TIME_SYNC_EPOCH_THRESHOLD) {
                 s_time_synced = true;
                 struct tm t;
                 localtime_r(&now, &t);

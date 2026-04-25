@@ -15,6 +15,12 @@ Usage:
 Install deps:
     python -m venv .venv && source .venv/bin/activate
     pip install -r requirements.txt
+
+macOS note:
+    If the script runs but no ESP32 nodes connect, check macOS Privacy
+    settings: System Settings → Privacy & Security → Local Network →
+    enable Terminal and Python. Also check the macOS firewall. See
+    ../docs/macOS-LAN-networking.md for the full troubleshooting guide.
 """
 
 import argparse

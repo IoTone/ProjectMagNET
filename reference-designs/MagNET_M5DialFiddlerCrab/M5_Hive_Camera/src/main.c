@@ -226,7 +226,7 @@ static void derive_ids(void) {
 static void maybe_start_hive(void) {
     if (hive_started) return;
     if (!craw_wifi_is_connected()) return;
-    if (time(NULL) < TIME_SYNC_EPOCH_THRESHOLD) return;
+    if (!time_synced) return;  /* gates on SNTP COMPLETED, not raw time() */
     memcpy(secret_copy, CRAW_HIVE_DEV_SECRET, 32);
     static craw_hive_node_config_t ncfg;
     ncfg = (craw_hive_node_config_t){
@@ -261,8 +261,10 @@ static void housekeeping_task(void *arg) {
                     (int)after - (int)before);
         }
         if (sntp_started && !time_synced) {
+            /* Hard gate: wait for SNTP COMPLETED, not just time>2020. */
+            sntp_sync_status_t st = sntp_get_sync_status();
             time_t now = time(NULL);
-            if (now > TIME_SYNC_EPOCH_THRESHOLD) {
+            if (st == SNTP_SYNC_STATUS_COMPLETED && now > TIME_SYNC_EPOCH_THRESHOLD) {
                 time_synced = true;
                 struct tm t;
                 localtime_r(&now, &t);

@@ -193,25 +193,40 @@ static void handle_hello(int client_sock, const craw_hive_msg_t *hello) {
 
 /* ---- Per-client handler (one connection → one session lifecycle) ---- */
 static void handle_client(int client_sock) {
+    /* Bound the initial HELLO read so a stuck client doesn't hang the
+     * listener task (which is single-threaded). */
+    struct timeval rcv_tv = { .tv_sec = 8, .tv_usec = 0 };
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
+
     /* Read HELLO */
     uint8_t *frame = NULL; size_t flen = 0;
-    if (recv_frame(client_sock, &frame, &flen) != 0) return;
+    int rfrc = recv_frame(client_sock, &frame, &flen);
+    if (rfrc != 0) {
+        ESP_LOGW(TAG, "recv HELLO frame failed rc=%d errno=%d", rfrc, errno);
+        return;
+    }
+    ESP_LOGI(TAG, "rx HELLO frame %u bytes — decoding...", (unsigned)flen);
 
     craw_hive_msg_t in = {0};
+    int64_t decode_t0 = esp_timer_get_time();
     int rc = craw_hive_proto_decode(frame, flen,
                                     s_ctx.cfg.secret, CRAW_HIVE_SECRET_BYTES,
                                     now_epoch_sec(), &in);
+    int64_t decode_us = esp_timer_get_time() - decode_t0;
+    ESP_LOGI(TAG, "decode rc=%d (%lld us)", rc, decode_us);
     free(frame);
     if (rc != 0) {
-        ESP_LOGW(TAG, "decode failed rc=%d", rc);
+        ESP_LOGW(TAG, "HELLO decode failed rc=%d (1=auth, 3=ts_skew, 4=replay)", rc);
         cJSON *rp = cJSON_CreateObject();
         cJSON_AddStringToObject(rp, "reason", "auth");
         char *rps = cJSON_PrintUnformatted(rp);
-        send_msg(client_sock, CRAW_HIVE_MSG_REJECT, "*", rps);
+        int src = send_msg(client_sock, CRAW_HIVE_MSG_REJECT, "*", rps);
+        ESP_LOGW(TAG, "tx REJECT rc=%d", src);
         free(rps); cJSON_Delete(rp);
         return;
     }
     if (in.type != CRAW_HIVE_MSG_HELLO) {
+        ESP_LOGW(TAG, "first frame was type=%d, expected HELLO", (int)in.type);
         craw_hive_msg_free(&in);
         return;
     }
@@ -237,6 +252,25 @@ static void handle_client(int client_sock) {
         }
         free(frame);
     }
+}
+
+/* ---- Per-client task wrapper ----
+ * Each accepted connection runs handle_client on its own FreeRTOS task so
+ * the listener can return to accept() immediately. Without this, only one
+ * peer at a time can hold a session — every other peer's SYN gets RST. */
+typedef struct {
+    int  sock;
+    char peer_ip[INET_ADDRSTRLEN];
+    int  peer_port;
+} client_ctx_t;
+
+static void client_task(void *arg) {
+    client_ctx_t *cc = (client_ctx_t *)arg;
+    handle_client(cc->sock);
+    close(cc->sock);
+    ESP_LOGI(TAG, "client %s:%d closed", cc->peer_ip, cc->peer_port);
+    free(cc);
+    vTaskDelete(NULL);
 }
 
 /* ---- Accept loop ---- */
@@ -275,8 +309,30 @@ static void listener_task(void *arg) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
-        handle_client(c);
-        close(c);
+        char ipstr[INET_ADDRSTRLEN] = "?";
+        inet_ntop(AF_INET, &peer.sin_addr, ipstr, sizeof(ipstr));
+        ESP_LOGI(TAG, "accept from %s:%u (sock=%d)",
+                 ipstr, (unsigned)ntohs(peer.sin_port), c);
+
+        /* Hand the connection off to a per-client task so the listener
+         * stays available for new accepts. The previous code blocked the
+         * accept loop for the lifetime of the heartbeat session, locking
+         * out all subsequent peers (kernel backlog overflowed → RST). */
+        client_ctx_t *cc = malloc(sizeof(*cc));
+        if (!cc) {
+            ESP_LOGE(TAG, "client ctx malloc failed");
+            close(c);
+            continue;
+        }
+        cc->sock = c;
+        strncpy(cc->peer_ip, ipstr, sizeof(cc->peer_ip) - 1);
+        cc->peer_ip[sizeof(cc->peer_ip) - 1] = '\0';
+        cc->peer_port = ntohs(peer.sin_port);
+        if (xTaskCreate(client_task, "hive_client", 8192, cc, 4, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "client task spawn failed");
+            free(cc);
+            close(c);
+        }
     }
     close(sock);
     s_ctx.listen_sock = -1;
@@ -294,19 +350,51 @@ int craw_hive_ruler_start(const craw_hive_ruler_config_t *cfg) {
     s_ctx.listen_sock = -1;
     memset(s_sessions, 0, sizeof(s_sessions));
 
-    /* mDNS advertisement */
+    /* mDNS advertisement. Hostname must be set BEFORE service_add, or
+     * service_add silently fails and the subsequent txt_set returns
+     * "Invalid state or arguments." */
     mdns_init();
-    mdns_service_add(NULL, CRAW_HIVE_SERVICE_TYPE, CRAW_HIVE_SERVICE_PROTO,
-                     cfg->port ? cfg->port : CRAW_HIVE_DEFAULT_PORT, NULL, 0);
+
+    /* Derive a DNS-safe lowercase hostname from the ruler_id (which is
+     * typically MixedCase like "MagNET-ruler-b7a4"). DNS is case-insensitive
+     * but some responders normalize and some don't — lowercase is safest. */
+    char mdns_host[40];
+    snprintf(mdns_host, sizeof(mdns_host), "%s", cfg->ruler_id);
+    for (char *p = mdns_host; *p; p++) {
+        if (*p >= 'A' && *p <= 'Z') *p += 32;
+    }
+    esp_err_t merr = mdns_hostname_set(mdns_host);
+    if (merr != ESP_OK) {
+        ESP_LOGE(TAG, "mdns_hostname_set('%s') failed: 0x%x", mdns_host, merr);
+    }
+    mdns_instance_name_set(cfg->ruler_id);
+
+    merr = mdns_service_add(NULL, CRAW_HIVE_SERVICE_TYPE, CRAW_HIVE_SERVICE_PROTO,
+                            cfg->port ? cfg->port : CRAW_HIVE_DEFAULT_PORT, NULL, 0);
+    if (merr != ESP_OK) {
+        ESP_LOGE(TAG, "mdns_service_add failed: 0x%x", merr);
+    }
+
     char ver[4]; snprintf(ver, sizeof(ver), "%d", CRAW_HIVE_PROTO_VERSION);
     mdns_txt_item_t txt[] = {
         {"ver",  ver},
         {"hive", (char *)cfg->hive_id},
     };
-    mdns_service_txt_set(CRAW_HIVE_SERVICE_TYPE, CRAW_HIVE_SERVICE_PROTO,
-                         txt, sizeof(txt)/sizeof(txt[0]));
+    merr = mdns_service_txt_set(CRAW_HIVE_SERVICE_TYPE, CRAW_HIVE_SERVICE_PROTO,
+                                txt, sizeof(txt)/sizeof(txt[0]));
+    if (merr != ESP_OK) {
+        ESP_LOGE(TAG, "mdns_service_txt_set failed: 0x%x", merr);
+    } else {
+        ESP_LOGI(TAG, "mDNS: %s.local advertising %s.%s:%u ver=%d hive=%s",
+                 mdns_host, CRAW_HIVE_SERVICE_TYPE, CRAW_HIVE_SERVICE_PROTO,
+                 (unsigned)(cfg->port ? cfg->port : CRAW_HIVE_DEFAULT_PORT),
+                 CRAW_HIVE_PROTO_VERSION, cfg->hive_id);
+    }
 
-    if (xTaskCreate(listener_task, "craw_hive_ruler", 6144, NULL, 5, &s_ctx.task) != pdPASS) {
+    /* 10 KB stack: cJSON parse + recursive canonicalize_object + mbedTLS
+     * HMAC together can push past 6 KB on Xtensa with default frame sizes,
+     * and a stack overflow inside the listener task is silent. */
+    if (xTaskCreate(listener_task, "craw_hive_ruler", 10240, NULL, 5, &s_ctx.task) != pdPASS) {
         s_ctx.running = false;
         return -1;
     }

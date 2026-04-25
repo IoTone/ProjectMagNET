@@ -105,8 +105,18 @@ static int tcp_connect(const char *host, uint16_t port) {
     struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    /* Log what address we actually resolved to — critical when diagnosing
+     * "connect failed errno=113" (EHOSTUNREACH): is the resolved IP on our
+     * subnet, did mDNS return a stale record, etc. */
+    char ipstr[INET_ADDRSTRLEN] = "?";
+    struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+    inet_ntop(AF_INET, &sin->sin_addr, ipstr, sizeof(ipstr));
+    ESP_LOGI(TAG, "connecting to %s → %s:%u", host, ipstr, port);
+
     if (connect(sock, res->ai_addr, res->ai_addrlen) != 0) {
-        ESP_LOGW(TAG, "connect failed: errno=%d", errno);
+        ESP_LOGW(TAG, "connect %s (%s:%u) failed: errno=%d",
+                 host, ipstr, port, errno);
         close(sock);
         freeaddrinfo(res);
         return -1;
