@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/CMakeFiles/bootloader
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/CMakeFiles/bootloader.rule
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/CMakeFiles/bootloader-complete.rule
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule

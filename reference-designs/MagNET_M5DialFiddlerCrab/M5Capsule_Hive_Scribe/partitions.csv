@@ -1,0 +1,6 @@
+# Name,   Type, SubType, Offset,  Size,  Flags
+# nvs is bumped from 24 KB → 64 KB so the scribe role has plenty of room
+# for hive-shared key/value entries beyond just WiFi creds + camera config.
+nvs,      data, nvs,     0x9000,  0x10000,
+phy_init, data, phy,     0x19000, 0x1000,
+factory,  app,  factory, 0x20000, 0x280000,
