@@ -40,6 +40,66 @@ export interface DataspaceManifest {
 
   /** Optional HUD menu configuration for this dataspace. */
   hud?: DataspaceHudConfig;
+
+  /**
+   * Universal Device Metadata (UDM) entries for devices present in this dataspace.
+   * Conforms to https://github.com/IoTone/IoToneSpec_UniversalDeviceMetadata
+   * Renderer may surface device info in inspector cards or a "devices" sub-menu.
+   */
+  udm_devices?: UdmDevice[];
+
+  /**
+   * Universal Service Metadata (USM) entries for services exposed by devices.
+   * Conforms to https://github.com/IoTone/IoToneSpec_UniversalServiceMetadata
+   * Marks may reference these via `serviceRef: usm_key` for richer metadata.
+   */
+  usm_services?: UsmService[];
+}
+
+/** Universal Device Metadata — abbreviated form. Full spec is open-ended. */
+export interface UdmDevice {
+  udm_key: string;
+  udm_uuid?: string;
+  udm_serialno?: string;
+  udm_model_name?: string;
+  udm_model_number?: string;
+  udm_vendor?: string;
+  udm_mktg_name?: string;
+  udm_type?: string;
+  udm_class?: string[];
+  udm_capabilities?: string[];
+  udm_chipset_details?: { vendor?: string; type?: string; frequency?: string; core_count?: number };
+  udm_memory_volatile?: string;
+  udm_memory_non_volatile?: string;
+  udm_sensors?: string[];
+  udm_services_link?: string[];  // references to usm_key values
+  udm_tags?: string[];
+  udm_mfg_origin?: string;
+  /** Optional spatial-render hint: where the device pin appears in 3D space */
+  udm_spatial_anchor?: { x: number; y: number; z: number };
+  [key: string]: unknown;
+}
+
+/** Universal Service Metadata — abbreviated form. */
+export interface UsmService {
+  usm_key: string;
+  usm_uuid?: string;
+  usm_service_name: string;
+  usm_type?: string;
+  usm_class?: string[];
+  usm_service_endpoint?: { GET?: unknown; POST?: unknown; PUT?: unknown; DELETE?: unknown; [k: string]: unknown };
+  usm_version?: string;
+  usm_service_version?: string;
+  usm_vendor?: string;
+  usm_capabilities?: unknown;
+  characteristics?: Array<{
+    usm_characteristic_id: string;
+    usm_characteristic_format?: string;
+    usm_characteristic_constraints?: unknown;
+    [k: string]: unknown;
+  }>;
+  usm_tags?: string[];
+  [key: string]: unknown;
 }
 
 /** Configuration for a per-dataspace HUD context menu. */
@@ -102,6 +162,12 @@ export interface MarkSpec {
 
   /** Whether nodes support drag interaction (force graph). */
   draggable?: boolean;
+
+  /** Optional reference to a USM service (matches `usm_services[].usm_key`). */
+  serviceRef?: string;
+
+  /** Optional reference to a UDM device (matches `udm_devices[].udm_key`). */
+  deviceRef?: string;
 }
 
 /** All supported mark types. */
