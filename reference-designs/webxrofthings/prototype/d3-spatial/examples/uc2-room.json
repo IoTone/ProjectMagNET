@@ -1,0 +1,182 @@
+{
+  "version": "1",
+  "name": "kords-livingroom",
+  "scaleTag": "room",
+  "owner": "dkords@gmail.com",
+  "acousticEnvironment": "indoor",
+
+  "udm_devices": [
+    {
+      "udm_key": "magnet-cam-80e4",
+      "udm_uuid": "urn:device:esp32-cam:80e4",
+      "udm_model_name": "ESP32-CAM",
+      "udm_model_number": "AI-Thinker",
+      "udm_vendor": "AI-Thinker",
+      "udm_mktg_name": "Magnet Cam",
+      "udm_type": "camera",
+      "udm_class": ["camera", "iot", "wifi"],
+      "udm_capabilities": ["mjpeg-stream", "single-frame-capture", "ov2640"],
+      "udm_chipset_details": { "vendor": "Espressif", "type": "ESP32", "frequency": "240MHz", "core_count": 2 },
+      "udm_memory_volatile": "520KB SRAM + 4MB PSRAM",
+      "udm_memory_non_volatile": "4MB Flash",
+      "udm_sensors": ["camera-ov2640"],
+      "udm_services_link": ["cam-stream", "cam-capture"],
+      "udm_tags": ["room", "lan-only", "no-tls"],
+      "udm_spatial_anchor": { "x": 0.0, "y": 1.6, "z": -1.2 }
+    },
+    {
+      "udm_key": "magnet-stamp-c3u-a1b2",
+      "udm_uuid": "urn:device:m5stamp-c3u:a1b2",
+      "udm_model_name": "M5StampC3U",
+      "udm_vendor": "M5Stack",
+      "udm_mktg_name": "Stamp C3U",
+      "udm_type": "compute-node",
+      "udm_class": ["mcu", "iot", "wifi"],
+      "udm_capabilities": ["wifi-station", "ble", "internal-temp-sensor", "json-http"],
+      "udm_chipset_details": { "vendor": "Espressif", "type": "ESP32-C3", "frequency": "160MHz", "core_count": 1 },
+      "udm_memory_volatile": "400KB SRAM",
+      "udm_memory_non_volatile": "4MB Flash",
+      "udm_sensors": ["esp32c3-internal-temp"],
+      "udm_services_link": ["temp-current", "temp-history"],
+      "udm_tags": ["room", "lan-only"],
+      "udm_spatial_anchor": { "x": -0.6, "y": 1.0, "z": -0.8 }
+    }
+  ],
+
+  "usm_services": [
+    {
+      "usm_key": "cam-stream",
+      "usm_uuid": "urn:service:mjpeg:cam-80e4",
+      "usm_service_name": "Camera live MJPEG stream",
+      "usm_type": "video",
+      "usm_class": ["video", "mjpeg", "live"],
+      "usm_service_endpoint": {
+        "GET": { "url": "http://magnet-cam-80e4.local/stream", "content-type": "multipart/x-mixed-replace" }
+      },
+      "usm_version": "1",
+      "usm_capabilities": { "framerate_hz": [5, 10], "resolution": "VGA 640x480" },
+      "characteristics": [
+        { "usm_characteristic_id": "frame", "usm_characteristic_format": "image/jpeg" }
+      ],
+      "usm_tags": ["lan-only", "live"]
+    },
+    {
+      "usm_key": "cam-capture",
+      "usm_uuid": "urn:service:single-jpeg:cam-80e4",
+      "usm_service_name": "Camera single-frame capture",
+      "usm_type": "image",
+      "usm_class": ["image", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "http://magnet-cam-80e4.local/capture", "content-type": "image/jpeg" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "frame", "usm_characteristic_format": "image/jpeg" }
+      ]
+    },
+    {
+      "usm_key": "temp-current",
+      "usm_uuid": "urn:service:temperature:stamp-a1b2",
+      "usm_service_name": "Internal temperature (current)",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "temperature", "read-only"],
+      "usm_service_endpoint": {
+        "GET": { "url": "http://magnet-stamp-c3u-a1b2.local/temperature", "content-type": "application/json" }
+      },
+      "usm_version": "1",
+      "usm_capabilities": { "poll_interval_seconds": 2, "accuracy_celsius": "±5" },
+      "characteristics": [
+        { "usm_characteristic_id": "celsius", "usm_characteristic_format": "number", "usm_characteristic_constraints": { "min": -40, "max": 125 } },
+        { "usm_characteristic_id": "timestamp", "usm_characteristic_format": "iso8601" }
+      ],
+      "usm_tags": ["live", "low-accuracy", "esp32c3-internal"]
+    },
+    {
+      "usm_key": "temp-history",
+      "usm_uuid": "urn:service:temperature-series:stamp-a1b2",
+      "usm_service_name": "Temperature history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "temperature"],
+      "usm_service_endpoint": {
+        "GET": { "url": "http://magnet-stamp-c3u-a1b2.local/temperature/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>" }
+      ]
+    }
+  ],
+
+  "marks": [
+    {
+      "id": "front-cam",
+      "type": "video",
+      "title": "Camera · live",
+      "subtitle": "ESP32-CAM · /capture polled at 1 fps",
+      "data": {
+        "source": "url",
+        "url": "/camera/capture",
+        "shape": "video"
+      },
+      "config": {
+        "type": "frames",
+        "width": 0.4,
+        "aspectRatio": 1.333,
+        "frameIntervalMs": 1000
+      },
+      "deviceRef": "magnet-cam-80e4",
+      "serviceRef": "cam-capture",
+      "hoverable": true
+    },
+    {
+      "id": "room-temp",
+      "type": "line",
+      "title": "Temperature · last 60 min",
+      "subtitle": "ESP32-C3 internal sensor",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensors/temp/history",
+        "shape": "series",
+        "refreshInterval": 5
+      },
+      "deviceRef": "magnet-stamp-c3u-a1b2",
+      "serviceRef": "temp-history",
+      "hoverable": true
+    },
+    {
+      "id": "room-devices",
+      "type": "tree",
+      "title": "Room devices",
+      "subtitle": "Topology",
+      "data": {
+        "source": "inline",
+        "hierarchy": {
+          "name": "kords-livingroom",
+          "children": [
+            { "name": "sensors", "children": [
+              { "name": "cam (mjpeg)", "value": 5 },
+              { "name": "temp (c3 internal)", "value": 2 }
+            ]},
+            { "name": "compute", "children": [
+              { "name": "stamp-c3u", "value": 1 }
+            ]},
+            { "name": "network", "children": [
+              { "name": "router", "value": 1 },
+              { "name": "ap", "value": 1 }
+            ]}
+          ]
+        }
+      },
+      "config": { "form": "radial" },
+      "drillable": true,
+      "hoverable": true
+    }
+  ],
+
+  "hud": {
+    "items": [
+      { "id": "refresh", "label": "Refresh", "icon": "🔄", "action": "reload-marks" },
+      { "id": "recenter", "label": "Recenter", "icon": "⊕", "action": "recenter" },
+      { "id": "leave", "label": "Leave room", "icon": "🚪", "action": "leave-dataspace" }
+    ],
+    "position": "bottom"
+  }
+}

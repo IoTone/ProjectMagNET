@@ -1,0 +1,130 @@
+export const sampleTree = {
+    name: 'root',
+    children: [
+        { name: 'sensors', children: [
+                { name: 'temp', value: 12 },
+                { name: 'humidity', value: 8 },
+                { name: 'motion', value: 14 },
+                { name: 'light', value: 6 },
+            ] },
+        { name: 'actuators', children: [
+                { name: 'lights', value: 20 },
+                { name: 'blinds', value: 7 },
+                { name: 'hvac', value: 24 },
+            ] },
+        { name: 'compute', children: [
+                { name: 'gateway', value: 18 },
+                { name: 'edge', value: 22 },
+                { name: 'cloud', value: 10 },
+            ] },
+        { name: 'wearables', children: [
+                { name: 'wrist', value: 9 },
+                { name: 'ring', value: 4 },
+                { name: 'glasses', value: 15 },
+            ] },
+    ],
+};
+export function sampleGraph(n = 30, seed = 7) {
+    const rand = mulberry32(seed);
+    const nodes = Array.from({ length: n }, (_, i) => ({
+        id: `n${i}`,
+        group: Math.floor(rand() * 4),
+    }));
+    const links = [];
+    for (let i = 1; i < n; i++) {
+        const j = Math.floor(rand() * i);
+        links.push({ source: `n${i}`, target: `n${j}`, value: 1 });
+    }
+    for (let k = 0; k < n * 0.6; k++) {
+        const a = Math.floor(rand() * n);
+        const b = Math.floor(rand() * n);
+        if (a !== b)
+            links.push({ source: `n${a}`, target: `n${b}`, value: 1 });
+    }
+    return { nodes, links };
+}
+export function sampleRidgeline(rows = 6, samples = 60, seed = 3) {
+    const rand = mulberry32(seed);
+    const series = [];
+    for (let r = 0; r < rows; r++) {
+        const mode1 = 0.2 + r * 0.1 + rand() * 0.1;
+        const mode2 = 0.6 + rand() * 0.2;
+        const w1 = 0.05 + rand() * 0.03;
+        const w2 = 0.07 + rand() * 0.04;
+        const row = [];
+        for (let i = 0; i < samples; i++) {
+            const x = i / (samples - 1);
+            const v = gauss(x, mode1, w1) * (0.6 + 0.4 * rand()) + gauss(x, mode2, w2) * (0.3 + 0.3 * rand());
+            row.push(v);
+        }
+        series.push(row);
+    }
+    return series;
+}
+function gauss(x, m, s) {
+    const d = (x - m) / s;
+    return Math.exp(-0.5 * d * d) / (s * Math.sqrt(2 * Math.PI));
+}
+export function sampleSankey() {
+    return {
+        nodes: [
+            { id: 'solar', name: 'Solar', group: 0 },
+            { id: 'wind', name: 'Wind', group: 0 },
+            { id: 'grid', name: 'Grid', group: 1 },
+            { id: 'battery', name: 'Battery', group: 1 },
+            { id: 'home', name: 'Home', group: 2 },
+            { id: 'office', name: 'Office', group: 2 },
+            { id: 'lights', name: 'Lights', group: 3 },
+            { id: 'hvac', name: 'HVAC', group: 3 },
+            { id: 'compute', name: 'Compute', group: 3 },
+            { id: 'ev', name: 'EV', group: 3 },
+        ],
+        links: [
+            { source: 'solar', target: 'grid', value: 40 },
+            { source: 'solar', target: 'battery', value: 15 },
+            { source: 'wind', target: 'grid', value: 30 },
+            { source: 'wind', target: 'battery', value: 10 },
+            { source: 'grid', target: 'home', value: 45 },
+            { source: 'grid', target: 'office', value: 25 },
+            { source: 'battery', target: 'home', value: 15 },
+            { source: 'battery', target: 'office', value: 10 },
+            { source: 'home', target: 'lights', value: 18 },
+            { source: 'home', target: 'hvac', value: 25 },
+            { source: 'home', target: 'compute', value: 12 },
+            { source: 'office', target: 'lights', value: 10 },
+            { source: 'office', target: 'compute', value: 15 },
+            { source: 'office', target: 'ev', value: 10 },
+        ],
+    };
+}
+export function sampleTangles() {
+    return [
+        { source: 'temp', target: 'lights', type: 'control' },
+        { source: 'edge', target: 'wrist', type: 'sync' },
+        { source: 'motion', target: 'hvac', type: 'control' },
+        { source: 'cloud', target: 'glasses', type: 'sync' },
+        { source: 'humidity', target: 'blinds', type: 'control' },
+    ];
+}
+export function sampleParallel() {
+    const dimensions = ['temp', 'humidity', 'light', 'motion', 'power'];
+    const rand = mulberry32(42);
+    const points = [];
+    for (let i = 0; i < 18; i++) {
+        const group = Math.floor(rand() * 3);
+        const base = [0.3 + group * 0.2, 0.5, 0.4 + group * 0.1, 0.6 - group * 0.15, 0.35 + group * 0.2];
+        const values = base.map(b => Math.max(0, Math.min(1, b + (rand() - 0.5) * 0.4)));
+        points.push({ id: `p${i}`, group, values });
+    }
+    return { dimensions, points };
+}
+function mulberry32(seed) {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
