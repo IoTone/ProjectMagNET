@@ -146,6 +146,10 @@ class Ruler:
         self.hive = hive
         self.secret = secret
         self.ruler_id = ruler_id
+        # Milestone C step 1 — in-memory KV table shared across all peer
+        # connections. Mirrors the C ruler's behavior; lock-free since the
+        # GIL serializes Python thread access for our small ops.
+        self.kv: dict[str, str] = {}
 
     def send(self, sock: socket.socket, mtype: str, to: str, payload: dict) -> None:
         nonce = make_nonce()
@@ -234,6 +238,22 @@ class Ruler:
                         "bundle_url": None,
                         "bundle_sig": None,
                     })
+                elif mtype == "KV_GET":
+                    key = env["payload"].get("key", "")
+                    if key in self.kv:
+                        log(f"  KV_GET {node_id}: '{key}' → '{self.kv[key]}'")
+                        self.send(sock, "KV_DATA", node_id,
+                                  {"key": key, "value": self.kv[key]})
+                    else:
+                        log(f"  KV_GET {node_id}: '{key}' → not_found")
+                        self.send(sock, "KV_NOT_FOUND", node_id, {"key": key})
+                elif mtype == "KV_PUT":
+                    key = env["payload"].get("key", "")
+                    val = env["payload"].get("value", "")
+                    if key:
+                        self.kv[key] = val
+                        log(f"  KV_PUT {node_id}: '{key}' = '{val[:60]}'"
+                            f"{'…' if len(val) > 60 else ''}")
                 else:
                     log(f"  {mtype} {node_id}: {env['payload']}")
         except OSError as e:

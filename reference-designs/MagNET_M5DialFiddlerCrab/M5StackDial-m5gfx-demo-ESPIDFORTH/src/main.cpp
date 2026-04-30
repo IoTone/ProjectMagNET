@@ -28,6 +28,7 @@ extern "C" {
 #include "craw_wifi.h"
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
+#include "bundle_bootstrap.h"
 }
 #include <time.h>
 
@@ -574,6 +575,10 @@ static void maybe_start_ruler(void) {
     if (craw_hive_ruler_start(&rcfg) == 0) {
         ruler_started = true;
         usb_printf("[HIVE] ruler started as '%s' (hive=%s)\r\n", ruler_id, HIVE_ID);
+        /* Pre-seed the local KV table with embedded bundles so peers can
+         * KV_GET them without a Scribe present. Idempotent — safe to call
+         * if some entries are already there. */
+        bundle_bootstrap();
     } else {
         usb_print("[HIVE] ruler_start failed\r\n");
     }
@@ -1207,6 +1212,82 @@ static void w_prov_reset(void) {
     esp_restart();
 }
 
+// KV REPL helpers — interactively read a key (and optional value) from
+// USB-JTAG, then call into the ruler's local KV table. The local-table
+// access lets the Dial seed/inspect data the rest of the hive can fetch
+// via KV_GET messages.
+static char w_io_key[CRAW_HIVE_KV_KEY_MAX + 1];
+static char w_io_val[CRAW_HIVE_KV_VALUE_MAX + 1];
+
+static void read_line(const char *prompt, char *buf, size_t bufsz) {
+    usb_print(prompt);
+    size_t i = 0;
+    while (i + 1 < bufsz) {
+        int c = uart_getchar();
+        if (c < 0) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
+        if (c == '\r' || c == '\n') break;
+        if (c == 8 || c == 127) {
+            if (i > 0) { i--; usb_print("\b \b"); }
+            continue;
+        }
+        buf[i++] = (char)c;
+        char ch[2] = { (char)c, 0 };
+        usb_print(ch);
+    }
+    buf[i] = '\0';
+    usb_print("\r\n");
+}
+
+// ( -- ) Prompt for key + value, store in ruler's local KV table.
+static void w_kv_set(void) {
+    read_line("\r\nkey:   ", w_io_key, sizeof(w_io_key));
+    read_line("value: ",     w_io_val, sizeof(w_io_val));
+    int rc = craw_hive_ruler_kv_put(w_io_key, w_io_val);
+    if (rc == 0) usb_printf("stored '%s'\r\n", w_io_key);
+    else         usb_printf("kv-set failed rc=%d\r\n", rc);
+}
+
+// ( -- ) Prompt for key, print the stored value (local table only).
+static void w_kv_get(void) {
+    read_line("\r\nkey: ", w_io_key, sizeof(w_io_key));
+    int rc = craw_hive_ruler_kv_get(w_io_key, w_io_val, sizeof(w_io_val));
+    if (rc == 0) usb_printf("'%s' = '%s'\r\n", w_io_key, w_io_val);
+    else         usb_print("not found\r\n");
+}
+
+static int kv_list_cb(const char *key, const char *value, void *ctx) {
+    (void)ctx;
+    /* Truncate value to keep the line readable. */
+    char preview[64];
+    strncpy(preview, value, sizeof(preview) - 1);
+    preview[sizeof(preview) - 1] = '\0';
+    usb_printf("  %-20s = %s\r\n", key, preview);
+    return 0;
+}
+
+// ( -- ) List all entries in the ruler's local KV table.
+static void w_kv_list(void) {
+    usb_print("\r\nkv table:\r\n");
+    int n = craw_hive_ruler_kv_iterate(kv_list_cb, NULL);
+    usb_printf("(%d entries)\r\n", n);
+}
+
+// ( -- ) Send a ROLE_GRANT to a connected peer. Prompts for node_id, the
+// new role label, and an optional bundle key (empty for label-only). The
+// peer's on_role_grant callback dispatches the install pipeline.
+static char w_grant_role_buf[CRAW_HIVE_KV_KEY_MAX + 1];
+static void w_grant_role(void) {
+    read_line("\r\nnode-id:    ", w_io_key, sizeof(w_io_key));
+    read_line("role:       ",     w_io_val, sizeof(w_io_val));
+    read_line("bundle key (blank for none): ", w_grant_role_buf, sizeof(w_grant_role_buf));
+    const char *bundle = w_grant_role_buf[0] ? w_grant_role_buf : NULL;
+    int rc = craw_hive_ruler_grant_role(w_io_key, w_io_val, bundle, "*");
+    if      (rc == 0)  usb_printf("ROLE_GRANT sent to %s (role=%s bundle=%s)\r\n",
+                                  w_io_key, w_io_val, bundle ? bundle : "(none)");
+    else if (rc == -1) usb_printf("peer '%s' not connected\r\n", w_io_key);
+    else               usb_printf("send failed rc=%d\r\n", rc);
+}
+
 // ( -- ) Print the peer table to USB serial.
 static void w_ruler_status(void) {
     usb_printf("\r\nruler:   %s\r\n", ruler_started ? ruler_id : "(not started)");
@@ -1236,6 +1317,10 @@ static void register_forth_words(void) {
     forth_register_word("prov-status",  w_prov_status);
     forth_register_word("prov-reset",   w_prov_reset);
     forth_register_word("ruler-status", w_ruler_status);
+    forth_register_word("kv-set",       w_kv_set);
+    forth_register_word("kv-get",       w_kv_get);
+    forth_register_word("kv-list",      w_kv_list);
+    forth_register_word("grant-role",   w_grant_role);
 }
 
 // ---------------------------------------------------------------------------

@@ -574,6 +574,11 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
+  include("/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_role_bundle/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
   include("/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/src/cmake_install.cmake")
 endif()
 

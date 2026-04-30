@@ -1,0 +1,14 @@
+{
+  "name": "scribe-extra",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [
+    "kv-store"
+  ],
+  "deps": [],
+  "crc32": "c833fb79",
+  "sig_alg": "hmac-sha256",
+  "sig": "9cc38a40236af22e6f6484185b710f9cdaeb1e4a6dca81b0a2a0300a6f883015",
+  "src_b64": "XCBSb2xlOiBzY3JpYmUtZXh0cmEg4oCUIGFkZHMgYSBjb3VwbGUgb2YgaGVscGVyIHdvcmRzIG9uIHRvcCBvZiB0aGUgYmFzZQpcIHNjcmliZS1zdG9yZSAvIHNjcmliZS1yZWNhbGwgdm9jYWJ1bGFyeSBhbHJlYWR5IHJlZ2lzdGVyZWQgYnkgdGhlIENhcHN1bGUKXCBmaXJtd2FyZS4gRGVtb25zdHJhdGVzIHRoYXQgYnVuZGxlcyBjYW4gZXh0ZW5kIEZGSSB3b3JkcyByYXRoZXIgdGhhbgpcIHJlcGxhY2UgdGhlbS4KXCBjYXBzX3JlcTogWyJrdi1zdG9yZSJdICAgKENhcHN1bGUgYWR2ZXJ0aXNlcyB0aGlzKQoKXCBQcmludCBhIGJhbm5lciB3aGVuZXZlciB0aGUgc2NyaWJlIGdyZWV0cyB0aGUgaGl2ZS4KOiBzY3JpYmUtYmFubmVyCiAgY3IgLiIgPT09IE1hZ05FVCBTY3JpYmUgcmVhZHkgPT09IiBjciA7CgpzY3JpYmUtYmFubmVyCg=="
+}

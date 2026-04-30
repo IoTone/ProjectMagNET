@@ -56,6 +56,10 @@ const char *craw_hive_msg_type_name(craw_hive_msg_type_t t) {
         case CRAW_HIVE_MSG_PING:         return "PING";
         case CRAW_HIVE_MSG_ROLE_REQUEST: return "ROLE_REQUEST";
         case CRAW_HIVE_MSG_ROLE_GRANT:   return "ROLE_GRANT";
+        case CRAW_HIVE_MSG_KV_GET:       return "KV_GET";
+        case CRAW_HIVE_MSG_KV_DATA:      return "KV_DATA";
+        case CRAW_HIVE_MSG_KV_PUT:       return "KV_PUT";
+        case CRAW_HIVE_MSG_KV_NOT_FOUND: return "KV_NOT_FOUND";
         default:                         return "UNKNOWN";
     }
 }
@@ -68,6 +72,10 @@ craw_hive_msg_type_t craw_hive_msg_type_parse(const char *s) {
     if (!strcmp(s, "PING"))         return CRAW_HIVE_MSG_PING;
     if (!strcmp(s, "ROLE_REQUEST")) return CRAW_HIVE_MSG_ROLE_REQUEST;
     if (!strcmp(s, "ROLE_GRANT"))   return CRAW_HIVE_MSG_ROLE_GRANT;
+    if (!strcmp(s, "KV_GET"))       return CRAW_HIVE_MSG_KV_GET;
+    if (!strcmp(s, "KV_DATA"))      return CRAW_HIVE_MSG_KV_DATA;
+    if (!strcmp(s, "KV_PUT"))       return CRAW_HIVE_MSG_KV_PUT;
+    if (!strcmp(s, "KV_NOT_FOUND")) return CRAW_HIVE_MSG_KV_NOT_FOUND;
     return CRAW_HIVE_MSG_UNKNOWN;
 }
 

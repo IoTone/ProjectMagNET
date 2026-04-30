@@ -2112,8 +2112,8 @@ LOAD /Users/dkords/.platformio/packages/toolchain-xtensa-esp-elf/bin/../lib/gcc/
 LOAD /Users/dkords/.platformio/packages/toolchain-xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/13.2.0/esp32s3/no-rtti/crtbegin.o
                 0x00000000                        IDF_TARGET_ESP32S3 = 0x0
 START GROUP
-LOAD .pio/build/m5capsule/bootloader/esp-idf/main/libmain.a
 LOAD .pio/build/m5capsule/bootloader/esp-idf/xtensa/libxtensa.a
+LOAD .pio/build/m5capsule/bootloader/esp-idf/main/libmain.a
 LOAD .pio/build/m5capsule/bootloader/esp-idf/bootloader_support/libbootloader_support.a
 LOAD .pio/build/m5capsule/bootloader/esp-idf/efuse/libefuse.a
 LOAD .pio/build/m5capsule/bootloader/esp-idf/esp_bootloader_format/libesp_bootloader_format.a

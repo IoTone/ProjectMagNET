@@ -32,10 +32,82 @@ typedef struct {
     char     role[CRAW_HIVE_ROLE_MAX + 1];
     char     session_id[40];
     int64_t  last_seen_ms;
+    /* Active connection socket. Set by the per-client task while the peer
+     * is connected, -1 when disconnected. lwIP send() is thread-safe so
+     * other tasks (e.g. REPL grant-role) can write to this socket. */
+    int      client_sock;
     bool     in_use;
 } session_t;
 
 static session_t s_sessions[MAX_SESSIONS];
+
+/* ---- In-memory KV table (Step 1 — Scribe-backed comes in Step 2) ---- */
+#define KV_TABLE_SIZE 16
+typedef struct {
+    bool in_use;
+    char key[CRAW_HIVE_KV_KEY_MAX + 1];
+    char value[CRAW_HIVE_KV_VALUE_MAX + 1];
+} kv_entry_t;
+static kv_entry_t s_kv[KV_TABLE_SIZE];
+
+static int kv_lookup(const char *key, char *out, size_t out_len) {
+    if (!key || !out) return -1;
+    for (int i = 0; i < KV_TABLE_SIZE; i++) {
+        if (s_kv[i].in_use && strcmp(s_kv[i].key, key) == 0) {
+            strncpy(out, s_kv[i].value, out_len - 1);
+            out[out_len - 1] = '\0';
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int kv_store(const char *key, const char *value) {
+    if (!key || !*key || strlen(key) > CRAW_HIVE_KV_KEY_MAX) return -1;
+    if (!value || strlen(value) > CRAW_HIVE_KV_VALUE_MAX)    return -2;
+    /* Update existing entry */
+    for (int i = 0; i < KV_TABLE_SIZE; i++) {
+        if (s_kv[i].in_use && strcmp(s_kv[i].key, key) == 0) {
+            strncpy(s_kv[i].value, value, sizeof(s_kv[i].value) - 1);
+            s_kv[i].value[sizeof(s_kv[i].value) - 1] = '\0';
+            return 0;
+        }
+    }
+    /* Insert new */
+    for (int i = 0; i < KV_TABLE_SIZE; i++) {
+        if (!s_kv[i].in_use) {
+            s_kv[i].in_use = true;
+            strncpy(s_kv[i].key, key, sizeof(s_kv[i].key) - 1);
+            s_kv[i].key[sizeof(s_kv[i].key) - 1] = '\0';
+            strncpy(s_kv[i].value, value, sizeof(s_kv[i].value) - 1);
+            s_kv[i].value[sizeof(s_kv[i].value) - 1] = '\0';
+            return 0;
+        }
+    }
+    return -3;  /* table full */
+}
+
+/* External accessors so the Dial REPL can list / inspect / preseed the
+ * ruler's KV table for testing. */
+int craw_hive_ruler_kv_get(const char *key, char *out, size_t out_len) {
+    return kv_lookup(key, out, out_len);
+}
+
+int craw_hive_ruler_kv_put(const char *key, const char *value) {
+    return kv_store(key, value);
+}
+
+int craw_hive_ruler_kv_iterate(int (*cb)(const char *key, const char *value, void *ctx),
+                               void *ctx) {
+    int n = 0;
+    for (int i = 0; i < KV_TABLE_SIZE; i++) {
+        if (s_kv[i].in_use) {
+            if (cb && cb(s_kv[i].key, s_kv[i].value, ctx) != 0) return n;
+            n++;
+        }
+    }
+    return n;
+}
 
 typedef struct {
     craw_hive_ruler_config_t cfg;
@@ -178,6 +250,7 @@ static void handle_hello(int client_sock, const craw_hive_msg_t *hello) {
     strncpy(s->node_id, hello->from, CRAW_HIVE_ID_MAX);
     strncpy(s->role, role_out, CRAW_HIVE_ROLE_MAX);
     gen_session_id(s->session_id);
+    s->client_sock = client_sock;   /* tracked so REPL can target this peer */
 
     /* WELCOME */
     cJSON *rp = cJSON_CreateObject();
@@ -247,10 +320,53 @@ static void handle_client(int client_sock) {
             if (s) s->last_seen_ms = esp_timer_get_time() / 1000;
             if (m.type == CRAW_HIVE_MSG_PING) {
                 send_msg(client_sock, CRAW_HIVE_MSG_PING, m.from, NULL);
+            } else if (m.type == CRAW_HIVE_MSG_KV_GET) {
+                /* Try the on_kv_get callback first (Scribe NVS); fall back
+                 * to in-memory table on miss. Either way reply with KV_DATA
+                 * (found) or KV_NOT_FOUND. */
+                cJSON *p = cJSON_Parse(m.payload_json ? m.payload_json : "{}");
+                const cJSON *jk = cJSON_GetObjectItemCaseSensitive(p, "key");
+                const char *key = cJSON_IsString(jk) ? jk->valuestring : NULL;
+                if (key) {
+                    char val[CRAW_HIVE_KV_VALUE_MAX + 1] = {0};
+                    int hit = -1;
+                    if (s_ctx.cfg.on_kv_get) {
+                        hit = s_ctx.cfg.on_kv_get(key, val, sizeof(val),
+                                                  s_ctx.cfg.on_kv_get_ctx);
+                    }
+                    if (hit != 0) hit = kv_lookup(key, val, sizeof(val));
+
+                    cJSON *rp = cJSON_CreateObject();
+                    cJSON_AddStringToObject(rp, "key", key);
+                    if (hit == 0) cJSON_AddStringToObject(rp, "value", val);
+                    char *rps = cJSON_PrintUnformatted(rp);
+                    send_msg(client_sock,
+                             hit == 0 ? CRAW_HIVE_MSG_KV_DATA
+                                      : CRAW_HIVE_MSG_KV_NOT_FOUND,
+                             m.from, rps);
+                    free(rps); cJSON_Delete(rp);
+                }
+                cJSON_Delete(p);
+            } else if (m.type == CRAW_HIVE_MSG_KV_PUT) {
+                cJSON *p = cJSON_Parse(m.payload_json ? m.payload_json : "{}");
+                const cJSON *jk = cJSON_GetObjectItemCaseSensitive(p, "key");
+                const cJSON *jv = cJSON_GetObjectItemCaseSensitive(p, "value");
+                if (cJSON_IsString(jk) && cJSON_IsString(jv)) {
+                    int rc = kv_store(jk->valuestring, jv->valuestring);
+                    ESP_LOGI(TAG, "KV_PUT '%s' (rc=%d)", jk->valuestring, rc);
+                }
+                cJSON_Delete(p);
             }
             craw_hive_msg_free(&m);
         }
         free(frame);
+    }
+    /* Clear socket from any session that referenced it. lwIP send() from
+     * other tasks would now fail, which is fine — peer is gone. */
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (s_sessions[i].in_use && s_sessions[i].client_sock == client_sock) {
+            s_sessions[i].client_sock = -1;
+        }
     }
 }
 
@@ -399,6 +515,35 @@ int craw_hive_ruler_start(const craw_hive_ruler_config_t *cfg) {
         return -1;
     }
     return 0;
+}
+
+int craw_hive_ruler_grant_role(const char *node_id,
+                               const char *role,
+                               const char *bundle_key,
+                               const char *scribe) {
+    if (!node_id || !role) return -1;
+    session_t *s = session_for(node_id);
+    if (!s || s->client_sock < 0) {
+        ESP_LOGW(TAG, "grant-role: peer '%s' not connected", node_id);
+        return -1;
+    }
+    cJSON *p = cJSON_CreateObject();
+    cJSON_AddStringToObject(p, "role", role);
+    if (bundle_key) cJSON_AddStringToObject(p, "bundle", bundle_key);
+    if (scribe)     cJSON_AddStringToObject(p, "scribe", scribe);
+    char *pj = cJSON_PrintUnformatted(p);
+    int rc = pj ? send_msg(s->client_sock, CRAW_HIVE_MSG_ROLE_GRANT, node_id, pj) : -2;
+    free(pj);
+    cJSON_Delete(p);
+
+    /* Locally update our peer-table entry to reflect the new role. */
+    if (rc == 0 && role) {
+        strncpy(s->role, role, CRAW_HIVE_ROLE_MAX);
+        s->role[CRAW_HIVE_ROLE_MAX] = '\0';
+        ESP_LOGI(TAG, "ROLE_GRANT → %s role=%s bundle=%s", node_id, role,
+                 bundle_key ? bundle_key : "(none)");
+    }
+    return rc == 0 ? 0 : -2;
 }
 
 void craw_hive_ruler_stop(void) {

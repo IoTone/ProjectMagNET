@@ -140,13 +140,45 @@ Explicit re-role request. Payload mirrors HELLO.
 
 ```json
 "payload": {
-  "role":        "scribe",
-  "bundle_url":  null,      // v2: URL or b64 blob to download role logic
-  "bundle_sig":  null
+  "role":   "scribe",
+  "bundle": "bundle:scribe",       // KV key on the scribe (or NULL for v1)
+  "scribe": "*"                    // explicit scribe id, or "*" = any scribe in hive
 }
 ```
 
-v1 grants only change the role label. The actual Forth role bundle arrives in Milestone C.
+v1 grants only change the role label (`bundle` is null). v1.1 (Milestone C step 3) carries a reference to a bundle stored as a KV value on the hive's Scribe — the receiving node does `KV_GET key=<bundle>` to fetch the JSON envelope, validates it via `craw_role_bundle`, and installs via `forth_eval_n()`. Bundle envelope format: see [`MagNET-RoleBundle-v1.md`](MagNET-RoleBundle-v1.md).
+
+### KV_GET / KV_DATA / KV_PUT / KV_NOT_FOUND (Milestone C, step 1)
+
+Generic key-value transport over the hive session. Used in v1 for ad-hoc shared state, and from v1.1 onwards as the substrate that `ROLE_GRANT` references resolve through.
+
+**KV_GET** (any node → ruler):
+
+```json
+"payload": { "key": "bundle:spy" }
+```
+
+**KV_DATA** (ruler → requester) — sent only on cache hit:
+
+```json
+"payload": { "key": "bundle:spy", "value": "..." }
+```
+
+**KV_NOT_FOUND** (ruler → requester) — sent only on cache miss:
+
+```json
+"payload": { "key": "bundle:spy" }
+```
+
+**KV_PUT** (any authorized node → ruler) — fire-and-forget; ruler does not ACK:
+
+```json
+"payload": { "key": "bundle:spy", "value": "..." }
+```
+
+Ruler-side resolution: try the registered `on_kv_get` callback first (Scribe NVS in v1.1), fall back to in-memory table on miss. KV_PUT writes only to in-memory table for v1; v1.1 will replicate writes to all reachable Scribes in the hive.
+
+Limits: keys ≤ 32 bytes, values ≤ 3072 bytes. Values larger than this should be split or chunked at a higher protocol layer (out of scope for v1).
 
 ## Session state machine (node side)
 

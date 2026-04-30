@@ -55,6 +55,7 @@
 #include "craw_wifi.h"
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
+#include "craw_role_bundle.h"
 
 static const char *TAG = "scribe";
 
@@ -273,6 +274,79 @@ static void on_hive_state(craw_hive_node_state_t state,
     if (state == CRAW_HIVE_NODE_JOINED) buzz(2000, 60);
 }
 
+/* Worker that fetches a bundle by KV key and installs it.
+ * Runs on its own task because craw_hive_node_kv_get is blocking and
+ * cannot run inside the receive loop's callback context. */
+typedef struct {
+    char bundle_key[CRAW_HIVE_KV_KEY_MAX + 1];
+    char role[CRAW_HIVE_ROLE_MAX + 1];
+} bundle_install_job_t;
+
+static const char *NODE_CAPS[] = { "scribe", "kv-store" };
+#define N_NODE_CAPS (sizeof(NODE_CAPS) / sizeof(NODE_CAPS[0]))
+
+static void bundle_install_worker(void *arg) {
+    bundle_install_job_t *job = (bundle_install_job_t *)arg;
+    /* Bundles can be up to 4 KB of source — heap-allocate the buffer to
+     * avoid blowing the worker task's stack. */
+    char *json_buf = malloc(CRAW_HIVE_KV_VALUE_MAX + 1);
+    if (!json_buf) {
+        uprintf("\r\n[bundle] worker malloc failed\r\n");
+        free(job);
+        vTaskDelete(NULL);
+        return;
+    }
+    uprintf("\r\n[bundle] fetching %s for role=%s...\r\n", job->bundle_key, job->role);
+    int rc = craw_hive_node_kv_get(job->bundle_key, json_buf,
+                                   CRAW_HIVE_KV_VALUE_MAX + 1, 5000);
+    if (rc == 0) {
+        craw_role_bundle_install_result_t result = {0};
+        int irc = craw_role_bundle_install_from_json(json_buf,
+                                                     NODE_CAPS, N_NODE_CAPS,
+                                                     &result);
+        if (irc == BUNDLE_OK) {
+            uprintf("[bundle] '%s' v%s installed (%u bytes src)\r\n",
+                    result.info.name, result.info.version,
+                    (unsigned)result.info.src_len);
+            buzz(1500, 40); buzz(2200, 60);
+        } else {
+            uprintf("[bundle] install failed rc=%d field='%s'\r\n",
+                    irc, result.err_field);
+            buzz(700, 80); buzz(500, 100);
+        }
+    } else if (rc == 1) {
+        uprintf("[bundle] kv-get '%s' returned not_found\r\n", job->bundle_key);
+    } else if (rc == -2) {
+        uprintf("[bundle] kv-get '%s' timed out\r\n", job->bundle_key);
+    } else {
+        uprintf("[bundle] kv-get '%s' failed rc=%d\r\n", job->bundle_key, rc);
+    }
+    free(json_buf);
+    free(job);
+    vTaskDelete(NULL);
+}
+
+static void on_role_grant(const char *role, const char *bundle_key,
+                          const char *scribe, void *ctx) {
+    (void)ctx; (void)scribe;
+    uprintf("\r\n[ROLE_GRANT] role=%s bundle=%s\r\n",
+            role, bundle_key ? bundle_key : "(none)");
+    if (!bundle_key) {
+        /* Legacy "label only" — nothing to install. */
+        return;
+    }
+    bundle_install_job_t *job = malloc(sizeof(*job));
+    if (!job) return;
+    strncpy(job->role, role, sizeof(job->role) - 1);
+    job->role[sizeof(job->role) - 1] = '\0';
+    strncpy(job->bundle_key, bundle_key, sizeof(job->bundle_key) - 1);
+    job->bundle_key[sizeof(job->bundle_key) - 1] = '\0';
+    if (xTaskCreate(bundle_install_worker, "bundle_inst", 8192, job, 4, NULL) != pdPASS) {
+        uprint("[bundle] failed to spawn install worker\r\n");
+        free(job);
+    }
+}
+
 static const char *CAPS[] = { "scribe", "kv-store", NULL };
 static uint8_t      secret_copy[32];
 
@@ -292,15 +366,17 @@ static void maybe_start_hive(void) {
     memcpy(secret_copy, CRAW_HIVE_DEV_SECRET, 32);
     static craw_hive_node_config_t ncfg;
     ncfg = (craw_hive_node_config_t){
-        .node_id        = node_id,
-        .hive_id        = "beehive-1",
-        .role_requested = "scribe",
-        .caps           = CAPS,
-        .chip           = "ESP32-S3",
-        .fw             = "0.1.0",
-        .secret         = secret_copy,
-        .on_state       = on_hive_state,
-        .on_state_ctx   = NULL,
+        .node_id          = node_id,
+        .hive_id          = "beehive-1",
+        .role_requested   = "scribe",
+        .caps             = CAPS,
+        .chip             = "ESP32-S3",
+        .fw               = "0.1.0",
+        .secret           = secret_copy,
+        .on_state         = on_hive_state,
+        .on_state_ctx     = NULL,
+        .on_role_grant    = on_role_grant,
+        .on_role_grant_ctx= NULL,
     };
     if (craw_hive_node_start(&ncfg) == 0) {
         hive_started = true;
@@ -459,6 +535,67 @@ static void w_buzz(void) {
     buzz((uint16_t)hz, (uint16_t)dur);
 }
 
+/* Hive KV REPL helpers — distinct from `scribe-*` words which hit the
+ * local NVS namespace. These ride the existing hive session to the ruler.
+ * In Milestone C step 2, the Scribe's on_kv_get callback will let it serve
+ * the ruler's KV requests from this same NVS namespace, unifying the two. */
+static char s_hive_kv_key[CRAW_HIVE_KV_KEY_MAX + 1];
+static char s_hive_kv_val[CRAW_HIVE_KV_VALUE_MAX + 1];
+
+static void w_hive_kv_get(void) {
+    read_line("\r\nkey: ", s_hive_kv_key, sizeof(s_hive_kv_key));
+    int rc = craw_hive_node_kv_get(s_hive_kv_key,
+                                   s_hive_kv_val, sizeof(s_hive_kv_val), 3000);
+    if (rc == 0)       uprintf("'%s' = '%s'\r\n", s_hive_kv_key, s_hive_kv_val);
+    else if (rc == 1)  uprint("not found\r\n");
+    else if (rc == -2) uprint("timeout\r\n");
+    else               uprintf("kv-get failed rc=%d\r\n", rc);
+}
+
+static void w_hive_kv_put(void) {
+    read_line("\r\nkey:   ", s_hive_kv_key, sizeof(s_hive_kv_key));
+    read_line("value: ",     s_hive_kv_val, sizeof(s_hive_kv_val));
+    int rc = craw_hive_node_kv_put(s_hive_kv_key, s_hive_kv_val);
+    if (rc == 0) uprintf("sent KV_PUT '%s'\r\n", s_hive_kv_key);
+    else         uprintf("kv-put failed rc=%d\r\n", rc);
+}
+
+/* ( -- ) Manual bundle install. Prompts for a KV key, fetches the JSON
+ * envelope from the ruler, runs craw_role_bundle_install_from_json. Same
+ * code path as the auto-install via on_role_grant — just without the
+ * ROLE_GRANT trigger. Useful for testing without involving the Dial. */
+static void w_bundle_install(void) {
+    read_line("\r\nbundle key: ", s_hive_kv_key, sizeof(s_hive_kv_key));
+    bundle_install_job_t *job = malloc(sizeof(*job));
+    if (!job) { uprint("malloc failed\r\n"); return; }
+    strncpy(job->bundle_key, s_hive_kv_key, sizeof(job->bundle_key) - 1);
+    job->bundle_key[sizeof(job->bundle_key) - 1] = '\0';
+    strncpy(job->role, "manual", sizeof(job->role) - 1);
+    if (xTaskCreate(bundle_install_worker, "bundle_inst", 8192, job, 4, NULL) != pdPASS) {
+        uprint("failed to spawn worker\r\n");
+        free(job);
+    }
+}
+
+static int bundle_list_cb(const char *name, const char *version, void *ctx) {
+    (void)ctx;
+    uprintf("  %-20s v%s\r\n", name, version);
+    return 0;
+}
+
+/* ( -- ) List all bundles persisted in NVS. */
+static void w_bundle_list(void) {
+    uprint("\r\npersisted bundles:\r\n");
+    int n = craw_role_bundle_iterate(bundle_list_cb, NULL);
+    uprintf("(%d entries)\r\n", n);
+}
+
+/* ( -- ) Wipe all persisted bundles. */
+static void w_bundle_forget_all(void) {
+    int rc = craw_role_bundle_forget_all();
+    uprintf("\r\nbundle-forget-all rc=%d\r\n", rc);
+}
+
 static void register_forth_words(void) {
     forth_register_word("scribe-store",  w_scribe_store);
     forth_register_word("scribe-recall", w_scribe_recall);
@@ -469,6 +606,11 @@ static void register_forth_words(void) {
     forth_register_word("prov-reset",    w_prov_reset);
     forth_register_word("hive-status",   w_hive_status);
     forth_register_word("buzz",          w_buzz);
+    forth_register_word("kv-get",        w_hive_kv_get);
+    forth_register_word("kv-put",        w_hive_kv_put);
+    forth_register_word("bundle-install", w_bundle_install);
+    forth_register_word("bundle-list",   w_bundle_list);
+    forth_register_word("bundle-forget-all", w_bundle_forget_all);
 }
 
 /* ---------- app_main ---------- */
@@ -501,6 +643,16 @@ void app_main(void) {
     register_forth_words();
     uprintf("Forth ready. Free heap: %lu bytes\r\n",
             (unsigned long)esp_get_free_heap_size());
+
+    /* Re-install any role bundles persisted from previous boots. Order
+     * matters: forth_init must be done first so bundle source has a
+     * vocabulary to register words into. */
+    craw_role_bundle_init();
+    int reapplied = craw_role_bundle_apply_saved(NODE_CAPS, N_NODE_CAPS);
+    if (reapplied > 0) {
+        uprintf("[bundle] re-applied %d persisted bundle(s) from NVS\r\n",
+                reapplied);
+    }
 
     xTaskCreate(housekeeping_task, "keep", 6144, NULL, 3, NULL);
 

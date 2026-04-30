@@ -100,41 +100,63 @@ Hive protocol spec: [`docs/MagNET-HiveProtocol-v1.md`](docs/MagNET-HiveProtocol-
 
 Reusable `components/craw_ble_provision/` — NimBLE GATT service with characteristics for WiFi SSID, password, commit trigger, IP-address notify, and status notify. On any fresh node, a phone running nRF Connect can provision WiFi in under a minute; creds persist in NVS via `craw_nvs`.
 
-**Status**: Done. Validated end-to-end on ESP32-C3 (`M5Stamp3CU_Blinky_E4TH/`), classic ESP32 (`M5Atom_Echo_Hex_Hive_Test/`, `M5Atom_Matrix_Hive_Test/`), and ESP32-S3 (the Dial project itself as a ruler). See service UUID map in any sub-project README.
+**Status**: Done. Validated end-to-end on ESP32-C3 (`M5Stamp3CU_Blinky_E4TH/`), classic ESP32 (`M5Atom_Echo_Hex_Hive_Test/`, `M5Atom_Matrix_Hive_Test/`, `M5_Hive_Camera/` AI-Thinker variant), and ESP32-S3 (the Dial project itself as a ruler, plus `M5_Hive_Camera/` CamS3 variant and `M5Capsule_Hive_Scribe/`). See service UUID map in any sub-project README.
 
 #### Milestone B — ruler discovery + HMAC join (R5, R6, R7)
 
 Reusable `components/craw_hive/` — both sides of the protocol in one component (`craw_hive_node_start()` / `craw_hive_ruler_start()`). Discovery via mDNS service type `_magnet-ruler._tcp` on port 7447 with TXT records `ver=1 hive=<id>`. Transport is length-prefixed JSON frames over TCP; authentication is HMAC-SHA256 over a canonicalized `type|nonce|ts|payload` string with a 32-byte pre-shared secret. The ruler auto-accepts any valid HELLO (v1 consensus stub).
 
-**Status**: Done. Validated end-to-end with:
-- **Ruler**: the M5Dial project (`M5StackDial-m5gfx-demo-ESPIDFORTH/`) — advertises via mDNS, maintains up to 8 peer sessions, shows BLE/WiFi/hive status as colored dots on the round display, peer table via `ruler-status` Forth word.
-- **Node**: the M5Atom Echo project (`M5Atom_Echo_Hex_Hive_Test/`) — provisioned via BLE, joins the Dial's hive, shows state color on the 37-LED Unit Hex, plays I2S chirps on state transitions.
-- **Dev harness**: `scripts/fake_ruler.py` — a ~220-line laptop script that speaks the protocol, useful for isolating node-side bugs when no real ruler is flashed.
+**Status**: Done. **Multi-node validated 2026-04-25** — three different chip families, three different roles, all joined to one Dial ruler concurrently:
 
-The post-WiFi bringup order is non-obvious and load-bearing: **BLE teardown → SNTP sync → hive start**. Without BLE teardown mDNS OOMs (~55 KB reclaim); without SNTP the HMAC timestamps are ~1.8 billion seconds off real time.
+- **Ruler**: `M5StackDial-m5gfx-demo-ESPIDFORTH/` (ESP32-S3) — advertises `_magnet-ruler._tcp.local` via mDNS, maintains up to 8 peer sessions via per-client tasks, shows BLE/WiFi/hive status + peer count as colored dots on the round display, peer table via `ruler-status` Forth word.
+- **Spawn**: `M5Atom_Echo_Hex_Hive_Test/` (classic ESP32) — 37-LED Unit Hex status panel, I2S NS4168 chirps on state transitions.
+- **Spy** (Role 7 — camera): `M5_Hive_Camera/` (works on both AI-Thinker ESP32-CAM and M5Stack Unit CamS3) — preserves stock CameraWebServer HTTP behavior (`/stream`, `/capture`, `/control`) on top of the hive bringup.
+- **Scribe** (Role 4): `M5Capsule_Hive_Scribe/` (ESP32-S3) — battery-powered persistent KV store using a 64 KB NVS partition. Foundation for hive-shared memory in Milestone C.
+- **Dev harness**: `scripts/fake_ruler.py` — laptop script that speaks the protocol, useful for isolating node-side bugs when no real ruler is flashed.
+
+The post-WiFi bringup order is non-obvious and load-bearing: **BLE teardown → SNTP sync (full COMPLETED status, not just time>2020) → hive start**. Without BLE teardown mDNS OOMs (~55 KB reclaim); without strict SNTP gating the HMAC timestamps drift just enough to fail `ts_skew` on the ruler. The ruler must spawn a per-client task on accept — inline `handle_client` blocks the listener for the full session and locks out subsequent peers.
 
 #### Milestone C — signed Forth role bundles (R8-R12)
 
-**Status**: TODO. Next step from the current position.
+**Status**: Steps 1–4 done. Authoring more bundles is an ongoing line of work; the infrastructure is in place.
 
-Role bundles are the payload `ROLE_GRANT` carries. Each is a JSON envelope containing a version, an author tag, a list of capabilities it provides, Ed25519 signature over a Forth source blob, and the blob itself. The node validates (signature, version monotonic, hash), then executes via `forth_eval_n()`. Ten stock roles from the design section (Ruler, Worker, Parrot, Scribe, Beeper, Warrior, Spy, Pet, ML PhD, Spawn) will ship as signed bundles in `bundles/`.
+Role bundles are signed Forth source blobs the hive delivers to nodes at runtime. Each is a JSON envelope: version, author tag, capabilities provided, signature over the source, and the source itself. The node validates (signature, version monotonic, CRC), then executes via `forth_eval_n()`.
+
+Architectural decision: **bundles live on the Scribe**. R16/R17 (shared-memory queries) and R8/R9 (role download) collapse into one mechanism — bundles are just KV values keyed `bundle:<name>`. The Ruler embeds bundles as a bootstrap fallback only; once a Scribe joins, the Ruler `KV_PUT`-seeds its bundles into the Scribe and the Scribe becomes authoritative.
+
+Wire-format spec for the protocol additions: [`docs/MagNET-HiveProtocol-v1.md`](docs/MagNET-HiveProtocol-v1.md). Bundle envelope spec: [`docs/MagNET-RoleBundle-v1.md`](docs/MagNET-RoleBundle-v1.md).
+
+Step plan:
+1. **KV protocol layer** ✅ — `KV_GET` / `KV_DATA` / `KV_PUT` / `KV_NOT_FOUND` messages, ruler in-memory table (16 entries × 3 KB), Forth `kv-set`/`kv-get`/`kv-put` words on every node, regression cover in `scripts/fake_ruler.py`.
+2. **`craw_role_bundle` component** ✅ — JSON envelope parse, signature verify (HMAC-SHA256 for v1, Ed25519 upgrade path documented), CRC32 over source, base64 decode, `forth_eval()` install, NVS-persist last-installed bundle per role. Trust store as compile-time keys.
+3. **`ROLE_GRANT` install pipeline** ✅ — `craw_hive_node`'s `on_role_grant` callback decodes the grant, app spawns a worker that does `KV_GET` on `bundle:<name>` and pipes the JSON into `craw_role_bundle_install_from_json`. Capsule Scribe is the reference consumer. Dial REPL: `grant-role` Forth word sends a `ROLE_GRANT` to a connected peer.
+4. **Bundle authoring + delivery infrastructure** ✅ — three starter bundles (`spawn`, `scribe-extra`, `spy-snapper`) under `bundles/`, signed at author-time with `scripts/sign_bundle.py`. Two distribution paths:
+   - **A** (production / demo): bundles compiled into the Dial firmware via `bundle_blobs.h` (auto-generated by `scripts/bundles_to_header.py` from signed `*.json`), `bundle_bootstrap()` `KV_PUT`s each into the ruler's local table on boot. Self-sufficient — no laptop required at runtime.
+   - **B** (dev / CI): `scripts/push_bundles.py` discovers a running Dial via mDNS, joins as a transient hive client, and `KV_PUT`s each `*.json` in the target directory. Update bundles without reflashing the Dial.
+
+Authoring more roles is now mostly a matter of writing Forth source — author 9 more for the design-section roster (Ruler bundle is special; Worker, Parrot, Beeper, Warrior, Pet, ML PhD, Eye, Boombox plus Scribe-base remain).
 
 ## Topology at the current checkpoint
 
 ```
-┌────────────────────┐              ┌────────────────────┐
-│  M5Dial (S3)       │              │  M5Atom Echo (ESP) │
-│  role = ruler      │              │  role = spawn      │
-│  - craw_wifi       │              │  - craw_wifi       │
-│  - craw_ble_prov   │◄─BLE prov────┤  - craw_ble_prov   │
-│  - craw_hive_ruler │◄─mDNS + TCP──┤  - craw_hive_node  │
-│  - playground UI   │   HMAC auth  │  - hex status      │
-│  - peer dots       │              │  - I2S chirps      │
-└────────────────────┘              └────────────────────┘
-                  ▲
-                  │ (optional) dev harness
-                  │ scripts/fake_ruler.py
+                  ┌────────────────────┐
+                  │  M5Dial (S3)       │
+                  │  role = ruler      │
+                  │  - craw_hive_ruler │
+                  │  - peer table      │
+                  └─────────┬──────────┘
+                            │  mDNS _magnet-ruler._tcp + HMAC-SHA256 TCP
+            ┌───────────────┼────────────────┬───────────────────────┐
+            │               │                │                       │
+   ┌────────▼────────┐ ┌────▼──────────┐ ┌───▼──────────────┐ ┌──────▼─────────┐
+   │  Atom Echo (32) │ │ ESP32-CAM /   │ │ M5Capsule (S3)   │ │ scripts/        │
+   │  role = spawn   │ │ Unit CamS3    │ │ role = scribe    │ │ fake_ruler.py   │
+   │  hex + I2S      │ │ role = spy    │ │ KV store in NVS  │ │ (laptop dev    │
+   │  chirps         │ │ /stream MJPEG │ │ buzzer feedback  │ │  harness)       │
+   └─────────────────┘ └───────────────┘ └──────────────────┘ └─────────────────┘
 ```
+
+Per-peer projects: `M5Atom_Echo_Hex_Hive_Test/`, `M5_Hive_Camera/`, `M5Capsule_Hive_Scribe/`. Adding a new node type follows the same pattern — symlink the `craw_*` components, mirror the post-WiFi bringup sequence, register Forth words for the role-specific work.
 
 ## Shared components (`components/`)
 
@@ -145,6 +167,8 @@ Role bundles are the payload `ROLE_GRANT` carries. Each is a JSON envelope conta
 | `craw_wifi` | WiFi STA lifecycle with event callback |
 | `craw_ble_provision` | Phase 4A — BLE provisioning GATT service + advertising/teardown control |
 | `craw_hive` | Phase 4B — mDNS + TCP + HMAC-SHA256 protocol, node + ruler sides |
+| `craw_camera` | OV2640 wrapper over `espressif/esp32-camera`, multi-board pin maps (AI-Thinker + M5CamS3), NVS-persisted sensor settings (framesize, quality, vflip, hmirror, XCLK) |
+| `craw_role_bundle` | Phase 4C — parse + verify-signature + base64-decode + CRC + `forth_eval()` install + NVS persist of signed Forth role bundles |
 | `craw_mdns` | Simple mDNS hostname publisher (pre-Phase-4, retained for other projects) |
 | `craw_mqtt`, `craw_http`, `craw_speaker` | Earlier-phase helpers still in use by the M5StickC and M5Dial crawdad projects |
 

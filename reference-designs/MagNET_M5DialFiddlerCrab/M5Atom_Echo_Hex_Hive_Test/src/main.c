@@ -522,6 +522,51 @@ static void w_hive_status(void) {
     uart_printf("session: %s\r\n", sid ? sid : "(none)");
 }
 
+/* KV REPL helpers — interactively read key (and value for set), then
+ * round-trip via the hive session to the ruler. Use case: validate the
+ * KV protocol layer, and (post-Milestone-C) fetch role bundles. */
+static char w_kv_io_key[CRAW_HIVE_KV_KEY_MAX + 1];
+static char w_kv_io_val[CRAW_HIVE_KV_VALUE_MAX + 1];
+
+static void kv_read_line(const char *prompt, char *buf, size_t bufsz) {
+    uart_print(prompt);
+    size_t i = 0;
+    while (i + 1 < bufsz) {
+        int c = console_getchar();
+        if (c < 0) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
+        if (c == '\r' || c == '\n') break;
+        if (c == 8 || c == 127) {
+            if (i > 0) { i--; uart_print("\b \b"); }
+            continue;
+        }
+        buf[i++] = (char)c;
+        char ch[2] = { (char)c, 0 };
+        uart_print(ch);
+    }
+    buf[i] = '\0';
+    uart_print("\r\n");
+}
+
+/* ( -- ) Send KV_GET to the ruler, print the response. */
+static void w_hive_kv_get(void) {
+    kv_read_line("\r\nkey: ", w_kv_io_key, sizeof(w_kv_io_key));
+    int rc = craw_hive_node_kv_get(w_kv_io_key,
+                                   w_kv_io_val, sizeof(w_kv_io_val), 3000);
+    if (rc == 0)       uart_printf("'%s' = '%s'\r\n", w_kv_io_key, w_kv_io_val);
+    else if (rc == 1)  uart_print("not found\r\n");
+    else if (rc == -2) uart_print("timeout\r\n");
+    else               uart_printf("kv-get failed rc=%d\r\n", rc);
+}
+
+/* ( -- ) Send KV_PUT (fire-and-forget). */
+static void w_hive_kv_put(void) {
+    kv_read_line("\r\nkey:   ", w_kv_io_key, sizeof(w_kv_io_key));
+    kv_read_line("value: ",     w_kv_io_val, sizeof(w_kv_io_val));
+    int rc = craw_hive_node_kv_put(w_kv_io_key, w_kv_io_val);
+    if (rc == 0) uart_printf("sent KV_PUT '%s'\r\n", w_kv_io_key);
+    else         uart_printf("kv-put failed rc=%d\r\n", rc);
+}
+
 /* ( -- ) Walk every LED index, lighting one at a time for 300 ms. Use to
  * map physical hex positions → logical indices. Restores status when done. */
 static void w_hex_test(void) {
@@ -567,6 +612,8 @@ static void register_forth_words(void) {
     forth_register_word("prov-status", w_prov_status);
     forth_register_word("prov-reset",  w_prov_reset);
     forth_register_word("hive-status", w_hive_status);
+    forth_register_word("kv-get",      w_hive_kv_get);
+    forth_register_word("kv-put",      w_hive_kv_put);
     forth_register_word("hex-test",    w_hex_test);
     forth_register_word("hex-pixel",   w_hex_pixel);
     forth_register_word("beep",        w_beep);

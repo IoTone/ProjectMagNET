@@ -46,8 +46,22 @@ typedef enum {
     CRAW_HIVE_MSG_PING         = 4,
     CRAW_HIVE_MSG_ROLE_REQUEST = 5,
     CRAW_HIVE_MSG_ROLE_GRANT   = 6,
+    /* Phase 4 Milestone C step 1 — generic key/value transport. KV_GET
+     * and KV_PUT travel from any node to the ruler; KV_DATA / KV_NOT_FOUND
+     * are the responses. Used in v1 for ad-hoc shared state and in v1+
+     * for Scribe-backed role-bundle delivery (key = "bundle:<name>"). */
+    CRAW_HIVE_MSG_KV_GET       = 7,
+    CRAW_HIVE_MSG_KV_DATA      = 8,
+    CRAW_HIVE_MSG_KV_PUT       = 9,
+    CRAW_HIVE_MSG_KV_NOT_FOUND = 10,
     CRAW_HIVE_MSG_UNKNOWN      = 0,
 } craw_hive_msg_type_t;
+
+/* KV size limits. Values up to 4 KB fit comfortably in one frame
+ * (CRAW_HIVE_MAX_FRAME = 4096) since the rest of the envelope is < 256
+ * bytes. Bumping these is fine if MAX_FRAME is bumped accordingly. */
+#define CRAW_HIVE_KV_KEY_MAX    32
+#define CRAW_HIVE_KV_VALUE_MAX  3072
 
 typedef enum {
     CRAW_HIVE_REJECT_AUTH          = 0,
@@ -96,6 +110,12 @@ craw_hive_msg_type_t craw_hive_msg_type_parse(const char *s);
 // Generate a random hex nonce into buf (buf >= CRAW_HIVE_NONCE_BYTES*2 + 1).
 void craw_hive_nonce_fill(char *buf);
 
+// KV serve hook (forward typedef so it's visible to the ruler config below).
+// See "ruler (continued)" section near the bottom of this file for usage.
+typedef int (*craw_hive_kv_get_cb_t)(const char *key,
+                                     char *value_out, size_t value_max,
+                                     void *ctx);
+
 // -------- ruler ------------------------------------------------------------
 
 typedef struct {
@@ -110,6 +130,11 @@ typedef struct {
                      const char *hive_id, bool *accept, char *role_out,
                      size_t role_out_len, void *ctx);
     void *on_hello_ctx;
+    // Optional KV override (Step 1+ — Scribe hooks its NVS via this).
+    // Tried first; if it returns non-zero the ruler falls back to its
+    // in-memory table. NULL = use in-memory table only.
+    craw_hive_kv_get_cb_t on_kv_get;
+    void *on_kv_get_ctx;
 } craw_hive_ruler_config_t;
 
 // Start mDNS advertisement and TCP listener. Blocks only briefly; work
@@ -118,6 +143,25 @@ int craw_hive_ruler_start(const craw_hive_ruler_config_t *cfg);
 
 // Stop ruler. For tests / role swaps.
 void craw_hive_ruler_stop(void);
+
+// Send a ROLE_GRANT to the named connected peer. node_id matches the
+// session's "from" id (e.g. "MagNET-biologic-a1b2"). bundle_key may be
+// NULL for the legacy "label only" semantics, or "bundle:<name>" to
+// reference a KV entry the peer should fetch + install. scribe identifies
+// which scribe to fetch from ("*" = any). Returns 0 on send success,
+// -1 if peer is not connected, -2 on send error.
+int craw_hive_ruler_grant_role(const char *node_id,
+                               const char *role,
+                               const char *bundle_key,
+                               const char *scribe);
+
+// Local-table KV access on the ruler side (Forth REPL helpers + bootstrap).
+// These touch the in-memory table only; the on_kv_get callback is NOT
+// consulted (use this for the ruler to seed/inspect its own data).
+int craw_hive_ruler_kv_get(const char *key, char *out, size_t out_len);
+int craw_hive_ruler_kv_put(const char *key, const char *value);
+int craw_hive_ruler_kv_iterate(int (*cb)(const char *key, const char *value, void *ctx),
+                               void *ctx);
 
 // -------- node -------------------------------------------------------------
 
@@ -140,6 +184,18 @@ typedef struct {
     // State transition callback. May be NULL.
     void (*on_state)(craw_hive_node_state_t state, const char *info, void *ctx);
     void  *on_state_ctx;
+    // Phase 4 Milestone C step 3: ROLE_GRANT received from the ruler.
+    // role        — the new role label (always non-NULL).
+    // bundle_key  — KV key naming the bundle to fetch ("bundle:spy"), or NULL
+    //               to keep the v1 "label only" semantics.
+    // scribe      — explicit scribe id to fetch from, or "*" / NULL = any.
+    // App typically responds by spawning a worker task that calls
+    // craw_hive_node_kv_get(bundle_key) and then
+    // craw_role_bundle_install_from_json(value). Don't do KV_GET inline —
+    // this callback runs on the receive-loop task and would deadlock.
+    void (*on_role_grant)(const char *role, const char *bundle_key,
+                          const char *scribe, void *ctx);
+    void  *on_role_grant_ctx;
 } craw_hive_node_config_t;
 
 // Start the node's discover/join loop. Work happens on an internal task.
@@ -153,6 +209,24 @@ craw_hive_node_state_t craw_hive_node_state(void);
 
 // Current session_id after JOINED, or NULL otherwise.
 const char *craw_hive_node_session_id(void);
+
+// KV: send KV_GET to the ruler, block waiting for KV_DATA / KV_NOT_FOUND.
+// Returns 0 on found (value copied to value_out, NUL-terminated),
+// 1 on not_found, -1 on error (no session, send fail), -2 on timeout.
+// Only one KV request per node is in flight at a time (serialized internally).
+int craw_hive_node_kv_get(const char *key,
+                          char *value_out, size_t value_max,
+                          int timeout_ms);
+
+// KV: fire-and-forget KV_PUT to the ruler. Returns 0 on send success.
+// No ack message in v1 — assume the ruler stored it.
+int craw_hive_node_kv_put(const char *key, const char *value);
+
+// craw_hive_kv_get_cb_t is declared near the top of this file. Optional
+// KV-serve hook: ruler config can install this to override the in-memory
+// table. Called on KV_GET; if it returns 0 with value populated, that
+// value is sent. If it returns non-zero, ruler falls back to its own
+// table. Use case: Scribe wires its NVS-backed kv-store via this hook.
 
 #ifdef __cplusplus
 }

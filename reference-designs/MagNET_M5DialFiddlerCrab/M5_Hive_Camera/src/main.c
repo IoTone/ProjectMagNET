@@ -424,6 +424,52 @@ static void w_hive_status(void) {
     uprintf("session: %s\r\n", sid ? sid : "(none)");
 }
 
+/* ---- KV REPL helpers (Milestone C step 1) ----
+ * Camera RAM is tight (esp32-camera DMA + BLE + WiFi). Cap KV values at
+ * 1 KB for REPL use; Camera doesn't need full 3 KB values for v1. Bundle
+ * fetches (Step 2+) will allocate from heap on demand. */
+#define CAMERA_KV_VAL_MAX  1024
+static char s_kv_key[CRAW_HIVE_KV_KEY_MAX + 1];
+static char s_kv_val[CAMERA_KV_VAL_MAX + 1];
+
+static void kv_read_line(const char *prompt, char *buf, size_t bufsz) {
+    uprint(prompt);
+    size_t i = 0;
+    while (i + 1 < bufsz) {
+        int c = console_getchar();
+        if (c < 0) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
+        if (c == '\r' || c == '\n') break;
+        if (c == 8 || c == 127) {
+            if (i > 0) { i--; uprint("\b \b"); }
+            continue;
+        }
+        buf[i++] = (char)c;
+        char ch[2] = { (char)c, 0 };
+        uprint(ch);
+    }
+    buf[i] = '\0';
+    uprint("\r\n");
+}
+
+/* ( -- ) Send KV_GET to the ruler, print response. */
+static void w_kv_get(void) {
+    kv_read_line("\r\nkey: ", s_kv_key, sizeof(s_kv_key));
+    int rc = craw_hive_node_kv_get(s_kv_key, s_kv_val, sizeof(s_kv_val), 3000);
+    if (rc == 0)       uprintf("'%s' = '%s'\r\n", s_kv_key, s_kv_val);
+    else if (rc == 1)  uprint("not found\r\n");
+    else if (rc == -2) uprint("timeout\r\n");
+    else               uprintf("kv-get failed rc=%d\r\n", rc);
+}
+
+/* ( -- ) Send KV_PUT (fire-and-forget). */
+static void w_kv_put(void) {
+    kv_read_line("\r\nkey:   ", s_kv_key, sizeof(s_kv_key));
+    kv_read_line("value: ",     s_kv_val, sizeof(s_kv_val));
+    int rc = craw_hive_node_kv_put(s_kv_key, s_kv_val);
+    if (rc == 0) uprintf("sent KV_PUT '%s'\r\n", s_kv_key);
+    else         uprintf("kv-put failed rc=%d\r\n", rc);
+}
+
 static void register_forth_words(void) {
     forth_register_word("cam-snap",      w_cam_snap);
     forth_register_word("cam-quality",   w_cam_quality);
@@ -432,6 +478,8 @@ static void register_forth_words(void) {
     forth_register_word("cam-hmirror",   w_cam_hmirror);
     forth_register_word("cam-reset-settings", w_cam_reset_settings);
     forth_register_word("cam-xclk-mhz",       w_cam_xclk_mhz);
+    forth_register_word("kv-get",             w_kv_get);
+    forth_register_word("kv-put",             w_kv_put);
     forth_register_word("flash-on",      w_flash_on);
     forth_register_word("flash-off",     w_flash_off);
     forth_register_word("stream-url",    w_stream_url);

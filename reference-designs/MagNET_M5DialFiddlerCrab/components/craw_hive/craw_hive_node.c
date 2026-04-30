@@ -14,6 +14,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -37,6 +38,26 @@ typedef struct {
 } node_ctx_t;
 
 static node_ctx_t s_ctx = {0};
+
+/* ---- KV pending request slot ----
+ * Only one outstanding KV_GET per node at a time. The heartbeat recv
+ * loop dispatches KV_DATA / KV_NOT_FOUND into this slot to wake the
+ * waiting caller. craw_hive_node_kv_get takes s_kv_mutex to serialize. */
+typedef struct {
+    bool              pending;
+    int               status;          /* 0 = found, 1 = not_found, -2 = timeout */
+    char             *response_buf;
+    size_t            response_max;
+    SemaphoreHandle_t done;
+} kv_pending_t;
+
+static SemaphoreHandle_t s_kv_mutex   = NULL;
+static kv_pending_t      s_kv_pending = {0};
+
+static void kv_init_once(void) {
+    if (!s_kv_mutex) s_kv_mutex = xSemaphoreCreateMutex();
+    if (!s_kv_pending.done) s_kv_pending.done = xSemaphoreCreateBinary();
+}
 
 /* ---- Small helpers ---- */
 static int64_t now_epoch_sec(void) {
@@ -276,8 +297,50 @@ static void session_attempt(void) {
             uint8_t *buf = malloc(4 + jlen);
             memcpy(buf, hdr, 4);
             if (recv_all(sock, buf + 4, jlen) != 0) { free(buf); break; }
-            /* Server messages (PING, ROLE_GRANT) — ignore payloads for now but
-             * a valid frame keeps the session alive. */
+            /* Decode and dispatch. KV_DATA / KV_NOT_FOUND wake any pending
+             * craw_hive_node_kv_get caller. PING / ROLE_GRANT etc. just
+             * keep the session alive for now. */
+            craw_hive_msg_t srv = {0};
+            if (craw_hive_proto_decode(buf, 4 + jlen,
+                                       s_ctx.cfg.secret, CRAW_HIVE_SECRET_BYTES,
+                                       now_epoch_sec(), &srv) == 0) {
+                if (srv.type == CRAW_HIVE_MSG_KV_DATA && s_kv_pending.pending) {
+                    cJSON *p = cJSON_Parse(srv.payload_json ? srv.payload_json : "{}");
+                    const cJSON *jv = cJSON_GetObjectItemCaseSensitive(p, "value");
+                    if (cJSON_IsString(jv) && s_kv_pending.response_buf) {
+                        strncpy(s_kv_pending.response_buf, jv->valuestring,
+                                s_kv_pending.response_max - 1);
+                        s_kv_pending.response_buf[s_kv_pending.response_max - 1] = '\0';
+                        s_kv_pending.status = 0;
+                    } else {
+                        s_kv_pending.status = -1;
+                    }
+                    cJSON_Delete(p);
+                    xSemaphoreGive(s_kv_pending.done);
+                } else if (srv.type == CRAW_HIVE_MSG_KV_NOT_FOUND && s_kv_pending.pending) {
+                    s_kv_pending.status = 1;
+                    xSemaphoreGive(s_kv_pending.done);
+                } else if (srv.type == CRAW_HIVE_MSG_ROLE_GRANT &&
+                           s_ctx.cfg.on_role_grant) {
+                    /* Hand the grant payload to the app. App MUST defer KV
+                     * fetch + bundle install to a separate task — calling
+                     * craw_hive_node_kv_get from inside this callback would
+                     * deadlock the receive loop. */
+                    cJSON *p = cJSON_Parse(srv.payload_json ? srv.payload_json : "{}");
+                    const cJSON *jr = cJSON_GetObjectItemCaseSensitive(p, "role");
+                    const cJSON *jb = cJSON_GetObjectItemCaseSensitive(p, "bundle");
+                    const cJSON *js = cJSON_GetObjectItemCaseSensitive(p, "scribe");
+                    const char *role   = cJSON_IsString(jr) ? jr->valuestring : NULL;
+                    const char *bundle = cJSON_IsString(jb) ? jb->valuestring : NULL;
+                    const char *scribe = cJSON_IsString(js) ? js->valuestring : NULL;
+                    if (role) {
+                        s_ctx.cfg.on_role_grant(role, bundle, scribe,
+                                                s_ctx.cfg.on_role_grant_ctx);
+                    }
+                    cJSON_Delete(p);
+                }
+                craw_hive_msg_free(&srv);
+            }
             free(buf);
         } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             break;
@@ -322,6 +385,7 @@ int craw_hive_node_start(const craw_hive_node_config_t *cfg) {
     s_ctx.running = true;
     s_ctx.state = CRAW_HIVE_NODE_OFFLINE;
     s_ctx.sock = -1;
+    kv_init_once();
     /* mdns_init() must have been called elsewhere (or we call it). */
     mdns_init();
     if (xTaskCreate(node_task, "craw_hive_node", 6144, NULL, 5, &s_ctx.task) != pdPASS) {
@@ -346,4 +410,61 @@ craw_hive_node_state_t craw_hive_node_state(void) {
 
 const char *craw_hive_node_session_id(void) {
     return s_ctx.session_id[0] ? s_ctx.session_id : NULL;
+}
+
+/* ---- KV public API ---- */
+
+int craw_hive_node_kv_get(const char *key,
+                          char *value_out, size_t value_max,
+                          int timeout_ms) {
+    if (!key || !value_out || value_max == 0) return -1;
+    if (s_ctx.state != CRAW_HIVE_NODE_JOINED || s_ctx.sock < 0) return -1;
+    if (!s_kv_mutex || !s_kv_pending.done) return -1;
+    if (xSemaphoreTake(s_kv_mutex, pdMS_TO_TICKS(2000)) != pdTRUE) return -1;
+
+    /* Drain any stale signal and arm pending slot. */
+    xSemaphoreTake(s_kv_pending.done, 0);
+    s_kv_pending.pending      = true;
+    s_kv_pending.status       = -2;  /* default = timeout */
+    s_kv_pending.response_buf = value_out;
+    s_kv_pending.response_max = value_max;
+    value_out[0] = '\0';
+
+    /* Build payload + send KV_GET. */
+    cJSON *p = cJSON_CreateObject();
+    cJSON_AddStringToObject(p, "key", key);
+    char *pj = cJSON_PrintUnformatted(p);
+    int rc = pj ? send_msg(s_ctx.sock, CRAW_HIVE_MSG_KV_GET, "*", pj) : -1;
+    free(pj);
+    cJSON_Delete(p);
+
+    if (rc != 0) {
+        s_kv_pending.pending = false;
+        xSemaphoreGive(s_kv_mutex);
+        return -1;
+    }
+
+    /* Wait for the recv loop to fire the binary semaphore on response. */
+    if (xSemaphoreTake(s_kv_pending.done, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        s_kv_pending.pending = false;
+        xSemaphoreGive(s_kv_mutex);
+        return -2;
+    }
+    int status = s_kv_pending.status;
+    s_kv_pending.pending = false;
+    xSemaphoreGive(s_kv_mutex);
+    return status;
+}
+
+int craw_hive_node_kv_put(const char *key, const char *value) {
+    if (!key || !value) return -1;
+    if (s_ctx.state != CRAW_HIVE_NODE_JOINED || s_ctx.sock < 0) return -1;
+    cJSON *p = cJSON_CreateObject();
+    cJSON_AddStringToObject(p, "key", key);
+    cJSON_AddStringToObject(p, "value", value);
+    char *pj = cJSON_PrintUnformatted(p);
+    int rc = pj ? send_msg(s_ctx.sock, CRAW_HIVE_MSG_KV_PUT, "*", pj) : -1;
+    free(pj);
+    cJSON_Delete(p);
+    return rc;
 }
