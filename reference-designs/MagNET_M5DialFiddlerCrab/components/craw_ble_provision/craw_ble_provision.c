@@ -11,6 +11,7 @@
 #include <inttypes.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_mac.h"
 #include "esp_chip_info.h"
 #include "esp_system.h"
@@ -311,11 +312,30 @@ void craw_ble_provision_init(const craw_ble_provision_config_t *cfg,
     s_cb_ctx = cb_ctx;
     s_status = CRAW_BLE_PROV_IDLE;
 
-    nimble_port_init();
+    /* Log the DRAM budget so future allocation failures here are obvious.
+     * BLE controller HCI buffers + NimBLE host need ~40 KB of internal RAM
+     * combined; getting under that produces a 'hci inits failed' error
+     * followed by a NULL-deref crash in ble_host_task. */
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "DRAM budget pre-NimBLE: free=%u largest=%u (need ~40 KB)",
+             (unsigned)free_internal, (unsigned)largest_block);
+
+    int rc = nimble_port_init();
+    if (rc != 0) {
+        /* Most common cause: insufficient internal RAM. Don't spawn the
+         * host task — running nimble_port_run() against an uninitialized
+         * event queue dereferences NULL. Caller can still proceed without
+         * BLE; only provisioning will be unavailable. */
+        ESP_LOGE(TAG, "nimble_port_init failed (rc=%d). BLE provisioning DISABLED. "
+                      "free_internal=%u largest=%u",
+                 rc, (unsigned)free_internal, (unsigned)largest_block);
+        return;
+    }
     ble_svc_gap_init();
     ble_svc_gatt_init();
 
-    int rc = ble_gatts_count_cfg(gatt_svcs);
+    rc = ble_gatts_count_cfg(gatt_svcs);
     assert(rc == 0);
     rc = ble_gatts_add_svcs(gatt_svcs);
     assert(rc == 0);

@@ -49,6 +49,8 @@
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
 
+#include "../../include/magnet_gen.h"
+
 static const char *TAG = "m5atom_hive";
 
 #define LED_GPIO        27
@@ -281,6 +283,7 @@ static void maybe_start_hive(void) {
         .caps           = s_caps,
         .chip           = "ESP32",
         .fw             = "0.1.0",
+        .gen            = MAGNET_GEN_STR,
         .secret         = (const uint8_t *)CRAW_HIVE_DEV_SECRET,
         .on_state       = on_hive_state,
         .on_state_ctx   = NULL,
@@ -376,6 +379,7 @@ void app_main(void) {
 
     uart_print("\r\n\r\n===================================\r\n");
     uart_printf(  "  M5Atom Matrix Hive Test v0.1.0\r\n");
+    uart_printf(  "  MagNET gen %s\r\n", MAGNET_GEN_STR);
     uart_printf(  "  ESPIDFORTH %s\r\n", ESPIDFORTH_VERSION_STRING);
     uart_print(   "  ESP32 / M5Atom Matrix (5x5 WS2812B)\r\n");
     uart_print(   "===================================\r\n");

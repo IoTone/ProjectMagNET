@@ -43,6 +43,7 @@
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
 #include "craw_camera.h"
+#include "../../include/magnet_gen.h"
 
 /* http_stream.c */
 int  cam_http_start(void);
@@ -236,6 +237,7 @@ static void maybe_start_hive(void) {
         .caps           = CAPS,
         .chip           = BOARD_SLUG,
         .fw             = "0.1.0",
+        .gen            = MAGNET_GEN_STR,
         .secret         = secret_copy,
         .on_state       = on_hive_state,
         .on_state_ctx   = NULL,

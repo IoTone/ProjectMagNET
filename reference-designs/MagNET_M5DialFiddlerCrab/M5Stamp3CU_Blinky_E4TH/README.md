@@ -39,6 +39,10 @@ In addition to all standard ESPIDFORTH words, this project adds:
 | `led-off` | ( -- ) | Turn off LED (stops pattern, same as `0 blinky`) |
 | `prov-status` | ( -- ) | Print BLE / WiFi provisioning state, current IP |
 | `prov-reset` | ( -- ) | Clear stored WiFi creds, restart BLE advertising |
+| `cpu-temp` | ( -- ) | Print ESP32-C3 die temperature (°C) |
+| `cpu-temp?` | ( -- centi-c ) | Push die temp in centi-Celsius (e.g. 4530 = 45.30 °C) |
+
+> The ESP32-C3 has only an on-chip die sensor — accuracy is ±5–10 °C absolute, stable for relative readings. For ambient temperature, swap in a DS18B20 / BME280 / SHT4x and add a Forth word with the same name.
 
 ### Examples
 

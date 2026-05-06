@@ -25,6 +25,7 @@
 #include "esp_random.h"
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
+#include "driver/temperature_sensor.h"
 #include "led_strip.h"
 #include "forth_core.h"
 #include "forth_version.h"
@@ -41,6 +42,11 @@
 
 static led_strip_handle_t led_strip = NULL;
 static volatile int btn_released = 0;
+
+/* ESP32-C3 internal die-temperature sensor. ±5–10 °C absolute, but stable
+ * for relative readings — fine as a "device load" indicator, not a
+ * thermostat. Drop in a DS18B20 / SHT4x for ambient. */
+static temperature_sensor_handle_t s_temp_sensor = NULL;
 static volatile int current_mode = 0;
 
 /* Phase 4A provisioning state surfaced to Forth / LED */
@@ -385,6 +391,49 @@ static void w_modes(void) {
     }
 }
 
+/* ---- ESP32-C3 internal temperature sensor ----
+ * Die temp, not ambient. ±5–10 °C absolute accuracy but stable for
+ * relative work. Useful as a "device load" indicator and as a placeholder
+ * data source until a real ambient sensor (DS18B20 / SHT4x) is wired up. */
+
+static void temp_sensor_init(void) {
+    temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    if (temperature_sensor_install(&cfg, &s_temp_sensor) != ESP_OK) {
+        usb_print("[temp] sensor install failed\r\n");
+        return;
+    }
+    if (temperature_sensor_enable(s_temp_sensor) != ESP_OK) {
+        usb_print("[temp] sensor enable failed\r\n");
+        s_temp_sensor = NULL;
+        return;
+    }
+}
+
+/* Returns die temp in centi-Celsius (e.g. 4530 = 45.30 °C).
+ * INT32_MIN on error so callers can distinguish "sensor unavailable"
+ * from a valid reading near 0 °C. */
+static int32_t read_centi_celsius(void) {
+    if (!s_temp_sensor) return INT32_MIN;
+    float c;
+    if (temperature_sensor_get_celsius(s_temp_sensor, &c) != ESP_OK) return INT32_MIN;
+    return (int32_t)(c * 100.0f + (c >= 0 ? 0.5f : -0.5f));
+}
+
+/* ( -- ) Print current die temperature to the REPL. */
+static void w_cpu_temp(void) {
+    int32_t cc = read_centi_celsius();
+    if (cc == INT32_MIN) { usb_print("\r\n[temp] sensor unavailable\r\n"); return; }
+    usb_printf("\r\nCPU temp: %ld.%02ld C\r\n",
+               (long)(cc / 100), (long)((cc < 0 ? -cc : cc) % 100));
+}
+
+/* ( -- centi-c ) Push die temp as centi-Celsius onto the Forth stack.
+ * Forth stack cells are intptr_t (no float in this build); centi-C gives
+ * 0.01 °C resolution and lets users compose: cpu-temp? 5000 > IF ." HOT" THEN. */
+static void w_cpu_temp_q(void) {
+    forth_push(read_centi_celsius());
+}
+
 static void register_blinky_words(void) {
     forth_register_word("blinky", w_blinky);
     forth_register_word("led-rgb", w_led_rgb);
@@ -393,6 +442,8 @@ static void register_blinky_words(void) {
     forth_register_word("modes", w_modes);
     forth_register_word("prov-status", w_prov_status);
     forth_register_word("prov-reset", w_prov_reset);
+    forth_register_word("cpu-temp",   w_cpu_temp);
+    forth_register_word("cpu-temp?",  w_cpu_temp_q);
 }
 
 /* ---- Main ---- */
@@ -411,7 +462,9 @@ void app_main(void) {
     /* Initialize hardware */
     led_init();
     btn_init();
+    temp_sensor_init();
     usb_print("LED on GPIO 2, Button on GPIO 9\r\n");
+    usb_print("CPU temperature sensor ready\r\n");
 
     /* NVS + WiFi + BLE provisioning (Phase 4A) */
     craw_nvs_init_flash();
@@ -452,6 +505,8 @@ void app_main(void) {
     usb_print("  led-off     -- turn off LED\r\n");
     usb_print("  mode?       -- show current mode\r\n");
     usb_print("  prov-status -- BLE/WiFi provisioning state\r\n");
+    usb_print("  cpu-temp    -- print CPU die temperature\r\n");
+    usb_print("  cpu-temp?   -- push die temp in centi-Celsius\r\n");
     usb_print("  prov-reset  -- clear WiFi creds, re-advertise\r\n\r\n");
 
     /* Run Forth REPL (blocks forever) */

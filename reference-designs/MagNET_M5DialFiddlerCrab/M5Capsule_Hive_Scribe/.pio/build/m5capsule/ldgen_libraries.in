@@ -90,4 +90,5 @@ $<TARGET_FILE:__idf_craw_ble_provision>
 $<TARGET_FILE:__idf_espressif__mdns>
 $<TARGET_FILE:__idf_craw_hive>
 $<TARGET_FILE:__idf_craw_role_bundle>
+$<TARGET_FILE:__idf_craw_mqtt>
 $<TARGET_FILE:__idf_src>

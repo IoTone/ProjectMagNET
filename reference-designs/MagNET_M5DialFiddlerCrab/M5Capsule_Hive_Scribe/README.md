@@ -73,6 +73,48 @@ Most are **interactive** — the REPL prompts for a key (max 15 chars, an NVS ha
 | `prov-reset` | ( -- ) | Clear WiFi creds + reboot |
 | `hive-status` | ( -- ) | Hive node state + session id |
 | `buzz` | ( hz dur_ms -- ) | Sound the buzzer |
+| `mqtt-broker` | ( -- ) | Prompt for + persist broker URI (mqtt://host:port) |
+| `mqtt-broker?` | ( -- ) | Print current broker + connection state |
+| `mqtt-pub` | ( -- ) | Prompt for topic + payload, publish once (debug) |
+| `bridge-add` | ( -- ) | Add a hive KV key to the bridge subscription list |
+| `bridge-remove` | ( -- ) | Remove a key from the list |
+| `bridge-list` | ( -- ) | Print subscribed keys + last-published value per key |
+| `N bridge-period` | ( n -- ) | Set poll period in seconds (1..255, default 5) |
+| `bridge-on` / `bridge-off` | ( -- ) | Start / stop the bridge task. State persists across reboots — auto-resumes after WiFi+MQTT come up. |
+| `bridge-status` | ( -- ) | Broker, conn state, period, key list, running/idle |
+
+## MQTT bridge
+
+The Capsule republishes selected hive KV values to an external MQTT broker. Default broker is `mqtt://broker.hivemq.com:1883` (public — **values are world-readable**; the boot log prints a warning). Override via `mqtt-broker` at the REPL; setting persists in NVS.
+
+Topic convention: hive KV key `temp:nik3` → MQTT topic `magnet/<hive>/temp/nik3` (colons replaced by slashes). v1 publishes QoS 0, no retain. The bridge dedups — a value is published only when it differs from the last seen, not every tick.
+
+Typical session:
+
+```
+ok> mqtt-broker
+broker uri (mqtt://host:port): mqtt://192.168.0.100:1883
+broker = mqtt://192.168.0.100:1883
+
+ok> bridge-add
+hive KV key to bridge: temp:nik3
+
+ok> 5 bridge-period
+period = 5 s
+
+ok> bridge-on
+[bridge] started
+
+ok> bridge-status
+broker:    mqtt://192.168.0.100:1883
+connected: yes
+running:   yes
+nvs on:    yes
+period:    5 s
+keys:      temp:nik3
+```
+
+The Dial's status bar gains a small purple dot when any scribe is actively bridging (`bridge:status` KV key is non-empty). Goes off when bridge stops or scribe disconnects.
 
 ### Sample session
 

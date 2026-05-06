@@ -878,6 +878,13 @@
 /Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_role_bundle/CMakeFiles/install/strip.dir
 /Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_role_bundle/CMakeFiles/install.dir
 /Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_role_bundle/CMakeFiles/list_install_components.dir
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_mqtt/CMakeFiles/install/local.dir
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_mqtt/CMakeFiles/install/strip.dir
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_mqtt/CMakeFiles/install.dir
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_mqtt/CMakeFiles/list_install_components.dir
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_mqtt/CMakeFiles/rebuild_cache.dir
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_mqtt/CMakeFiles/edit_cache.dir
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_mqtt/CMakeFiles/__idf_craw_mqtt.dir
 /Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/src/CMakeFiles/install/local.dir
 /Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/src/CMakeFiles/rebuild_cache.dir
 /Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/src/CMakeFiles/edit_cache.dir

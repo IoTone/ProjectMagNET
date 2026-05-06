@@ -29,6 +29,7 @@ extern "C" {
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
 #include "bundle_bootstrap.h"
+#include "../../include/magnet_gen.h"
 }
 #include <time.h>
 
@@ -569,6 +570,7 @@ static void maybe_start_ruler(void) {
     rcfg.port         = CRAW_HIVE_DEFAULT_PORT;
     rcfg.hive_id      = HIVE_ID;
     rcfg.ruler_id     = ruler_id;
+    rcfg.gen          = MAGNET_GEN_STR;
     rcfg.secret       = secret;
     rcfg.on_hello     = on_hive_hello;
     rcfg.on_hello_ctx = nullptr;
@@ -722,13 +724,30 @@ static void draw_hive_status_bar()
     // Hive dot (lit when ruler is running)
     uint16_t hive_col = ruler_started ? rgb(120, 255, 120) : rgb(40, 40, 40);
     display.fillCircle(cx + 10, y, dot_r, hive_col);
+    // MQTT-bridge dot (lit if any scribe published a non-empty bridge:status).
+    // Stays where the previous "M" might appear with no extra letter glyph —
+    // a tiny purple pip means a scribe is actively republishing to MQTT.
+    char bs[32] = {0};
+    bool bridge_active = (craw_hive_ruler_kv_get("bridge:status", bs, sizeof(bs)) == 0
+                          && bs[0] != '\0');
+    uint16_t bridge_col = bridge_active ? rgb(200, 90, 255) : rgb(40, 40, 40);
+    display.fillCircle(cx + 30, y, dot_r, bridge_col);
+
+    // Redis-server dot. Lit orange when a scribe published a non-empty
+    // redis:status — i.e. the RESP sidecar is up. Sits one step further
+    // out so the two server-status dots line up visibly.
+    char rs[80] = {0};
+    bool redis_active = (craw_hive_ruler_kv_get("redis:status", rs, sizeof(rs)) == 0
+                         && rs[0] != '\0');
+    uint16_t redis_col = redis_active ? rgb(255, 140, 0) : rgb(40, 40, 40);
+    display.fillCircle(cx + 42, y, dot_r, redis_col);
     // Peer count
     display.setTextDatum(lgfx::textdatum_t::middle_left);
     display.setTextColor(t.text, t.bg);
     display.setTextSize(1);
     char buf[12];
     snprintf(buf, sizeof(buf), "%d", peer_count);
-    display.drawString(buf, cx + 20, y);
+    display.drawString(buf, cx + 42, y);
 }
 
 static void draw_center_label()
@@ -1288,16 +1307,32 @@ static void w_grant_role(void) {
     else               usb_printf("send failed rc=%d\r\n", rc);
 }
 
+// ( on -- ) Toggle the lineage puzzle gate at runtime. on != 0 → ON.
+// Affects only NEW joins; in-flight peers stay connected.
+static void w_lineage_auth(void) {
+    int on = (int)forth_pop();
+    craw_hive_ruler_set_lineage_auth(on != 0);
+    usb_printf("\r\nlineage-auth: %s\r\n", on ? "ON" : "off");
+}
+
 // ( -- ) Print the peer table to USB serial.
 static void w_ruler_status(void) {
     usb_printf("\r\nruler:   %s\r\n", ruler_started ? ruler_id : "(not started)");
     usb_printf("hive:    %s\r\n", HIVE_ID);
+    usb_printf("gen:     %s\r\n", MAGNET_GEN_STR);
+    usb_printf("gate:    lineage-auth=%s\r\n",
+               craw_hive_ruler_get_lineage_auth() ? "ON" : "off");
     usb_printf("peers:   %d\r\n", peer_count);
+    char peer_gen[24];
     for (int i = 0; i < MAX_PEERS; i++) {
         if (!peers[i].in_use) continue;
         int64_t ago_s = (esp_timer_get_time() / 1000 - peers[i].joined_ms) / 1000;
-        usb_printf("  [%d] %-32s %-12s %llds ago\r\n",
-                   i, peers[i].node_id, peers[i].role, (long long)ago_s);
+        peer_gen[0] = '\0';
+        craw_hive_ruler_peer_gen(peers[i].node_id, peer_gen, sizeof(peer_gen));
+        usb_printf("  [%d] %-32s %-10s %-14s %llds ago\r\n",
+                   i, peers[i].node_id, peers[i].role,
+                   peer_gen[0] ? peer_gen : "(no-gen)",
+                   (long long)ago_s);
     }
 }
 
@@ -1321,6 +1356,7 @@ static void register_forth_words(void) {
     forth_register_word("kv-get",       w_kv_get);
     forth_register_word("kv-list",      w_kv_list);
     forth_register_word("grant-role",   w_grant_role);
+    forth_register_word("lineage-auth", w_lineage_auth);
 }
 
 // ---------------------------------------------------------------------------
@@ -1367,13 +1403,17 @@ extern "C" void app_main(void)
     int mapped = (brightness_pct * 255) / Config::BrightMax;
     display.setBrightness(mapped);
 
-    // Set speaker volume and play boot tone
+    // Set speaker volume. Boot chirp is deferred to REPL-ready (below) —
+    // a non-blocking tone here would run for the full duration of WiFi/BLE
+    // init because speaker_update() only runs from the main loop.
     speaker_volume = Config::SpeakerVolume;
-    if (!mute)
-        speaker_tone_nb(2000, 200);
 
     // Init Forth engine + register custom words
-    forth_init(64 * 1024);
+    /* 48 KB Forth heap (was 64 KB). Reduced 2026-05-05 — the 16 KB recovered
+     * from internal SRAM lets the BLE controller HCI transport allocate its
+     * ~40 KB of buffers reliably. Symptom of the prior budget: 'hci inits
+     * failed' → NULL-deref crash in ble_host_task at boot. */
+    forth_init(48 * 1024);
     register_forth_words();
     usb_print("Forth engine initialized.\r\n");
     usb_printf("Free heap: %lu bytes\r\n\r\n",
@@ -1420,7 +1460,15 @@ extern "C" void app_main(void)
     usb_print("  appdevinfo   -- display chip / CPU info\r\n");
     usb_print("  prov-status  -- BLE / WiFi / IP / ruler state\r\n");
     usb_print("  prov-reset   -- clear WiFi, reboot into BLE provisioning\r\n");
-    usb_print("  ruler-status -- list connected hive peers\r\n\r\n");
+    usb_print("  ruler-status -- list connected hive peers\r\n");
+    usb_print("  N lineage-auth  -- toggle lineage puzzle gate (1=on, 0=off)\r\n\r\n");
+
+    // Ready chirp — short ascending two-note. Blocking so it can't run away
+    // if speaker_update() gets starved later. Heard once boot is fully done.
+    if (!mute) {
+        speaker_tone_blocking(1500, 60);
+        speaker_tone_blocking(2200, 60);
+    }
 
     // Start Forth REPL in background task
     xTaskCreate(forth_repl_task, "forth_repl", 8192, NULL, 3, NULL);

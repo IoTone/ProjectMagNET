@@ -88,3 +88,5 @@
 /Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_ble_provision/libcraw_ble_provision.a
 /Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/espressif__mdns/libespressif__mdns.a
 /Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_hive/libcraw_hive.a
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_role_bundle/libcraw_role_bundle.a
+/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe/.pio/build/m5capsule/esp-idf/craw_mqtt/libcraw_mqtt.a

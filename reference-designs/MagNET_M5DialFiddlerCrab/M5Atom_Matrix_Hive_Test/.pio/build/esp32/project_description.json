@@ -1,7 +1,7 @@
 {
     "version":            "1.1",
     "project_name":       "m5atom_matrix_hive_test",
-    "project_version":    "8ab2a8d-dirty",
+    "project_version":    "45ad144-dirty",
     "project_path":       "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test",
     "idf_path":           "/Users/dkords/.platformio/packages/framework-espidf",
     "build_dir":          "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32",
@@ -175,7 +175,7 @@
             "managed_reqs": [],
             "managed_priv_reqs": [],
             "file": "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/esp-idf/craw_hive/libcraw_hive.a",
-            "sources": [ "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/components/craw_hive/craw_hive_proto.c", "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/components/craw_hive/craw_hive_node.c", "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/components/craw_hive/craw_hive_ruler.c" ],
+            "sources": [ "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/components/craw_hive/craw_hive_proto.c", "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/components/craw_hive/craw_hive_node.c", "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/components/craw_hive/craw_hive_ruler.c", "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/components/craw_hive/magnet_lineages.c" ],
             "include_dirs": [ "." ]
         },
         "craw_nvs": {

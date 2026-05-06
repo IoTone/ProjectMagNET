@@ -56,6 +56,8 @@
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
 #include "craw_role_bundle.h"
+#include "craw_mqtt.h"
+#include "../../include/magnet_gen.h"
 
 static const char *TAG = "scribe";
 
@@ -185,6 +187,166 @@ static int scribe_iter(scribe_iter_cb_t cb, void *ctx) {
     }
     if (it) nvs_release_iterator(it);
     return count;
+}
+
+/* ---------- MQTT bridge (Phase 4 — hive ⇄ MQTT) ----------
+ * Polling design: every BRIDGE_PERIOD_S seconds, walk a list of hive KV
+ * keys and republish any new value to "magnet/<hive>/<key-with-:-as-/>".
+ *
+ * NVS namespace "scribe_mqtt":
+ *   broker     str   default mqtt://broker.hivemq.com:1883 (PUBLIC; warned)
+ *   bridge_on  u8    0|1   (default 0; opt-in, but auto-resumes if previously on)
+ *   period_s   u8    1..255 (default 5)
+ *   keys       str   comma-separated hive KV keys to bridge
+ */
+
+#define MQTT_NS                  "scribe_mqtt"
+#define MQTT_KEY_BROKER          "broker"
+#define MQTT_KEY_BRIDGE_ON       "bridge_on"
+#define MQTT_KEY_PERIOD          "period_s"
+#define MQTT_KEY_KEYS            "keys"
+#define MQTT_DEFAULT_BROKER      "mqtt://broker.hivemq.com:1883"
+#define MQTT_BRIDGE_KEYS_MAX     256
+#define MQTT_BRIDGE_TOPIC_MAX    96
+#define MQTT_BRIDGE_HIVE         "beehive-1"  /* matches hive_id used in maybe_start_hive */
+
+static char     s_mqtt_broker[128] = MQTT_DEFAULT_BROKER;
+static char     s_bridge_keys[MQTT_BRIDGE_KEYS_MAX + 1] = "";
+static uint8_t  s_bridge_period_s = 5;
+static bool     s_bridge_on       = false;
+static bool     s_bridge_running  = false;
+static TaskHandle_t s_bridge_task = NULL;
+/* Per-key dedup: store last published value so we skip unchanged ticks. */
+typedef struct { char key[CRAW_HIVE_KV_KEY_MAX + 1];
+                 char last[CRAW_HIVE_KV_VALUE_MAX + 1]; } bridge_dedup_t;
+#define MQTT_BRIDGE_MAX_KEYS 8
+static bridge_dedup_t s_dedup[MQTT_BRIDGE_MAX_KEYS];
+static int s_dedup_count = 0;
+
+static void mqtt_nvs_load(void) {
+    nvs_handle_t h;
+    if (nvs_open(MQTT_NS, NVS_READONLY, &h) != ESP_OK) return;
+    size_t sz = sizeof(s_mqtt_broker);
+    nvs_get_str(h, MQTT_KEY_BROKER, s_mqtt_broker, &sz);
+    sz = sizeof(s_bridge_keys);
+    nvs_get_str(h, MQTT_KEY_KEYS, s_bridge_keys, &sz);
+    nvs_get_u8(h, MQTT_KEY_PERIOD, &s_bridge_period_s);
+    if (s_bridge_period_s == 0) s_bridge_period_s = 5;
+    uint8_t on = 0;
+    if (nvs_get_u8(h, MQTT_KEY_BRIDGE_ON, &on) == ESP_OK) s_bridge_on = on != 0;
+    nvs_close(h);
+}
+
+static void mqtt_nvs_save_str(const char *key, const char *value) {
+    nvs_handle_t h;
+    if (nvs_open(MQTT_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, key, value);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void mqtt_nvs_save_u8(const char *key, uint8_t v) {
+    nvs_handle_t h;
+    if (nvs_open(MQTT_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, key, v);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+/* Convert hive KV key "temp:nik3" → MQTT topic "magnet/beehive-1/temp/nik3". */
+static void key_to_topic(const char *key, char *out, size_t out_len) {
+    snprintf(out, out_len, "magnet/%s/%s", MQTT_BRIDGE_HIVE, key);
+    for (char *p = out; *p; p++) if (*p == ':') *p = '/';
+}
+
+/* Publish a hive heartbeat so the Dial can render an "M" indicator.
+ * Caller passes the node_id to avoid a forward-reference to the Hive
+ * bringup section's static. */
+static char *s_bridge_self_id = NULL;  /* set by bridge_start once joined */
+static void bridge_publish_heartbeat(bool on) {
+    craw_hive_node_kv_put("bridge:status",
+                          on && s_bridge_self_id ? s_bridge_self_id : "");
+}
+
+static bridge_dedup_t *dedup_for(const char *key) {
+    for (int i = 0; i < s_dedup_count; i++)
+        if (strcmp(s_dedup[i].key, key) == 0) return &s_dedup[i];
+    if (s_dedup_count >= MQTT_BRIDGE_MAX_KEYS) return NULL;
+    bridge_dedup_t *d = &s_dedup[s_dedup_count++];
+    strncpy(d->key, key, sizeof(d->key) - 1);
+    d->last[0] = '\0';
+    return d;
+}
+
+/* Iterate s_bridge_keys (comma-separated). For each key, KV_GET, publish
+ * if the value changed. Called once per bridge tick. */
+static int bridge_tick(void) {
+    if (!craw_hive_node_session_id()) return -1;  /* not joined yet */
+    if (!craw_mqtt_is_connected())    return -2;
+    int published = 0;
+    char tmp[MQTT_BRIDGE_KEYS_MAX + 1];
+    strncpy(tmp, s_bridge_keys, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    char *save = NULL;
+    char *tok = strtok_r(tmp, ",", &save);
+    while (tok) {
+        /* trim leading spaces */
+        while (*tok == ' ' || *tok == '\t') tok++;
+        if (*tok) {
+            char val[CRAW_HIVE_KV_VALUE_MAX + 1];
+            int rc = craw_hive_node_kv_get(tok, val, sizeof(val), 2000);
+            if (rc == 0) {
+                bridge_dedup_t *d = dedup_for(tok);
+                if (d && strcmp(d->last, val) != 0) {
+                    char topic[MQTT_BRIDGE_TOPIC_MAX];
+                    key_to_topic(tok, topic, sizeof(topic));
+                    if (craw_mqtt_publish(topic, val, 0, false) >= 0) {
+                        strncpy(d->last, val, sizeof(d->last) - 1);
+                        d->last[sizeof(d->last) - 1] = '\0';
+                        published++;
+                    }
+                }
+            }
+        }
+        tok = strtok_r(NULL, ",", &save);
+    }
+    return published;
+}
+
+static void bridge_task(void *arg) {
+    (void)arg;
+    s_bridge_running = true;
+    bridge_publish_heartbeat(true);
+    /* Initial publish-everything pass: clear dedup so first tick fires. */
+    s_dedup_count = 0;
+    while (s_bridge_on) {
+        int p = bridge_tick();
+        if (p > 0) uprintf("[bridge] published %d key(s)\r\n", p);
+        for (int i = 0; i < s_bridge_period_s * 10 && s_bridge_on; i++) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+    bridge_publish_heartbeat(false);
+    s_bridge_running = false;
+    s_bridge_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void bridge_start(void) {
+    if (s_bridge_running) return;
+    if (!craw_mqtt_is_connected()) {
+        uprint("[bridge] MQTT not connected yet, will start when ready\r\n");
+    }
+    s_bridge_on = true;
+    mqtt_nvs_save_u8(MQTT_KEY_BRIDGE_ON, 1);
+    xTaskCreate(bridge_task, "bridge", 6144, NULL, 4, &s_bridge_task);
+    uprint("[bridge] started\r\n");
+}
+
+static void bridge_stop(void) {
+    s_bridge_on = false;
+    mqtt_nvs_save_u8(MQTT_KEY_BRIDGE_ON, 0);
+    /* bridge_task will exit on next loop iteration */
 }
 
 /* ---------- Hive bringup (mirror Echo pattern) ---------- */
@@ -372,6 +534,7 @@ static void maybe_start_hive(void) {
         .caps             = CAPS,
         .chip             = "ESP32-S3",
         .fw               = "0.1.0",
+        .gen              = MAGNET_GEN_STR,
         .secret           = secret_copy,
         .on_state         = on_hive_state,
         .on_state_ctx     = NULL,
@@ -380,7 +543,35 @@ static void maybe_start_hive(void) {
     };
     if (craw_hive_node_start(&ncfg) == 0) {
         hive_started = true;
+        s_bridge_self_id = node_id;
         uprint("[HIVE] node started as role=scribe caps=scribe,kv-store\r\n");
+    }
+}
+
+/* Initialize MQTT once WiFi is up. Called from housekeeping_task. Does
+ * not connect synchronously — esp-mqtt connects in a background task and
+ * fires our conn callback when it's ready. */
+static bool s_mqtt_started = false;
+static void maybe_start_mqtt(void) {
+    if (s_mqtt_started) return;
+    if (!craw_wifi_is_connected()) return;
+    /* Insecure-default warning. Public broker → values published are
+     * world-readable. Document mqtt-broker REPL command in serial banner. */
+    if (strcmp(s_mqtt_broker, MQTT_DEFAULT_BROKER) == 0) {
+        uprint("\r\n[mqtt] WARNING: using public default broker "
+               MQTT_DEFAULT_BROKER ".\r\n"
+               "[mqtt] Bridge values are WORLD-READABLE. Override with "
+               "mqtt-broker at the REPL.\r\n");
+    }
+    /* publisher-only mode: pass NULL base_topic */
+    craw_mqtt_init(s_mqtt_broker, NULL, NULL, NULL, NULL);
+    craw_mqtt_start();
+    s_mqtt_started = true;
+    uprintf("[mqtt] started against %s\r\n", s_mqtt_broker);
+    /* Auto-resume bridge if it was on at last shutdown. Wait until MQTT
+     * is connected (handled inside bridge_task — it'll just no-op until). */
+    if (s_bridge_on && !s_bridge_running && hive_started) {
+        bridge_start();
     }
 }
 
@@ -409,6 +600,12 @@ static void housekeeping_task(void *arg) {
             }
         }
         maybe_start_hive();
+        maybe_start_mqtt();
+        /* Auto-resume bridge if NVS says on, but only after both hive
+         * and MQTT are ready. */
+        if (s_bridge_on && hive_started && s_mqtt_started && !s_bridge_running) {
+            bridge_start();
+        }
         vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
@@ -591,6 +788,98 @@ static void w_bundle_list(void) {
 }
 
 /* ( -- ) Wipe all persisted bundles. */
+/* ---- MQTT bridge Forth words ---- */
+static char s_mqtt_io_a[128];
+static char s_mqtt_io_b[CRAW_HIVE_KV_VALUE_MAX + 1];
+
+static void w_mqtt_broker_set(void) {
+    read_line("\r\nbroker uri (mqtt://host:port): ", s_mqtt_io_a, sizeof(s_mqtt_io_a));
+    if (!s_mqtt_io_a[0]) { uprint("(unchanged)\r\n"); return; }
+    strncpy(s_mqtt_broker, s_mqtt_io_a, sizeof(s_mqtt_broker) - 1);
+    s_mqtt_broker[sizeof(s_mqtt_broker) - 1] = '\0';
+    mqtt_nvs_save_str(MQTT_KEY_BROKER, s_mqtt_broker);
+    if (s_mqtt_started) craw_mqtt_set_broker(s_mqtt_broker);
+    uprintf("broker = %s\r\n", s_mqtt_broker);
+}
+
+static void w_mqtt_broker_get(void) {
+    uprintf("\r\nbroker: %s\r\n", s_mqtt_broker);
+    uprintf("connected: %s\r\n", craw_mqtt_is_connected() ? "yes" : "no");
+}
+
+static void w_mqtt_pub(void) {
+    read_line("\r\ntopic:   ", s_mqtt_io_a, sizeof(s_mqtt_io_a));
+    read_line("payload: ",     s_mqtt_io_b, sizeof(s_mqtt_io_b));
+    int rc = craw_mqtt_publish(s_mqtt_io_a, s_mqtt_io_b, 0, false);
+    uprintf("\r\nmqtt-pub rc=%d\r\n", rc);
+}
+
+static void w_bridge_add(void) {
+    read_line("\r\nhive KV key to bridge: ", s_mqtt_io_a, sizeof(s_mqtt_io_a));
+    if (!s_mqtt_io_a[0]) return;
+    if (s_bridge_keys[0]) {
+        size_t cur = strlen(s_bridge_keys);
+        if (cur + strlen(s_mqtt_io_a) + 2 >= sizeof(s_bridge_keys)) {
+            uprint("subscription list full\r\n"); return;
+        }
+        strncat(s_bridge_keys, ",", sizeof(s_bridge_keys) - cur - 1);
+    }
+    strncat(s_bridge_keys, s_mqtt_io_a, sizeof(s_bridge_keys) - strlen(s_bridge_keys) - 1);
+    mqtt_nvs_save_str(MQTT_KEY_KEYS, s_bridge_keys);
+    uprintf("bridging: %s\r\n", s_bridge_keys);
+}
+
+static void w_bridge_remove(void) {
+    read_line("\r\nkey to remove: ", s_mqtt_io_a, sizeof(s_mqtt_io_a));
+    if (!s_mqtt_io_a[0]) return;
+    char tmp[MQTT_BRIDGE_KEYS_MAX + 1] = "";
+    char in[MQTT_BRIDGE_KEYS_MAX + 1];
+    strncpy(in, s_bridge_keys, sizeof(in) - 1);
+    in[sizeof(in) - 1] = '\0';
+    char *save = NULL;
+    char *tok = strtok_r(in, ",", &save);
+    while (tok) {
+        while (*tok == ' ') tok++;
+        if (strcmp(tok, s_mqtt_io_a) != 0) {
+            if (tmp[0]) strncat(tmp, ",", sizeof(tmp) - strlen(tmp) - 1);
+            strncat(tmp, tok, sizeof(tmp) - strlen(tmp) - 1);
+        }
+        tok = strtok_r(NULL, ",", &save);
+    }
+    strncpy(s_bridge_keys, tmp, sizeof(s_bridge_keys) - 1);
+    s_bridge_keys[sizeof(s_bridge_keys) - 1] = '\0';
+    mqtt_nvs_save_str(MQTT_KEY_KEYS, s_bridge_keys);
+    uprintf("bridging: %s\r\n", s_bridge_keys[0] ? s_bridge_keys : "(empty)");
+}
+
+static void w_bridge_list(void) {
+    uprintf("\r\nbridging: %s\r\n", s_bridge_keys[0] ? s_bridge_keys : "(empty)");
+    uprintf("period:   %u s\r\n", (unsigned)s_bridge_period_s);
+    for (int i = 0; i < s_dedup_count; i++) {
+        uprintf("  %-20s last='%s'\r\n", s_dedup[i].key, s_dedup[i].last);
+    }
+}
+
+static void w_bridge_period(void) {
+    int n = (int)forth_pop();
+    if (n < 1 || n > 255) { uprintf("\r\nperiod out of range (1..255)\r\n"); return; }
+    s_bridge_period_s = (uint8_t)n;
+    mqtt_nvs_save_u8(MQTT_KEY_PERIOD, s_bridge_period_s);
+    uprintf("\r\nperiod = %d s\r\n", n);
+}
+
+static void w_bridge_on(void)  { bridge_start(); }
+static void w_bridge_off(void) { bridge_stop();  uprint("[bridge] stopping\r\n"); }
+
+static void w_bridge_status(void) {
+    uprintf("\r\nbroker:    %s\r\n", s_mqtt_broker);
+    uprintf("connected: %s\r\n", craw_mqtt_is_connected() ? "yes" : "no");
+    uprintf("running:   %s\r\n", s_bridge_running ? "yes" : "no");
+    uprintf("nvs on:    %s\r\n", s_bridge_on ? "yes" : "no");
+    uprintf("period:    %u s\r\n", (unsigned)s_bridge_period_s);
+    uprintf("keys:      %s\r\n", s_bridge_keys[0] ? s_bridge_keys : "(empty)");
+}
+
 static void w_bundle_forget_all(void) {
     int rc = craw_role_bundle_forget_all();
     uprintf("\r\nbundle-forget-all rc=%d\r\n", rc);
@@ -611,6 +900,16 @@ static void register_forth_words(void) {
     forth_register_word("bundle-install", w_bundle_install);
     forth_register_word("bundle-list",   w_bundle_list);
     forth_register_word("bundle-forget-all", w_bundle_forget_all);
+    forth_register_word("mqtt-broker",       w_mqtt_broker_set);
+    forth_register_word("mqtt-broker?",      w_mqtt_broker_get);
+    forth_register_word("mqtt-pub",          w_mqtt_pub);
+    forth_register_word("bridge-add",        w_bridge_add);
+    forth_register_word("bridge-remove",     w_bridge_remove);
+    forth_register_word("bridge-list",       w_bridge_list);
+    forth_register_word("bridge-period",     w_bridge_period);
+    forth_register_word("bridge-on",         w_bridge_on);
+    forth_register_word("bridge-off",        w_bridge_off);
+    forth_register_word("bridge-status",     w_bridge_status);
 }
 
 /* ---------- app_main ---------- */
@@ -630,6 +929,7 @@ void app_main(void) {
 
     craw_nvs_init_flash();
     craw_nvs_migrate_wifi_profiles();
+    mqtt_nvs_load();    /* pick up persisted broker / bridge_on / period / keys */
     craw_wifi_init("MagNET-biologic", on_wifi_event, NULL);
 
     craw_ble_provision_config_t pcfg = {

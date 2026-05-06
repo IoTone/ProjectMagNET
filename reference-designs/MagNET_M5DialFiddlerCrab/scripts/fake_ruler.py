@@ -49,6 +49,34 @@ PROTO_VERSION    = 1
 HEARTBEAT_SEC    = 30
 TS_SKEW_SEC      = 30
 MAX_FRAME        = 4096
+# Must track include/magnet_gen.h. Bump when the firmware tree bumps. The
+# fake ruler is a development surrogate, so it identifies as the same gen
+# the codebase is currently shipping.
+DEFAULT_RULER_GEN = "0.5.0-spore"
+
+# Mirrors components/craw_hive/magnet_lineages.c. Keep in lockstep when the
+# C table changes — Python is the test surrogate, not the source of truth.
+LINEAGE_KEYS = {
+    "spore": bytes([
+        0x00, 0x60, 0x1D, 0xA9, 0xCC, 0x21, 0xB7, 0x23,
+        0x3E, 0xFD, 0x11, 0x6E, 0x41, 0xEC, 0xC9, 0x55,
+        0x78, 0xDC, 0x5A, 0x59, 0xBE, 0x3F, 0xD4, 0xC3,
+        0x4F, 0x9A, 0x40, 0xE7, 0x88, 0xA2, 0x9E, 0x5E,
+    ]),
+}
+
+
+def lineage_from_gen(gen_str: str) -> str | None:
+    if not gen_str or "-" not in gen_str:
+        return None
+    return gen_str.rsplit("-", 1)[1]
+
+
+def compute_lineage_response(key: bytes, puzzle: str, node_id: str, ts: int) -> str:
+    """Mirrors magnet_lineage_compute_response in C: HMAC-SHA256 over
+    `puzzle|node_id|ts_decimal`."""
+    msg = f"{puzzle}|{node_id}|{ts}".encode("utf-8")
+    return hmac.new(key, msg, hashlib.sha256).hexdigest()
 
 # Set from --log-hmac. When true, print the exact HMAC-signed string for
 # every send and every receive so canonical-JSON drift between C and Python
@@ -142,10 +170,16 @@ def verify(key: bytes, raw: bytes) -> tuple[dict | None, str | None]:
 
 
 class Ruler:
-    def __init__(self, hive: str, secret: bytes, ruler_id: str):
+    def __init__(self, hive: str, secret: bytes, ruler_id: str,
+                 gen: str = DEFAULT_RULER_GEN,
+                 require_lineage_auth: bool = False,
+                 require_gen: bool = False):
         self.hive = hive
         self.secret = secret
         self.ruler_id = ruler_id
+        self.gen = gen
+        self.require_lineage_auth = require_lineage_auth
+        self.require_gen = require_gen
         # Milestone C step 1 — in-memory KV table shared across all peer
         # connections. Mirrors the C ruler's behavior; lock-free since the
         # GIL serializes Python thread access for our small ops.
@@ -200,20 +234,69 @@ class Ruler:
             caps    = payload.get("caps", [])
             chip    = payload.get("chip", "?")
             fw      = payload.get("fw", "?")
+            gen     = payload.get("gen", "?")
 
             if hive != self.hive:
                 log(f"  REJECT (hive_mismatch: got '{hive}', want '{self.hive}') from {node_id}")
                 self.reject(sock, node_id, "hive_mismatch")
                 return
 
-            log(f"  HELLO {node_id} chip={chip} fw={fw} role={role} caps={caps}")
+            log(f"  HELLO {node_id} chip={chip} fw={fw} gen={gen} role={role} caps={caps}")
+
+            # Layer 2 — issue CHALLENGE if configured. Only acts when the
+            # joiner sent a `gen` we recognise.
+            if self.require_lineage_auth:
+                if gen == "?":
+                    if self.require_gen:
+                        log(f"  REJECT (gen_too_old) from {node_id}")
+                        self.reject(sock, node_id, "gen_too_old")
+                        return
+                    log(f"  lineage gate: {node_id} sent no gen, skipping challenge")
+                else:
+                    lineage = lineage_from_gen(gen)
+                    key = LINEAGE_KEYS.get(lineage) if lineage else None
+                    if key is None:
+                        log(f"  REJECT (lineage_unknown lineage='{lineage}') from {node_id}")
+                        self.reject(sock, node_id, "lineage_unknown")
+                        return
+                    puzzle  = secrets.token_hex(16)
+                    chal_ts = int(time.time())
+                    expected = compute_lineage_response(key, puzzle, node_id, chal_ts)
+                    self.send(sock, "CHALLENGE", node_id, {
+                        "lineage":    lineage,
+                        "puzzle":     puzzle,
+                        "chal_ts":    chal_ts,
+                        "expires_in": 10,
+                    })
+                    log(f"  ← CHALLENGE {node_id} lineage={lineage}")
+
+                    sock.settimeout(10.0)
+                    raw = recv_frame(sock)
+                    sock.settimeout(None)
+                    if not raw:
+                        log(f"  no RESPONSE from {node_id} (timeout/disconnect)")
+                        return
+                    rsp_env, rsp_err = verify(self.secret, raw)
+                    if rsp_err or not rsp_env or rsp_env.get("type") != "RESPONSE":
+                        rtype = rsp_env.get("type") if rsp_env else "?"
+                        log(f"  bad RESPONSE from {node_id} err={rsp_err} type={rtype}")
+                        self.reject(sock, node_id, "lineage_auth")
+                        return
+                    answer = rsp_env["payload"].get("answer", "")
+                    if not hmac.compare_digest(answer, expected):
+                        log(f"  REJECT (lineage_auth) from {node_id}")
+                        self.reject(sock, node_id, "lineage_auth")
+                        return
+                    log(f"  lineage auth OK {node_id} lineage={lineage}")
+
             session_id = str(uuid.uuid4())
             self.send(sock, "WELCOME", node_id, {
                 "session_id": session_id,
                 "role":       role,
                 "heartbeat":  HEARTBEAT_SEC,
+                "gen":        self.gen,
             })
-            log(f"  ← WELCOME {node_id} session={session_id[:8]} role={role}")
+            log(f"  ← WELCOME {node_id} session={session_id[:8]} role={role} gen={self.gen}")
 
             # Stay connected: echo PING, log role changes + unknown types.
             while True:
@@ -279,6 +362,12 @@ def main() -> int:
     ap.add_argument("--port",       type=int, default=DEFAULT_PORT, help="TCP port")
     ap.add_argument("--secret-hex", default=DEFAULT_SECRET_HEX, help="32-byte shared secret in hex")
     ap.add_argument("--bind",       default="0.0.0.0",          help="TCP bind address")
+    ap.add_argument("--gen",        default=DEFAULT_RULER_GEN,
+                    help=f"ruler generation tag echoed in WELCOME (default: {DEFAULT_RULER_GEN})")
+    ap.add_argument("--require-lineage-auth", action="store_true",
+                    help="enforce Layer-2 CHALLENGE/RESPONSE gate before WELCOME")
+    ap.add_argument("--require-gen", action="store_true",
+                    help="REJECT any HELLO that omits the gen field (implies stricter than --require-lineage-auth alone)")
     ap.add_argument("--log-hmac",   action="store_true",
                     help="print the HMAC-signed string for every frame (sent + received); "
                          "on mismatch, the signed string + expected/got are always printed")
@@ -315,7 +404,9 @@ def main() -> int:
     zc.register_service(info)
 
     log(f"listening on {local_ip}:{args.port} (bind {args.bind})")
-    log(f"hive = {args.hive}  ruler_id = {ruler_id}")
+    log(f"hive = {args.hive}  ruler_id = {ruler_id}  gen = {args.gen}")
+    log(f"lineage gate: {'ON' if args.require_lineage_auth else 'off'}"
+        f"  require_gen: {'ON' if args.require_gen else 'off'}")
     log(f"mDNS service = {service_name}  TXT ver={PROTO_VERSION} hive={args.hive}")
 
     # TCP accept loop
@@ -324,7 +415,10 @@ def main() -> int:
     srv.bind((args.bind, args.port))
     srv.listen(8)
 
-    ruler = Ruler(args.hive, secret, ruler_id)
+    ruler = Ruler(args.hive, secret, ruler_id,
+                  gen=args.gen,
+                  require_lineage_auth=args.require_lineage_auth,
+                  require_gen=args.require_gen)
 
     try:
         while True:

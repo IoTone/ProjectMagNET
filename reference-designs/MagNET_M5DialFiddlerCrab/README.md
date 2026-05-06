@@ -94,7 +94,9 @@ The existing project that exists in this repository, in the subfolder M5StackDia
 
 ### Phase 4: Hive intelligence
 
-Hive protocol spec: [`docs/MagNET-HiveProtocol-v1.md`](docs/MagNET-HiveProtocol-v1.md).
+Hive protocol spec: [`docs/MagNET-HiveProtocol-v1.md`](docs/MagNET-HiveProtocol-v1.md). Firmware generations and the planned lineage gate: [`docs/MagNET-Generations.md`](docs/MagNET-Generations.md). Current generation: **`0.5.0-spore`** (single source of truth in [`include/magnet_gen.h`](include/magnet_gen.h)).
+
+Bench bring-up + verification walkthrough: [`test-plan.md`](test-plan.md) (kept in sync with each major rev — bump it when you ship gen-impacting features).
 
 #### Milestone A — BLE WiFi provisioning (R3, R4)
 
@@ -112,6 +114,7 @@ Reusable `components/craw_hive/` — both sides of the protocol in one component
 - **Spawn**: `M5Atom_Echo_Hex_Hive_Test/` (classic ESP32) — 37-LED Unit Hex status panel, I2S NS4168 chirps on state transitions.
 - **Spy** (Role 7 — camera): `M5_Hive_Camera/` (works on both AI-Thinker ESP32-CAM and M5Stack Unit CamS3) — preserves stock CameraWebServer HTTP behavior (`/stream`, `/capture`, `/control`) on top of the hive bringup.
 - **Scribe** (Role 4): `M5Capsule_Hive_Scribe/` (ESP32-S3) — battery-powered persistent KV store using a 64 KB NVS partition. Foundation for hive-shared memory in Milestone C.
+- **Scribe + Redis** (Role 4 variant): `M5Capsule_Hive_Scribe_Redis/` (ESP32-S3) — same scribe plus a RESP2-compatible TCP server (default port 6379) so any standard Redis client can read/write the same NVS-backed store. Strings + lists, configuration profiles, on-device `redis-do` client, off-by-default. Dial shows an orange dot when the sidecar is up.
 - **Dev harness**: `scripts/fake_ruler.py` — laptop script that speaks the protocol, useful for isolating node-side bugs when no real ruler is flashed.
 
 The post-WiFi bringup order is non-obvious and load-bearing: **BLE teardown → SNTP sync (full COMPLETED status, not just time>2020) → hive start**. Without BLE teardown mDNS OOMs (~55 KB reclaim); without strict SNTP gating the HMAC timestamps drift just enough to fail `ts_skew` on the ruler. The ruler must spawn a per-client task on accept — inline `handle_client` blocks the listener for the full session and locks out subsequent peers.

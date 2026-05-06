@@ -45,6 +45,7 @@
 #include "craw_wifi.h"
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
+#include "../../include/magnet_gen.h"
 
 static const char *TAG = "m5echo_hive";
 
@@ -438,6 +439,7 @@ static void maybe_start_hive(void) {
         .caps           = s_caps,
         .chip           = "ESP32",
         .fw             = "0.1.0",
+        .gen            = MAGNET_GEN_STR,
         .secret         = (const uint8_t *)CRAW_HIVE_DEV_SECRET,
         .on_state       = on_hive_state,
         .on_state_ctx   = NULL,

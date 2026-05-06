@@ -98,12 +98,14 @@ All messages share this envelope:
   "role_requested": "spawn",
   "chip":           "ESP32-C3",
   "fw":             "0.1.0",
+  "gen":            "0.5.0-spore",
   "hive":           "beehive-1",
   "caps":           ["led", "button"]
 }
 ```
 
 - `role_requested` — one of `spawn`, `worker`, `scribe`, `parrot`, `beeper`, `warrior`, `spy`, `pet`, `ml_phd`. First-time joiners SHOULD request `spawn`; rulers can promote via ROLE_GRANT (R10).
+- `gen` — firmware generation tag, `<MAJOR>.<MINOR>.<PATCH>-<lineage>`. Currently observational; the lineage portion will gate join via the CHALLENGE/RESPONSE puzzle in v1.x. Field is OPTIONAL; older firmware may omit it. See [MagNET-Generations.md](MagNET-Generations.md).
 - `caps` — free-form capability tags the ruler can use to decide role assignments. `led`, `display`, `speaker`, `imu`, `thermometer`, etc. This is where the real-device-demo framing (fitness tracker, temp sensor) connects: each device reports its sensors as caps; a scribe role matches caps to hive needs.
 
 ### WELCOME (ruler → node)
@@ -112,21 +114,50 @@ All messages share this envelope:
 "payload": {
   "session_id": "<uuid-v4>",
   "role":       "spawn",
-  "heartbeat":  30
+  "heartbeat":  30,
+  "gen":        "0.5.0-spore"
 }
 ```
 
 - `session_id` — UUID the node includes in subsequent messages.
 - `role` — initial role granted. In v1 this mirrors `role_requested`.
 - `heartbeat` — the node must send a PING at least every N seconds or the ruler evicts it.
+- `gen` — ruler's generation tag; OPTIONAL, present when the ruler config sets it. See [MagNET-Generations.md](MagNET-Generations.md).
 
 ### REJECT (ruler → node, or either direction on auth failure)
 
 ```json
 "payload": {
   "reason": "auth" | "hive_mismatch" | "full" | "ts_skew" | "replay"
+            | "lineage_unknown" | "lineage_auth" | "gen_too_old"
 }
 ```
+
+The last three reasons come from the optional Layer-2 lineage gate; see [MagNET-Generations.md](MagNET-Generations.md).
+
+### CHALLENGE (ruler → node, optional)
+
+Issued between HELLO and WELCOME when the ruler enables the lineage gate. Skipped (transparent to old nodes) when off.
+
+```json
+"payload": {
+  "lineage":    "spore",
+  "puzzle":     "<32 hex chars / 16 random bytes>",
+  "chal_ts":    <unix seconds>,
+  "expires_in": 10
+}
+```
+
+### RESPONSE (node → ruler)
+
+```json
+"payload": {
+  "lineage": "spore",
+  "answer":  "<64 hex chars / HMAC-SHA256(dna_key, puzzle '|' node_id '|' chal_ts)>"
+}
+```
+
+The `chal_ts` from CHALLENGE is what feeds the HMAC (not the envelope `ts`), so both sides agree even if their clocks drift within the skew window.
 
 ### PING (node → ruler, ruler → node)
 
