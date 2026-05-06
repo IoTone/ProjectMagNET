@@ -1,0 +1,31 @@
+# XIAO ESP32-C6 — MagNET Vitals defaults
+
+CONFIG_IDF_TARGET="esp32c6"
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# USB-serial-JTAG console — frees UART0/UART1 for the radar
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Custom partitions (extra app space for BLE + WiFi + HTTP server)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# BLE — NimBLE (reuses craw_ble_provision pattern from the M5StampC3U project)
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+
+# Save RAM
+CONFIG_LWIP_IPV6=n
+
+# Pin the kit-specific GPIOs directly so they survive sdkconfig regeneration.
+# Per Seeed's MR60BHA2 mmWave kit examples (LightRGB.ino, mmwaveBreath.ino):
+#   WS2812 LED → D1 = GPIO 1
+#   Radar UART → HardwareSerial(0) at default UART0 pins
+CONFIG_CRAW_LED_GPIO=1
+CONFIG_CRAW_MR60_UART_PORT=0
+CONFIG_CRAW_MR60_RX_GPIO=17
+CONFIG_CRAW_MR60_TX_GPIO=16

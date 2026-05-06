@@ -1,0 +1,7 @@
+dependencies:
+  # led_strip is vendored at components/led_strip/ — do NOT also fetch it via
+  # the manager or the two copies will collide on the component name.
+  # mdns is declared for Phase 4 (mDNS hostname registration); the manager
+  # fetches it on first build of that phase.
+  espressif/mdns:
+    version: ">=1.2.0"

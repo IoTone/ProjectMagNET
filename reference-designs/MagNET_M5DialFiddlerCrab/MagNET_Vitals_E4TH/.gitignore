@@ -1,0 +1,8 @@
+.pio/
+.pio.nosync/
+.vscode/
+build/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
