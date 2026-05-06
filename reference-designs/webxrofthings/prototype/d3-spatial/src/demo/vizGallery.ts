@@ -7,13 +7,14 @@ import { buildCircularPack, PackViz } from '../viz/pack';
 import { buildForceGraph, ForceViz } from '../viz/force';
 import { buildRidgeline, RidgelineViz } from '../viz/ridgeline';
 import { buildSankey, SankeyViz } from '../viz/sankey';
+import { buildStreamgraph, StreamgraphViz } from '../viz/streamgraph';
 import { buildTidyTree, TidyTreeViz } from '../viz/tidyTree';
 import { buildTangledTree, TangledTreeViz } from '../viz/tangledTree';
 import { buildParallel, ParallelViz } from '../viz/parallel';
 import { buildEdgeBundle, EdgeBundleViz } from '../viz/edgeBundle';
 import { buildMorphDemo, MorphDemo } from './morphDemo';
 import { buildVideoPanel, VideoPanelViz } from '../viz/videoPanel';
-import { sampleTree, sampleGraph, sampleRidgeline, sampleSankey, sampleTangles, sampleParallel } from './sampleHierarchy';
+import { sampleTree, sampleGraph, sampleRidgeline, sampleSankey, sampleTangles, sampleParallel, sampleStreamgraph } from './sampleHierarchy';
 import { TEXT } from '../ui/palette';
 
 export interface GalleryItem {
@@ -39,6 +40,8 @@ export interface GalleryResult {
   ridgeline: RidgelineViz;
   sankey: SankeyViz;
   sankeyCell: THREE.Group;
+  streamgraph: StreamgraphViz;
+  streamgraphCell: THREE.Group;
   tidyTree: TidyTreeViz;
   tidyTreeCell: THREE.Group;
   tangledTree: TangledTreeViz;
@@ -65,6 +68,7 @@ export function buildVizGallery(): GalleryResult {
   const pack = buildCircularPack(sampleTree);
   const ridgeline = buildRidgeline(sampleRidgeline(6));
   const sankey = buildSankey(sampleSankey());
+  const streamgraph = buildStreamgraph(sampleStreamgraph(), { width: 0.32, height: 0.16, windowSize: 60, scrollSpeed: 6 });
   const tidyTree = buildTidyTree(sampleTree);
   const tangledTree = buildTangledTree(sampleTree, sampleTangles());
   const parallel = buildParallel(sampleParallel());
@@ -92,6 +96,7 @@ export function buildVizGallery(): GalleryResult {
     { id: 'force',      title: 'force \u00b7 d3-force-3d',        viz: force.group,         sublabel: '\u00a79.6 graph \u00b7 3D physics' },
     { id: 'ridgeline',  title: 'ridgeline \u00b7 depth-offset',   viz: ridgeline.group,     sublabel: '\u00a79.9 \u2605 distribution' },
     { id: 'sankey',     title: 'sankey \u00b7 3D tubes',          viz: sankey.group,        sublabel: '\u00a79.9 \u2605 flow network' },
+    { id: 'streamgraph',title: 'streamgraph \u00b7 animated',     viz: streamgraph.group,   sublabel: 'stacked timeseries \u00b7 wiggle' },
     { id: 'tidyTree',   title: 'tidy tree \u00b7 cylindrical',    viz: tidyTree.group,      sublabel: '\u00a79 Reingold-Tilford \u00b7 cylinder' },
     { id: 'tangledTree',title: 'tangled tree \u00b7 arcs',        viz: tangledTree.group,   sublabel: '\u00a79 tree + cross-links' },
     { id: 'parallel',   title: 'parallel coords',            viz: parallel.group,      sublabel: '\u00a79 multivariate axes' },
@@ -146,6 +151,7 @@ export function buildVizGallery(): GalleryResult {
   const sunburstCell = items.find(i => i.id === 'sunburst')!.group;
   const packCell = items.find(i => i.id === 'pack')!.group;
   const sankeyCell = items.find(i => i.id === 'sankey')!.group;
+  const streamgraphCell = items.find(i => i.id === 'streamgraph')!.group;
   const tidyTreeCell = items.find(i => i.id === 'tidyTree')!.group;
   const tangledTreeCell = items.find(i => i.id === 'tangledTree')!.group;
   const parallelCell = items.find(i => i.id === 'parallel')!.group;
@@ -156,6 +162,7 @@ export function buildVizGallery(): GalleryResult {
   return {
     root, items, force, forceCell, tree, treeCell, treemap, treemapCell,
     sunburst, sunburstCell, pack, packCell, ridgeline, sankey, sankeyCell,
+    streamgraph, streamgraphCell,
     tidyTree, tidyTreeCell, tangledTree, tangledTreeCell,
     parallel, parallelCell, edgeBundle, edgeBundleCell,
     morphDemo, morphCell,

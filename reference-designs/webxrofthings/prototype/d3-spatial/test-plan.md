@@ -151,6 +151,26 @@ After Phase 1–3:
 
 Coverage % is a directional check, not a gate. The smoke + visual-diff baseline is the actual quality bar.
 
+### Phase 1 baseline (landed 2026-04-29)
+
+50/50 unit + integration tests passing, ~4 s suite. `npm test`, `npm run test:watch`, `npm run test:coverage` are wired.
+
+| File | Stmts | Branch | Funcs | Lines |
+|---|---|---|---|---|
+| `src/util/tween.ts` | 100% | 100% | 90% | 100% |
+| `src/manifest/schema.ts` | 97.7% | 87.5% | 100% | 97.7% |
+| `server/mock-join-server.ts` | 87.5% | 78.5% | 87.5% | 87.5% |
+| `server/camera-proxy.ts` | 80.6% | 71.4% | 100% | 80.6% |
+| `src/manifest/loader.ts` | 0% | — | — | 0% (Phase 3) |
+| `src/manifest/builders.ts` | 0% | — | — | 0% (Phase 5) |
+| `src/manifest/renderManifest.ts` | 0% | — | — | 0% (Phase 3) |
+| **Aggregate over included paths** | **58.2%** | **81.7%** | **83.3%** | **58.2%** |
+
+The Phase 1 sweep also caught two real defects in production code:
+
+1. **`shape: 'video'` was missing from `URL_DATA_SHAPES`** in `src/manifest/schema.ts`. The validator initially rejected `examples/uc2-room.json` because the camera mark uses `data.shape: 'video'` but the schema only enumerated `hierarchy / graph / series / distributions / flow`. Fixed by adding `'video'` to both the runtime `URL_DATA_SHAPES` const and the `UrlData.shape` union.
+2. **`tsc && vite build` was emitting `.js` files alongside `.ts` source** (no `--noEmit`, no `outDir`), shadowing live source under any resolver that prefers `.js`. Vitest 2.x does, which is how this surfaced. Fixed by switching the build script to `tsc --noEmit && vite build` — `vite build` already does the bundling. 52 stale `.js` files were cleaned up.
+
 ---
 
 ## 6. Open questions

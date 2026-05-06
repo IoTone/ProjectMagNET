@@ -5,6 +5,9 @@
   "owner": "dkords@gmail.com",
   "acousticEnvironment": "indoor",
 
+  "udm_version": "1.0",
+  "udm_doc_version": "0.1.0",
+
   "udm_devices": [
     {
       "udm_key": "magnet-cam-80e4",
@@ -22,7 +25,7 @@
       "udm_sensors": ["camera-ov2640"],
       "udm_services_link": ["cam-stream", "cam-capture"],
       "udm_tags": ["room", "lan-only", "no-tls"],
-      "udm_spatial_anchor": { "x": 0.0, "y": 1.6, "z": -1.2 }
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.6, "z": -1.2 }
     },
     {
       "udm_key": "magnet-stamp-c3u-a1b2",
@@ -39,7 +42,7 @@
       "udm_sensors": ["esp32c3-internal-temp"],
       "udm_services_link": ["temp-current", "temp-history"],
       "udm_tags": ["room", "lan-only"],
-      "udm_spatial_anchor": { "x": -0.6, "y": 1.0, "z": -0.8 }
+      "udm_spatial_anchor_x": { "x": -0.6, "y": 1.0, "z": -0.8 }
     }
   ],
 

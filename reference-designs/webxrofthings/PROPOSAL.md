@@ -90,8 +90,7 @@ Accessibility is extremely important and a challenge and an opportunity.  We con
 
 ## POC
 
-- A working example will be available for demonstration at this URL: Work in progress coming soon
-- Open Source Software: Workin progress
+The proof-of-concept reference implementation lives at `reference-designs/webxrofthings/prototype/d3-spatial/`. It is an MIT-licensed open-source TypeScript + WebGL/WebXR codebase using three.js, three-mesh-ui, troika-three-text, Omnitone, and the d3 family of layout libraries. Run it with `npm install && npm run dev`; expose to an HMD via `cloudflared tunnel --url http://localhost:5173`.
 
 ### Use Cases
 
@@ -100,25 +99,76 @@ Accessibility is extremely important and a challenge and an opportunity.  We con
 - UC3 : explore interactive data and experiences in a hypothetical conference poster session for XR
 - UC4: explore the interactive data and services available in an airplane seat as art  of in flight experience
 
+### Achievements to date
+
+Snapshot: 2026-04-25. Full milestone-by-milestone log in `prototype/d3-spatial/STATUS.md`.
+
+**Platform & rendering (M0)**
+- WebXR `immersive-ar` boot, passthrough, eye-level UI anchor, floor grid that re-positions to head height (works around Spectacles' missing `local-floor` support)
+- Per-hand beam + reticle (bright thin warm-amber laser, smaller halo'd target sphere on hit), positioned from controller targetRay or grip-space fallback so both physical Touch controllers and hand tracking light up the beam
+- Warm-amber palette tuned for optical waveguide passthrough (no blue text or edges anywhere — verified on Quest 3 and Spectacles '24)
+
+**Mark catalog — 16 spatial visualization types (M1–M19, plus M19a video)**
+- Charts: `line` (with live-data streaming), `bar`, `scatter`, `arc`
+- Hierarchies: `tree` (radial / wall), `treemap` (extruded), `sunburst` (stacked discs), `circular packing` (nested 3D spheres), `tidy tree` (cylindrical)
+- Graphs: `force` (d3-force-3d), `tangled tree` (z-separated arcs), `edge bundling`
+- Distribution / multivariate: `ridgeline` (per-frame animated), `parallel coordinates`
+- Flow / video: `sankey` (3D flow tubes with proportional cross-section), `video` (HLS via hls.js, MJPEG via `<img>`, polled-frames mode for cloudflared compatibility)
+- All hierarchy marks support animated drill-in transitions, breadcrumbs, per-viz HUD (Back / Reset), and per-node hover via instance-aware raycasting
+
+**Interaction (M2–M5, M12, M15, M17)**
+- Hover with 150 ms exit debounce + press-lock (snapshot hover at trigger, freeze through release — fixes the "hand shifts during pinch" problem)
+- Inspector card (three-mesh-ui Block + troika text) with smart auto-placement to whichever side has clearance
+- Brush selection (programmatic, real pointer-drag, and XR controller sweep-select)
+- Per-node hover and drag on force graph; multi-hand simultaneous drag (two readers can pin two different nodes at once and the graph relaxes around both)
+- Fingertip grab on Quest hand tracking (proximity 25 mm + pinch threshold 20 mm — reach in and grab a node directly, no ray)
+- Live data streaming with `Chart.updateData()` and tweened position interpolation
+
+**Audio (M6)**
+- `THREE.PositionalAudio` per mark with procedural hover-tick buffer
+- Omnitone first-order-ambisonics ambient bed with head-pose-rotated decoder
+- AudioListener re-parented to XR camera on session start
+
+**Onboarding & dataspace (M7, M16, M20–M21)**
+- Dataspace federation (M7): registry of joined dataspaces, focus-dim non-active marks, HUD chip strip
+- Mock join server (Express + JWT) with rotating 6-char codes (now sequential from `AAAAAA`, 5-min default expiry — configurable via `CODE_ROTATION_SECONDS` env var) and per-dataspace manifest serving
+- Join panel UI in three-mesh-ui — slot-wheel character entry, keyboard fallback on desktop, state machine `IDLE → ENTERING → SUBMITTING → ACCEPTED/REJECTED`, recently-joined chips
+- Manifest-driven scene rendering — `loadManifest()` + `registerAllBuilders()` + `renderManifestToScene()` instantiate any dataspace JSON without per-dataset code changes
+- Per-dataspace HUD: configurable `hud.items` in the manifest map to built-in actions (`recenter`, `reset-view`, `toggle-ambient`, `leave-dataspace`, etc.). Floating panel by default; wrist-anchored `HandMenu` variant when hand-tracking joints are available (palm-up gesture detection)
+
+**Manifest schema (V1.9)**
+- `DataspaceManifest` TypeScript types and JSON Schema (draft 2020-12) at `manifest.schema.json`
+- Supports inline data, URL-fetched data, WebSocket data sources, refresh intervals
+- Adopts IoTone Universal Device Metadata (UDM) and Universal Service Metadata (USM) microformats: `udm_devices[]` and `usm_services[]` describe physical devices and the services they expose, with `marks[].deviceRef` and `marks[].serviceRef` linking visualizations to their underlying device/service. Adds the `udm_spatial_anchor` extension to UDM for room-scale device pinning — proposed back to the upstream spec.
+
+**Real-device integration (UC2 in flight)**
+- ESP32-CAM video panel running end-to-end on Quest via cloudflared tunnel + Vite proxy + frame-loop polling at 1 fps (works around cloudflared's persistent-stream limitation and ESP32-CAM's small header buffer; firmware patched to send CORS headers and handle OPTIONS preflight)
+- M5StampC3U temperature-sensor manifest drafted with full UDM + USM entries, ESP32-C3 internal-temperature firmware sketch documented (HTTP first; MQTT planned for Phase 2 once multiple devices are on-line)
+- `examples/uc2-room.json` + `examples/uc2-room.md` demonstrate the full UC2 dataspace using the manifest schema
+
+**Tooling & docs**
+- 99 Playwright headless screenshots across milestones M1.1–M21
+- `npm run dev`, `npm run smoke`, `npm run server`, `npm run camera-proxy`, `npm run typecheck`, `npm run build` — full local development loop
+- Comprehensive documentation: `STATUS.md`, `API.md`, `CONTRIBUTING.md`, `XR_UX_BEST_PRACTICES.md`, `JOINCODE_SPEC.md`, `CAMERA_SETUP.md`, `ROADMAP.md`, `USECASE_SPECS.md`, `DESIGN_NOTES.md`
 
 ### UI Spec V1
 
 The UI Spec V1 has been prototyped in `reference-designs/webxrofthings/prototype/d3-spatial/` and documented in `XR_UX-proposal1.md §11`. Current status:
 
 #### Implemented
-- **V1.6 Data dashboard UX** — 11 spatial mark types (line, bar, scatter, arc, tree, treemap, sunburst, circular packing, force-directed graph, ridgeline, sankey). Per-node hover, drill-in transitions, multi-hand drag, brush selection, live data streaming. See `XR_UX-proposal1.md §5, §9`.
-- **V1.8 Spatial audio model** — THREE.PositionalAudio per-mark hover ticks + Omnitone FOA ambient bed with head-pose rotation. See `XR_UX-proposal1.md §8`.
-- **V1.9 Manifest schema** — DataspaceManifest JSON schema for describing marks, data sources, and interaction capabilities. See `prototype/d3-spatial/src/manifest/schema.ts` and `manifest.schema.json`.
+- **V1.1 Join-code onboarding flow** (Phase 1+2) — Three-mesh-ui Join panel with 6-char slot entry, mock validation OR real server flow, JWT-protected manifest fetch, transition into the loaded dataspace. Phase 3 (PKI for private dataspaces) deferred.
+- **V1.6 Data dashboard UX** — 16 spatial mark types incl. live video panels. Per-node hover, drill-in transitions, multi-hand drag, brush selection, live data streaming, animated layout morph (tree↔sunburst↔treemap↔pack on the same data). See `XR_UX-proposal1.md §5, §9`.
+- **V1.8 Spatial audio model** — `THREE.PositionalAudio` per-mark hover ticks + Omnitone FOA ambient bed with head-pose rotation. See `XR_UX-proposal1.md §8`.
+- **V1.9 Manifest schema** — DataspaceManifest JSON schema with IoTone UDM + USM integration. Live ESP32-CAM video and synthetic series rendering through the manifest path validated end-to-end. See `prototype/d3-spatial/src/manifest/schema.ts` and `manifest.schema.json`.
 
 #### Partially implemented
-- **V1.2 Continuous-awareness HUD** — Debug HUD and audio state badge exist. Connection/security/QoS indicators not yet wired.
-- **V1.5 Service introspection UX** — Manifest-driven mark loading exists. Live service discovery not implemented.
+- **V1.2 Continuous-awareness HUD** — Debug HUD, audio state badge, ambient state indicator exist. Connection/security/QoS lights not yet wired.
+- **V1.3 Device introspection UX** — UDM `udm_devices[]` and `udm_spatial_anchor` field shipped in the manifest schema; renderer-side device pin glyphs at room-scale anchors not yet built.
+- **V1.5 Service introspection UX** — Manifest-driven mark loading and USM `usm_services[]` shipped. Live service discovery (mDNS / dataspace registry) not implemented.
 
 #### Not yet implemented
-- **V1.1 Join-code onboarding flow** — Designed in §2, no code yet.
-- **V1.3 Device introspection UX** — Pin + control-puck pattern designed, not coded.
-- **V1.4 People introspection UX** — Avatar sphere + name tag designed, not coded.
-- **V1.7 Shared-experience coordination** — Multi-user presence requires signaling server.
+- **V1.4 People introspection UX** — Avatar sphere + name tag designed, not coded (depends on V1.7).
+- **V1.7 Shared-experience coordination** — Multi-user presence requires signaling server. Roadmap §P2.1.
 
 See `XR_UX-proposal1.md` for full design specifications and `prototype/d3-spatial/API.md` for the developer API reference.
 

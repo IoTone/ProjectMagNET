@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { TEXT } from '../ui/palette';
 
 export interface RidgelineOptions {
   width?: number;
@@ -12,12 +13,22 @@ export interface RidgelineViz {
   tick(time: number): void;
 }
 
+/**
+ * Warm-only palette. The original list contained light blues / cyans which
+ * attenuate badly on optical-passthrough waveguides (Spectacles, Quest 3
+ * passthrough). See ui/palette.ts for the rationale.
+ */
+const WARM_PALETTE = [
+  0xff7a8a, 0xffb873, 0xffd97a, 0xf5e9c8,
+  0xcc7a99, 0xe89a6f, 0xa68a6a, 0xff9966,
+];
+
 export function buildRidgeline(series: number[][], opts: RidgelineOptions = {}): RidgelineViz {
   const {
     width = 0.3,
     rowHeight = 0.04,
     depthStep = 0.02,
-    palette = [0xff5577, 0xff99cc, 0xcc99ff, 0x66ccff, 0x66ffcc, 0xffcc66],
+    palette = WARM_PALETTE,
   } = opts;
 
   const g = new THREE.Group();
@@ -52,22 +63,25 @@ export function buildRidgeline(series: number[][], opts: RidgelineOptions = {}):
     const fillGeo = new THREE.BufferGeometry();
     fillGeo.setAttribute('position', new THREE.BufferAttribute(fillPositions, 3));
 
-    const fillMat = new THREE.MeshStandardMaterial({
-      color, emissive: color, emissiveIntensity: 0.35,
-      roughness: 0.5, metalness: 0.05,
-      transparent: true, opacity: 0.85,
+    // Lighting-independent fill — MeshStandardMaterial collapses to ~black on
+    // optical passthrough because we never compute per-frame vertex normals,
+    // so only emissive contributes and the additive display swallows it.
+    // Basic material renders the full color regardless of normals/lighting.
+    const fillMat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true, opacity: 0.92,
       side: THREE.DoubleSide,
     });
     g.add(new THREE.Mesh(fillGeo, fillMat));
 
-    // --- Line on top ---
+    // Outline on top — warm cream so it stays visible on bright passthrough.
     const linePositions = new Float32Array(numSamples * 3);
     const lineGeo = new THREE.BufferGeometry();
     lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
 
     const line = new THREE.Line(
       lineGeo,
-      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 }),
+      new THREE.LineBasicMaterial({ color: TEXT.body, transparent: true, opacity: 0.95 }),
     );
     g.add(line);
 

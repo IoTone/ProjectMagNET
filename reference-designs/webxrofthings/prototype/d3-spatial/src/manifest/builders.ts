@@ -16,6 +16,7 @@ import { buildCircularPack } from '../viz/pack';
 import { buildForceGraph } from '../viz/force';
 import { buildRidgeline } from '../viz/ridgeline';
 import { buildSankey } from '../viz/sankey';
+import { buildStreamgraph } from '../viz/streamgraph';
 import { buildVideoPanel } from '../viz/videoPanel';
 
 function makeMark(spec: MarkSpec, group: THREE.Group, viz: unknown, defaults?: Partial<LoadedMark>): LoadedMark {
@@ -79,6 +80,21 @@ export function registerAllBuilders() {
     const data = extractFlow(spec);
     if (!data) return null;
     const viz = buildSankey(data);
+    return makeMark(spec, viz.group, viz, { hoverable: true });
+  });
+
+  registerMarkBuilder('streamgraph', (spec) => {
+    const dist = extractDistributions(spec);
+    if (!dist) return null;
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const labels = (cfg.categories as string[] | undefined) ?? dist.map((_, i) => `series-${i}`);
+    const series = dist.map((values, i) => ({ category: labels[i] ?? `series-${i}`, values }));
+    const viz = buildStreamgraph(series, {
+      width: (cfg.width as number) ?? 0.36,
+      height: (cfg.height as number) ?? 0.18,
+      windowSize: (cfg.windowSize as number) ?? 60,
+      scrollSpeed: (cfg.scrollSpeed as number) ?? 8,
+    });
     return makeMark(spec, viz.group, viz, { hoverable: true });
   });
 

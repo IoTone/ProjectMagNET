@@ -5,6 +5,9 @@
  * capabilities it offers. The d3-spatial renderer loads the manifest and
  * instantiates the appropriate viz builders without per-dataset code changes.
  *
+ * UDM/USM fields conform to UDM-MagNET v1.0 / USM-MagNET v1.0
+ * (../../../../specs/UDM-MagNET-v1.md), forked from IoTone UDM/USM 0.9.1.
+ *
  * See XR_UX-proposal1.md §9, §10 (R19, R28).
  */
 
@@ -42,41 +45,56 @@ export interface DataspaceManifest {
   hud?: DataspaceHudConfig;
 
   /**
-   * Universal Device Metadata (UDM) entries for devices present in this dataspace.
-   * Conforms to https://github.com/IoTone/IoToneSpec_UniversalDeviceMetadata
+   * UDM-MagNET spec version this document conforms to. Recommended for any
+   * manifest that includes `udm_devices` or `usm_services`. See specs/UDM-MagNET-v1.md.
+   */
+  udm_version?: '1.0';
+
+  /** Author-managed document revision (semver). Optional. */
+  udm_doc_version?: string;
+
+  /**
+   * Universal Device Metadata entries for devices present in this dataspace.
+   * Conforms to UDM-MagNET v1.0 (specs/UDM-MagNET-v1.md).
    * Renderer may surface device info in inspector cards or a "devices" sub-menu.
    */
   udm_devices?: UdmDevice[];
 
   /**
-   * Universal Service Metadata (USM) entries for services exposed by devices.
-   * Conforms to https://github.com/IoTone/IoToneSpec_UniversalServiceMetadata
+   * Universal Service Metadata entries for services exposed by devices.
+   * Conforms to USM-MagNET v1.0 (specs/UDM-MagNET-v1.md §4).
    * Marks may reference these via `serviceRef: usm_key` for richer metadata.
    */
   usm_services?: UsmService[];
 }
 
-/** Universal Device Metadata — abbreviated form. Full spec is open-ended. */
+/** UDM-MagNET v1.0 device record. See specs/UDM-MagNET-v1.md §3. */
 export interface UdmDevice {
   udm_key: string;
   udm_uuid?: string;
   udm_serialno?: string;
   udm_model_name?: string;
   udm_model_number?: string;
+  udm_model_rev?: string;
   udm_vendor?: string;
+  /** @deprecated alias for udm_vendor; readers SHOULD accept, writers SHOULD emit udm_vendor. */
+  udm_oem?: string;
   udm_mktg_name?: string;
   udm_type?: string;
   udm_class?: string[];
   udm_capabilities?: string[];
-  udm_chipset_details?: { vendor?: string; type?: string; frequency?: string; core_count?: number };
-  udm_memory_volatile?: string;
-  udm_memory_non_volatile?: string;
+  udm_chipset_details?: { vendor?: string; type?: string; instruction_set?: string; frequency?: string; core_count?: number };
+  udm_memory_volatile?: string | { size?: string; type?: string; extras?: string };
+  udm_memory_non_volatile?: string | { size?: string; type?: string; extras?: string };
   udm_sensors?: string[];
-  udm_services_link?: string[];  // references to usm_key values
+  udm_services_link?: string[];  // bare usm_key (in-doc) or URI (external)
   udm_tags?: string[];
   udm_mfg_origin?: string;
-  /** Optional spatial-render hint: where the device pin appears in 3D space */
-  udm_spatial_anchor?: { x: number; y: number; z: number };
+  udm_mfg_date?: string;
+  /** Spatial-render hint: where the device pin appears in 3D space relative to the dataspace anchor. Extension; promotion candidate for v1.1. */
+  udm_spatial_anchor_x?: { x: number; y: number; z: number };
+  /** Currently-running firmware version. Extension; promotion candidate for v1.1. */
+  udm_fw_version_x?: string;
   [key: string]: unknown;
 }
 
@@ -174,9 +192,163 @@ export interface MarkSpec {
 export type MarkType =
   | 'line' | 'bar' | 'scatter' | 'arc'
   | 'tree' | 'treemap' | 'sunburst' | 'pack'
-  | 'force' | 'ridgeline' | 'sankey'
+  | 'force' | 'ridgeline' | 'sankey' | 'streamgraph'
   | 'parallel' | 'tangled-tree' | 'edge-bundle' | 'hexbin'
   | 'video';
+
+export const MARK_TYPES: readonly MarkType[] = [
+  'line', 'bar', 'scatter', 'arc',
+  'tree', 'treemap', 'sunburst', 'pack',
+  'force', 'ridgeline', 'sankey', 'streamgraph',
+  'parallel', 'tangled-tree', 'edge-bundle', 'hexbin',
+  'video',
+];
+
+export const SCALE_TAGS = ['personal', 'room', 'hall', 'net'] as const;
+export const URL_DATA_SHAPES = ['hierarchy', 'graph', 'series', 'distributions', 'flow', 'video'] as const;
+
+export type ManifestValidationResult =
+  | { valid: true; warnings?: string[] }
+  | { valid: false; errors: string[]; warnings?: string[] };
+
+/**
+ * Runtime validator for an unknown JSON value claiming to be a DataspaceManifest.
+ * Catches the common "shape is wrong" failures that TS types can't enforce at runtime.
+ *
+ * Underscore-prefixed keys (e.g. `_comment`, `_doc`) are ignorable annotations
+ * per UDM-MagNET v1.0 §2.2 and are silently accepted.
+ */
+export function validateManifest(input: unknown): ManifestValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const push = (msg: string) => errors.push(msg);
+  const warn = (msg: string) => warnings.push(msg);
+
+  if (input === null || typeof input !== 'object') {
+    return { valid: false, errors: ['manifest must be an object'] };
+  }
+  const m = input as Record<string, unknown>;
+
+  if (m.version !== '1') push(`version must be "1" (got ${JSON.stringify(m.version)})`);
+  if (typeof m.name !== 'string' || m.name.length === 0) push('name must be a non-empty string');
+  if (!SCALE_TAGS.includes(m.scaleTag as typeof SCALE_TAGS[number])) {
+    push(`scaleTag must be one of ${SCALE_TAGS.join(', ')} (got ${JSON.stringify(m.scaleTag)})`);
+  }
+  if (m.udm_version !== undefined && m.udm_version !== '1.0') {
+    warn(`udm_version "${m.udm_version}" is not "1.0"; spec divergence may exist`);
+  }
+  if (!Array.isArray(m.marks)) {
+    push('marks must be an array');
+    return { valid: false, errors, ...(warnings.length ? { warnings } : {}) };
+  }
+
+  // Build deviceKeys / serviceKeys for cross-reference resolution and uniqueness checks.
+  const deviceKeys = new Set<string>();
+  const serviceKeys = new Set<string>();
+
+  if (Array.isArray(m.udm_devices)) {
+    m.udm_devices.forEach((rawDev, idx) => {
+      if (rawDev === null || typeof rawDev !== 'object') {
+        push(`udm_devices[${idx}] must be an object`);
+        return;
+      }
+      const dev = rawDev as Record<string, unknown>;
+      if (typeof dev.udm_key !== 'string' || dev.udm_key.length === 0) {
+        push(`udm_devices[${idx}].udm_key must be a non-empty string`);
+        return;
+      }
+      if (deviceKeys.has(dev.udm_key)) {
+        push(`udm_devices[${idx}].udm_key "${dev.udm_key}" is duplicated`);
+      } else {
+        deviceKeys.add(dev.udm_key);
+      }
+      if (typeof dev.udm_oem === 'string' && typeof dev.udm_vendor !== 'string') {
+        warn(`udm_devices[${idx}] uses deprecated udm_oem; prefer udm_vendor (UDM-MagNET v1.0 §8)`);
+      }
+      // Stutter form inside chipset_details (upstream-style)
+      const cs = dev.udm_chipset_details;
+      if (cs && typeof cs === 'object') {
+        const csObj = cs as Record<string, unknown>;
+        for (const stutter of ['udm_chipset_vendor', 'udm_chipset_type', 'udm_chipset_inst_set', 'udm_cpu_max_frequency', 'udm_cpu_number_of_cores']) {
+          if (stutter in csObj) {
+            warn(`udm_devices[${idx}].udm_chipset_details uses upstream stutter form "${stutter}"; rename per UDM-MagNET v1.0 §3.3`);
+          }
+        }
+      }
+    });
+  }
+
+  if (Array.isArray(m.usm_services)) {
+    m.usm_services.forEach((rawSvc, idx) => {
+      if (rawSvc === null || typeof rawSvc !== 'object') {
+        push(`usm_services[${idx}] must be an object`);
+        return;
+      }
+      const svc = rawSvc as Record<string, unknown>;
+      if (typeof svc.usm_key !== 'string' || svc.usm_key.length === 0) {
+        push(`usm_services[${idx}].usm_key must be a non-empty string`);
+        return;
+      }
+      if (serviceKeys.has(svc.usm_key)) {
+        push(`usm_services[${idx}].usm_key "${svc.usm_key}" is duplicated`);
+      } else {
+        serviceKeys.add(svc.usm_key);
+      }
+      if (typeof svc.usm_service_name !== 'string') {
+        push(`usm_services[${idx}] (key="${svc.usm_key}").usm_service_name must be a string`);
+      }
+    });
+  }
+
+  m.marks.forEach((rawMark, idx) => {
+    if (rawMark === null || typeof rawMark !== 'object') {
+      push(`marks[${idx}] must be an object`);
+      return;
+    }
+    const mark = rawMark as Record<string, unknown>;
+    const ref = `marks[${idx}]${typeof mark.id === 'string' ? ` (id="${mark.id}")` : ''}`;
+
+    if (typeof mark.id !== 'string' || mark.id.length === 0) push(`${ref}.id must be a non-empty string`);
+    if (typeof mark.title !== 'string') push(`${ref}.title must be a string`);
+    if (!MARK_TYPES.includes(mark.type as MarkType)) {
+      push(`${ref}.type must be one of the registered mark types (got ${JSON.stringify(mark.type)})`);
+    }
+
+    if (mark.data === null || typeof mark.data !== 'object') {
+      push(`${ref}.data must be an object`);
+      return;
+    }
+    const data = mark.data as Record<string, unknown>;
+    if (data.source === 'inline') {
+      // No required field on InlineData beyond `source` — type-specific fields are validated by builders.
+    } else if (data.source === 'url') {
+      if (typeof data.url !== 'string' || data.url.length === 0) {
+        push(`${ref}.data.url must be a non-empty string`);
+      }
+      if (!URL_DATA_SHAPES.includes(data.shape as typeof URL_DATA_SHAPES[number])) {
+        push(`${ref}.data.shape must be one of ${URL_DATA_SHAPES.join(', ')} (got ${JSON.stringify(data.shape)})`);
+      }
+      if (data.refreshInterval !== undefined && (typeof data.refreshInterval !== 'number' || data.refreshInterval < 0)) {
+        push(`${ref}.data.refreshInterval must be a non-negative number`);
+      }
+    } else {
+      push(`${ref}.data.source must be "inline" or "url" (got ${JSON.stringify(data.source)})`);
+    }
+
+    // Cross-ref: deviceRef / serviceRef must resolve when udm_devices / usm_services are present.
+    if (typeof mark.deviceRef === 'string' && deviceKeys.size > 0 && !deviceKeys.has(mark.deviceRef)) {
+      push(`${ref}.deviceRef "${mark.deviceRef}" does not match any udm_devices[].udm_key`);
+    }
+    if (typeof mark.serviceRef === 'string' && serviceKeys.size > 0 && !serviceKeys.has(mark.serviceRef)) {
+      push(`${ref}.serviceRef "${mark.serviceRef}" does not match any usm_services[].usm_key`);
+    }
+  });
+
+  if (errors.length === 0) {
+    return warnings.length ? { valid: true, warnings } : { valid: true };
+  }
+  return warnings.length ? { valid: false, errors, warnings } : { valid: false, errors };
+}
 
 /** Inline data embedded in the manifest. */
 export interface InlineData {
@@ -197,8 +369,8 @@ export interface InlineData {
 export interface UrlData {
   source: 'url';
   url: string;
-  /** Expected shape — renderer validates after fetch. */
-  shape: 'hierarchy' | 'graph' | 'series' | 'distributions' | 'flow';
+  /** Expected shape — renderer validates after fetch. `video` is a sentinel for binary image/stream URLs. */
+  shape: 'hierarchy' | 'graph' | 'series' | 'distributions' | 'flow' | 'video';
   /** Refresh interval in seconds. 0 = one-shot. */
   refreshInterval?: number;
 }

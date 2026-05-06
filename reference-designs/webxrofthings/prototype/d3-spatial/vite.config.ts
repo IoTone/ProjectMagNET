@@ -20,7 +20,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/camera': {
-        target: 'http://10.0.0.185',
+        target: 'http://magnet-cam-80e4.local/',
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/camera/, ''),
         agent: cameraAgent,

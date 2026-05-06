@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
 import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { XRRig } from './xrRig';
 import { Text } from 'troika-three-text';
 import { buildDemoScene } from './demo/marks';
@@ -53,6 +54,37 @@ const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerH
 camera.position.set(0, 1.4, 1.2);
 camera.lookAt(0, 1.2, 0);
 
+// Desktop preview navigation: OrbitControls.
+//   LEFT button is intentionally disabled — it's reserved for the select
+//   pattern wired up below (pointerdown/pointerup → triggerSelectOnHovered).
+//   RIGHT-drag rotates, MIDDLE-drag pans, wheel zooms; arrow keys pan;
+//   touch: 1 finger passes through to select, 2 fingers pan + dolly.
+//   Disabled the moment an XR session starts so XR camera tracking owns the view.
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.target.set(0, 1.3, 0);
+orbit.enableDamping = true;
+orbit.dampingFactor = 0.08;
+orbit.minDistance = 0.3;
+orbit.maxDistance = 6.0;
+orbit.zoomSpeed = 0.8;
+orbit.rotateSpeed = 0.7;
+orbit.panSpeed = 0.6;
+orbit.keyPanSpeed = 12;
+orbit.listenToKeyEvents(window);   // arrow keys pan
+orbit.mouseButtons = {
+  LEFT:   null as unknown as THREE.MOUSE,   // free for select
+  MIDDLE: THREE.MOUSE.PAN,
+  RIGHT:  THREE.MOUSE.ROTATE,
+};
+orbit.touches = {
+  ONE:    null as unknown as THREE.TOUCH,   // free for tap-to-select
+  TWO:    THREE.TOUCH.DOLLY_PAN,
+};
+orbit.update();
+renderer.xr.addEventListener('sessionstart', () => { orbit.enabled = false; });
+renderer.xr.addEventListener('sessionend',   () => { orbit.enabled = true;  });
+console.log('[orbit] desktop nav: right-drag rotate · wheel zoom · middle/two-finger pan · arrow keys pan');
+
 scene.add(new THREE.HemisphereLight(0xffffff, 0x444466, 0.9));
 const dir = new THREE.DirectionalLight(0xffffff, 0.6);
 dir.position.set(1, 2, 1);
@@ -96,7 +128,7 @@ uiAnchor.add(demoRoot);
 const vizAnchor = new THREE.Group();
 vizAnchor.name = 'vizAnchor';
 scene.add(vizAnchor);
-const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz, videoPanel: videoPanelViz } = buildVizGallery();
+const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, streamgraph: streamgraphViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz, videoPanel: videoPanelViz } = buildVizGallery();
 vizAnchor.add(galleryRoot);
 
 // Per-hand NodeHoverFx: indices 0, 1 = XR hands; 2 = mouse/desktop
@@ -905,12 +937,21 @@ const dragBrush = new DragBrush(camera, renderer.domElement, () => demoMarks.map
   },
 });
 
+// Desktop mouse — mirror the XR controller select pattern:
+//   pointerdown : try drag (gallery only); else press-lock for select-on-release
+//   pointerup   : if dragging end drag; else fire onSelect for current hover, then unlock
+// Without this, hover highlights work on every browser but clicks never fire,
+// so the toolbar / join panel / marks are unusable outside of XR.
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
-  if (vizAnchor.visible) interact.beginDrag();
+  const startedDrag = vizAnchor.visible && interact.beginDrag();
+  if (!startedDrag) interact.setPressLocked(true);
 });
-window.addEventListener('pointerup', () => {
-  if (interact.isDragging()) interact.endDrag();
+window.addEventListener('pointerup', (e) => {
+  if (e.button !== 0) return;
+  if (interact.isDragging()) { interact.endDrag(); return; }
+  interact.triggerSelectOnHovered();
+  interact.setPressLocked(false);
 });
 
 function summarizeBrush(id: string, count: number): { title: string; subtitle: string; value: string } {
@@ -1527,6 +1568,7 @@ renderer.setAnimationLoop((time, frame) => {
   lastT = time;
   rig.update(frame);
   interact.update();
+  if (!renderer.xr.isPresenting) orbit.update();
 
   // Feature 1: Update fingertip grab (hand-tracking)
   if (vizAnchor.visible) {
@@ -1570,6 +1612,7 @@ renderer.setAnimationLoop((time, frame) => {
     sunburstViz.tick();
     packViz.tick();
     ridgelineViz.tick(time / 1000);
+    streamgraphViz.tick(time / 1000);
     morphDemoViz.tick();
     videoPanelViz.tick();
 

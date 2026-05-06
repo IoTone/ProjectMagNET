@@ -146,6 +146,33 @@ export function sampleParallel(): { dimensions: string[]; points: ParallelDataPo
   return { dimensions, points };
 }
 
+export interface StreamgraphSample {
+  category: string;
+  values: number[];
+}
+
+export function sampleStreamgraph(numCategories = 6, numSteps = 200, seed = 11): StreamgraphSample[] {
+  const rand = mulberry32(seed);
+  const labels = ['Sensors', 'Compute', 'Network', 'Storage', 'Display', 'Audio', 'Battery', 'Radio'];
+  const out: StreamgraphSample[] = [];
+  for (let c = 0; c < numCategories; c++) {
+    const phase = rand() * Math.PI * 2;
+    const freq = 0.025 + rand() * 0.04;
+    const amp = 8 + rand() * 14;
+    const base = 14 + rand() * 6;
+    const trendSlope = (rand() - 0.5) * 12;
+    const values: number[] = [];
+    for (let t = 0; t < numSteps; t++) {
+      const wave = 0.5 + 0.5 * Math.sin(t * freq + phase);
+      const trend = (t / numSteps) * trendSlope;
+      const noise = (rand() - 0.5) * 1.5;
+      values.push(Math.max(0, base + amp * wave + trend + noise));
+    }
+    out.push({ category: labels[c % labels.length]!, values });
+  }
+  return out;
+}
+
 function mulberry32(seed: number) {
   let a = seed >>> 0;
   return () => {

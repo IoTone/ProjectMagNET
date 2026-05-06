@@ -174,6 +174,7 @@ InstancedMesh respects `frustumCulled` only if the bounding sphere is correct. A
 
 ### 2.8 Build / bundle
 
+- **Resolved 2026-04-29 (build-script bug)**: the `build` script was `tsc && vite build`. With no `--noEmit` and no `outDir`, `tsc` emitted `.js` files alongside every `.ts` source, contaminating the source tree (52 files). Vitest's resolver picked the stale `.js` over the current `.ts`, masking newly added exports. Now `tsc --noEmit && vite build`. `vite build` does the actual bundling. (Surfaced while wiring up Phase 1 unit tests — see `test-plan.md`.)
 - `npm run build` warns about chunk size. Add `manualChunks` so `viz/*` and `omnitone` lazy-load:
   ```ts
   build: {
