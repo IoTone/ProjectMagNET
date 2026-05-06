@@ -1,0 +1,181 @@
+{
+  "version": "1",
+  "name": "kords-personal-health",
+  "scaleTag": "personal",
+  "owner": "dkords@gmail.com",
+  "acousticEnvironment": "indoor",
+  "udm_version": "1.0",
+  "udm_doc_version": "0.1.0",
+
+  "_comment_privacy": "Health-data dataspace. Default: solo. Multi-user join requires explicit consent. See specs/MagNET-Vitals-E4TH-proposal.md §11.",
+
+  "udm_devices": [
+    {
+      "udm_key":   "magnet-vitals-c0d4",
+      "udm_uuid":  "urn:device:xiao-esp32c6-mr60bha2:c0d4",
+      "_comment":  "Replace c0d4 with the real MAC4 suffix at provisioning time.",
+      "udm_model_name":   "MR60BHA2 mmWave Heart-Rate Kit",
+      "udm_model_number": "SKU 110992151 (Seeed)",
+      "udm_vendor":       "Seeed Studio",
+      "udm_mktg_name":    "Magnet Vitals",
+      "udm_type":         "health-sensor",
+      "udm_class":        ["health-sensor", "radar", "mmwave", "wifi", "ble"],
+      "udm_capabilities": [
+        "heart-rate", "breathing-rate", "presence-detection",
+        "ambient-light", "json-http", "forth-repl",
+        "non-contact", "sleep-only"
+      ],
+      "udm_chipset_details": {
+        "vendor": "Espressif", "type": "ESP32-C6",
+        "frequency": "160MHz", "core_count": 1,
+        "instruction_set": "rv32imac"
+      },
+      "udm_memory_volatile":     { "size": "512KB", "type": "SRAM" },
+      "udm_memory_non_volatile": { "size": "4MB",   "type": "flash" },
+      "udm_sensors": ["seeed-mr60bha2-mmwave", "rohm-bh1750-lux"],
+      "udm_services_link": ["vitals-current", "hr-history", "br-history", "phases", "presence", "lux", "targets"],
+      "udm_tags": ["personal", "lan-only", "no-tls", "health-data", "sleep-only", "non-contact"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.0, "z": -0.4 },
+      "udm_fw_version_x": "vitals-e4th-0.3.0"
+    }
+  ],
+
+  "usm_services": [
+    {
+      "usm_key": "vitals-current",
+      "usm_uuid": "urn:service:vitals:c0d4",
+      "usm_service_name": "Vitals snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "biometric", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/vitals/vitals", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 2 },
+      "usm_tags": ["live", "lan-only", "biometric"]
+    },
+    {
+      "usm_key": "hr-history",
+      "usm_uuid": "urn:service:hr-series:c0d4",
+      "usm_service_name": "Heart-rate history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "biometric", "heart-rate"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/vitals/heart-rate/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "beats/min", "t_unit": "ms_since_epoch" } }
+      ]
+    },
+    {
+      "usm_key": "br-history",
+      "usm_uuid": "urn:service:br-series:c0d4",
+      "usm_service_name": "Breathing-rate history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "biometric", "breathing-rate"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/vitals/breathing/history", "content-type": "application/json" }
+      }
+    },
+    {
+      "usm_key": "phases",
+      "usm_uuid": "urn:service:phases:c0d4",
+      "usm_service_name": "Heart/breath/total phase waveforms",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "biometric", "raw-waveform"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/vitals/phases", "content-type": "application/json" }
+      },
+      "_comment": "Returns [[heart…], [breath…], [total…]] — directly consumable as the 'distributions' shape."
+    },
+    {
+      "usm_key": "presence",
+      "usm_uuid": "urn:service:presence:c0d4",
+      "usm_service_name": "Presence detection",
+      "usm_type": "sensor",
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/vitals/presence", "content-type": "application/json" }
+      }
+    },
+    {
+      "usm_key": "lux",
+      "usm_uuid": "urn:service:lux:c0d4",
+      "usm_service_name": "Ambient light (BH1750)",
+      "usm_type": "sensor",
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/vitals/lux", "content-type": "application/json" }
+      }
+    },
+    {
+      "usm_key": "targets",
+      "usm_uuid": "urn:service:targets:c0d4",
+      "usm_service_name": "Multi-target detection",
+      "usm_type": "sensor",
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/vitals/targets", "content-type": "application/json" }
+      }
+    }
+  ],
+
+  "marks": [
+    {
+      "id": "hr-line",
+      "type": "line",
+      "title": "Heart rate",
+      "subtitle": "last 60 min · 1 sample/min",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/vitals/heart-rate/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "deviceRef": "magnet-vitals-c0d4",
+      "serviceRef": "hr-history",
+      "hoverable": true
+    },
+    {
+      "id": "br-line",
+      "type": "line",
+      "title": "Breathing",
+      "subtitle": "last 60 min · 1 sample/min",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/vitals/breathing/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "deviceRef": "magnet-vitals-c0d4",
+      "serviceRef": "br-history",
+      "hoverable": true
+    },
+    {
+      "id": "phases-stream",
+      "type": "streamgraph",
+      "title": "Heart & breath phases",
+      "subtitle": "live radar waveform · scrolling",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/vitals/phases",
+        "shape": "distributions",
+        "refreshInterval": 1
+      },
+      "config": {
+        "categories": ["heart_phase", "breath_phase", "total_phase"],
+        "windowSize": 120,
+        "scrollSpeed": 12
+      },
+      "deviceRef": "magnet-vitals-c0d4",
+      "serviceRef": "phases",
+      "hoverable": true
+    }
+  ],
+
+  "hud": {
+    "items": [
+      { "id": "refresh", "label": "Refresh", "icon": "🔄", "action": "reload-marks" },
+      { "id": "recenter", "label": "Recenter", "icon": "⊕", "action": "recenter" },
+      { "id": "leave", "label": "Leave", "icon": "🚪", "action": "leave-dataspace" }
+    ],
+    "position": "bottom"
+  }
+}

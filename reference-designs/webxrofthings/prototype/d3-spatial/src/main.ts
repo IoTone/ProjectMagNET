@@ -128,7 +128,7 @@ uiAnchor.add(demoRoot);
 const vizAnchor = new THREE.Group();
 vizAnchor.name = 'vizAnchor';
 scene.add(vizAnchor);
-const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, streamgraph: streamgraphViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz, videoPanel: videoPanelViz } = buildVizGallery();
+const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, streamgraph: streamgraphViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz, videoPanel: videoPanelViz, livePhases: livePhasesViz } = buildVizGallery();
 vizAnchor.add(galleryRoot);
 
 // Per-hand NodeHoverFx: indices 0, 1 = XR hands; 2 = mouse/desktop
@@ -1538,7 +1538,9 @@ function doHRUpdate() {
 
 // ─── Startup: manifest mode or join mode ───────────────────────────
 if (isManifestMode && urlManifest) {
-  // Direct manifest URL — skip join, fetch and render immediately
+  // Direct manifest URL — skip join, fetch and render immediately.
+  // Hide the demo gallery so the manifest marks aren't drawn on top of it.
+  galleryRoot.visible = false;
   (async () => {
     try {
       const resp = await fetch(urlManifest);
@@ -1553,7 +1555,8 @@ if (isManifestMode && urlManifest) {
       showDataspaceMenu();
     } catch (e) {
       console.error('[manifest] Failed to load manifest from URL:', e);
-      // Fall back to gallery
+      // Fall back to the demo gallery so the user sees something useful.
+      galleryRoot.visible = true;
       vizAnchor.visible = true;
     }
   })();
@@ -1613,6 +1616,7 @@ renderer.setAnimationLoop((time, frame) => {
     packViz.tick();
     ridgelineViz.tick(time / 1000);
     streamgraphViz.tick(time / 1000);
+    livePhasesViz.tick(time / 1000);
     morphDemoViz.tick();
     videoPanelViz.tick();
 

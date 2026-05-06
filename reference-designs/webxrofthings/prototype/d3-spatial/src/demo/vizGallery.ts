@@ -14,6 +14,7 @@ import { buildParallel, ParallelViz } from '../viz/parallel';
 import { buildEdgeBundle, EdgeBundleViz } from '../viz/edgeBundle';
 import { buildMorphDemo, MorphDemo } from './morphDemo';
 import { buildVideoPanel, VideoPanelViz } from '../viz/videoPanel';
+import { buildLiveLineCell, buildLivePhasesCell, LiveCell } from './liveVitalsCells';
 import { sampleTree, sampleGraph, sampleRidgeline, sampleSankey, sampleTangles, sampleParallel, sampleStreamgraph } from './sampleHierarchy';
 import { TEXT } from '../ui/palette';
 
@@ -54,6 +55,12 @@ export interface GalleryResult {
   morphCell: THREE.Group;
   videoPanel: VideoPanelViz;
   videoCell: THREE.Group;
+  liveHr: LiveCell;
+  liveHrCell: THREE.Group;
+  liveBr: LiveCell;
+  liveBrCell: THREE.Group;
+  livePhases: LiveCell;
+  livePhasesCell: THREE.Group;
 }
 
 export function buildVizGallery(): GalleryResult {
@@ -88,6 +95,25 @@ export function buildVizGallery(): GalleryResult {
     frameIntervalMs: 1000,
   });
 
+  // Live MagNET Vitals device — pulled through the Vite proxy (`/api/v1/vitals/*`).
+  // Cells show a placeholder line until the first fetch lands. HR/BR refresh at
+  // 30 s; phases refresh at 1.5 s for a continuously-scrolling waveform.
+  const liveHr = buildLiveLineCell({
+    url: '/api/v1/vitals/heart-rate/history',
+    refreshMs: 30000, width: 0.32, height: 0.16,
+    color: 0xff7a8a, vMin: 40, vMax: 130,
+  });
+  const liveBr = buildLiveLineCell({
+    url: '/api/v1/vitals/breathing/history',
+    refreshMs: 30000, width: 0.32, height: 0.16,
+    color: 0xffb873, vMin: 4, vMax: 30,
+  });
+  const livePhases = buildLivePhasesCell({
+    url: '/api/v1/vitals/phases',
+    refreshMs: 1500, width: 0.32, height: 0.16,
+    windowSize: 120, scrollSpeed: 12,
+  });
+
   const specs = [
     { id: 'tree',       title: 'tree \u00b7 radial',              viz: tree.group,          sublabel: '\u00a79.1 hierarchy \u00b7 node-link' },
     { id: 'treemap',    title: 'treemap \u00b7 extruded',         viz: treemap.group,       sublabel: '\u00a79.2 hierarchy \u00b7 area + z' },
@@ -103,6 +129,9 @@ export function buildVizGallery(): GalleryResult {
     { id: 'edgeBundle', title: 'edge bundling',               viz: edgeBundle.group,    sublabel: '\u00a79 hierarchical routing' },
     { id: 'morph',      title: 'morph \u00b7 layout transition',  viz: morphDemo.group,     sublabel: 'tree \u2192 sunburst \u2192 treemap \u2192 pack' },
     { id: 'video',      title: 'video \u00b7 ESP32-CAM',          viz: videoPanel.group,    sublabel: 'live MJPEG camera feed' },
+    { id: 'liveHr',     title: 'HR \u00b7 live',                  viz: liveHr.group,        sublabel: 'MagNET Vitals \u00b7 60 min, 1/min' },
+    { id: 'liveBr',     title: 'BR \u00b7 live',                  viz: liveBr.group,        sublabel: 'MagNET Vitals \u00b7 60 min, 1/min' },
+    { id: 'livePhases', title: 'phases \u00b7 live',              viz: livePhases.group,    sublabel: 'mmWave heart/breath/total \u00b7 ~10 Hz' },
   ];
 
   const cols = 4;
@@ -158,6 +187,9 @@ export function buildVizGallery(): GalleryResult {
   const edgeBundleCell = items.find(i => i.id === 'edgeBundle')!.group;
   const morphCell = items.find(i => i.id === 'morph')!.group;
   const videoCell = items.find(i => i.id === 'video')!.group;
+  const liveHrCell = items.find(i => i.id === 'liveHr')!.group;
+  const liveBrCell = items.find(i => i.id === 'liveBr')!.group;
+  const livePhasesCell = items.find(i => i.id === 'livePhases')!.group;
 
   return {
     root, items, force, forceCell, tree, treeCell, treemap, treemapCell,
@@ -167,5 +199,6 @@ export function buildVizGallery(): GalleryResult {
     parallel, parallelCell, edgeBundle, edgeBundleCell,
     morphDemo, morphCell,
     videoPanel, videoCell,
+    liveHr, liveHrCell, liveBr, liveBrCell, livePhases, livePhasesCell,
   };
 }

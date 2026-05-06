@@ -6,7 +6,7 @@
  */
 
 import * as THREE from 'three';
-import { registerMarkBuilder, extractHierarchy, extractGraph, extractFlow, extractDistributions } from './loader';
+import { registerMarkBuilder, extractHierarchy, extractGraph, extractFlow, extractDistributions, extractSeries } from './loader';
 import type { MarkSpec } from './schema';
 import type { LoadedMark } from './loader';
 import { buildTree } from '../viz/tree';
@@ -18,6 +18,8 @@ import { buildRidgeline } from '../viz/ridgeline';
 import { buildSankey } from '../viz/sankey';
 import { buildStreamgraph } from '../viz/streamgraph';
 import { buildVideoPanel } from '../viz/videoPanel';
+import { buildLineMark } from '../chart/marks/line';
+import { TEXT } from '../ui/palette';
 
 function makeMark(spec: MarkSpec, group: THREE.Group, viz: unknown, defaults?: Partial<LoadedMark>): LoadedMark {
   return {
@@ -96,6 +98,54 @@ export function registerAllBuilders() {
       scrollSpeed: (cfg.scrollSpeed as number) ?? 8,
     });
     return makeMark(spec, viz.group, viz, { hoverable: true });
+  });
+
+  // ─── line mark (time-series ribbon) ─────────────────────────────────
+  // The chart-style line mark expects THREE.Vector3 points, not raw {t, v}.
+  // This adapter normalises the device's series into a width × height panel.
+  registerMarkBuilder('line', (spec) => {
+    const series = extractSeries(spec) as Array<{ t: number; v: number }> | null;
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const width  = (cfg.width  as number) ?? 0.32;
+    const height = (cfg.height as number) ?? 0.16;
+    const color  = (cfg.color  as number) ?? TEXT.primary;
+
+    const group = new THREE.Group();
+    group.name = `line:${spec.id}`;
+
+    // Always emit a group so the mark is visible even before the first fetch
+    // populates the series — the renderer can update later via the chart API.
+    if (!series || series.length < 2) {
+      // Placeholder — a flat line at the baseline so the panel has presence.
+      const flat: THREE.Vector3[] = [
+        new THREE.Vector3(-width / 2, 0, 0),
+        new THREE.Vector3( width / 2, 0, 0),
+      ];
+      const placeholder = buildLineMark(flat, { color: TEXT.muted, radius: 0.002 });
+      group.add(placeholder);
+      return makeMark(spec, group, { mode: 'placeholder' }, { hoverable: spec.hoverable });
+    }
+
+    let tMin = Infinity, tMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+    for (const s of series) {
+      if (s.t < tMin) tMin = s.t;
+      if (s.t > tMax) tMax = s.t;
+      if (s.v < vMin) vMin = s.v;
+      if (s.v > vMax) vMax = s.v;
+    }
+    const tSpan = (tMax - tMin) || 1;
+    const vSpan = (vMax - vMin) || 1;
+
+    const points: THREE.Vector3[] = series.map(s => new THREE.Vector3(
+      ((s.t - tMin) / tSpan) * width  - width / 2,
+      ((s.v - vMin) / vSpan) * height - height / 2,
+      0,
+    ));
+
+    const line = buildLineMark(points, { color, radius: 0.003 });
+    group.add(line);
+    return makeMark(spec, group, { points, range: { tMin, tMax, vMin, vMax } },
+                    { hoverable: spec.hoverable });
   });
 
   registerMarkBuilder('video', (spec) => {

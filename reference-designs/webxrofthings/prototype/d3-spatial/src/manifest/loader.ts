@@ -89,7 +89,15 @@ function shapeToField(shape: string, data: unknown): Record<string, unknown> {
   switch (shape) {
     case 'hierarchy': return { hierarchy: data };
     case 'graph': return { graph: data };
-    case 'series': return { series: data };
+    case 'series': {
+      // Accept either a bare array or a `{ samples: [...] }` wrapper —
+      // the MagNET vitals device emits the wrapped form for /heart-rate/history,
+      // /breathing/history, etc., to keep room for metadata fields later.
+      if (data && typeof data === 'object' && Array.isArray((data as { samples?: unknown }).samples)) {
+        return { series: (data as { samples: unknown[] }).samples };
+      }
+      return { series: data };
+    }
     case 'distributions': return { distributions: data };
     case 'flow': return { flow: data };
     default: return {};
