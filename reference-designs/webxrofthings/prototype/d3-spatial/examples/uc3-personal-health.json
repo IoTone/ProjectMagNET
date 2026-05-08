@@ -119,6 +119,28 @@
 
   "marks": [
     {
+      "id": "hr-gauge",
+      "type": "arc",
+      "title": "Heart rate · current",
+      "subtitle": "radial gauge · 40–130 bpm",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/vitals/heart-rate/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "config": {
+        "min": 40,
+        "max": 130,
+        "radius": 0.06,
+        "tubeRadius": 0.004
+      },
+      "_comment": "Reads the latest sample from /heart-rate/history. Resolution is one update per minute (matches the device's history ring buffer cadence). For sub-minute gauge updates we'd add a /vitals 'value' data shape.",
+      "deviceRef": "magnet-vitals-c0d4",
+      "serviceRef": "hr-history",
+      "hoverable": true
+    },
+    {
       "id": "hr-line",
       "type": "line",
       "title": "Heart rate",
@@ -172,6 +194,7 @@
 
   "hud": {
     "items": [
+      { "id": "privacy", "label": "Privacy", "icon": "🔒", "action": "show-privacy" },
       { "id": "refresh", "label": "Refresh", "icon": "🔄", "action": "reload-marks" },
       { "id": "recenter", "label": "Recenter", "icon": "⊕", "action": "recenter" },
       { "id": "leave", "label": "Leave", "icon": "🚪", "action": "leave-dataspace" }

@@ -14,7 +14,7 @@ import { buildParallel, ParallelViz } from '../viz/parallel';
 import { buildEdgeBundle, EdgeBundleViz } from '../viz/edgeBundle';
 import { buildMorphDemo, MorphDemo } from './morphDemo';
 import { buildVideoPanel, VideoPanelViz } from '../viz/videoPanel';
-import { buildLiveLineCell, buildLivePhasesCell, LiveCell } from './liveVitalsCells';
+import { buildLiveLineCell, buildLivePhasesCell, buildLiveTargetsCell, LiveCell } from './liveVitalsCells';
 import { sampleTree, sampleGraph, sampleRidgeline, sampleSankey, sampleTangles, sampleParallel, sampleStreamgraph } from './sampleHierarchy';
 import { TEXT } from '../ui/palette';
 
@@ -61,6 +61,8 @@ export interface GalleryResult {
   liveBrCell: THREE.Group;
   livePhases: LiveCell;
   livePhasesCell: THREE.Group;
+  liveTargets: LiveCell;
+  liveTargetsCell: THREE.Group;
 }
 
 export function buildVizGallery(): GalleryResult {
@@ -113,6 +115,11 @@ export function buildVizGallery(): GalleryResult {
     refreshMs: 1500, width: 0.32, height: 0.16,
     windowSize: 120, scrollSpeed: 12,
   });
+  const liveTargets = buildLiveTargetsCell({
+    url: '/api/v1/vitals/targets',
+    refreshMs: 1000, width: 0.32, height: 0.16,
+    extent_m: 2.5, max_distance_m: 4.0, fov_deg: 50,
+  });
 
   const specs = [
     { id: 'tree',       title: 'tree \u00b7 radial',              viz: tree.group,          sublabel: '\u00a79.1 hierarchy \u00b7 node-link' },
@@ -132,6 +139,7 @@ export function buildVizGallery(): GalleryResult {
     { id: 'liveHr',     title: 'HR \u00b7 live',                  viz: liveHr.group,        sublabel: 'MagNET Vitals \u00b7 60 min, 1/min' },
     { id: 'liveBr',     title: 'BR \u00b7 live',                  viz: liveBr.group,        sublabel: 'MagNET Vitals \u00b7 60 min, 1/min' },
     { id: 'livePhases', title: 'phases \u00b7 live',              viz: livePhases.group,    sublabel: 'mmWave heart/breath/total \u00b7 ~10 Hz' },
+    { id: 'liveTargets',title: 'targets \u00b7 live',             viz: liveTargets.group,   sublabel: 'mmWave floor map \u00b7 top-down \u00b7 1 Hz' },
   ];
 
   const cols = 4;
@@ -190,6 +198,7 @@ export function buildVizGallery(): GalleryResult {
   const liveHrCell = items.find(i => i.id === 'liveHr')!.group;
   const liveBrCell = items.find(i => i.id === 'liveBr')!.group;
   const livePhasesCell = items.find(i => i.id === 'livePhases')!.group;
+  const liveTargetsCell = items.find(i => i.id === 'liveTargets')!.group;
 
   return {
     root, items, force, forceCell, tree, treeCell, treemap, treemapCell,
@@ -199,6 +208,7 @@ export function buildVizGallery(): GalleryResult {
     parallel, parallelCell, edgeBundle, edgeBundleCell,
     morphDemo, morphCell,
     videoPanel, videoCell,
-    liveHr, liveHrCell, liveBr, liveBrCell, livePhases, livePhasesCell,
+    liveHr, liveHrCell, liveBr, liveBrCell,
+    livePhases, livePhasesCell, liveTargets, liveTargetsCell,
   };
 }

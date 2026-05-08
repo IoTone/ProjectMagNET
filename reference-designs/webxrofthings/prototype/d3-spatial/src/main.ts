@@ -26,6 +26,7 @@ import { JoinState } from './onboarding/types';
 import { registerAllBuilders } from './manifest/builders';
 import { loadManifest } from './manifest/loader';
 import { renderManifestToScene } from './manifest/renderManifest';
+import { createPrivacyBanner, privacyFactsFromManifest, PrivacyBanner } from './ui/PrivacyBanner';
 import type { DataspaceManifest } from './manifest/schema';
 import { DEFAULT_HUD_ITEMS } from './manifest/schema';
 import { DataspaceMenu } from './ui/DataspaceMenu';
@@ -128,7 +129,25 @@ uiAnchor.add(demoRoot);
 const vizAnchor = new THREE.Group();
 vizAnchor.name = 'vizAnchor';
 scene.add(vizAnchor);
-const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, streamgraph: streamgraphViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz, videoPanel: videoPanelViz, livePhases: livePhasesViz } = buildVizGallery();
+const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, streamgraph: streamgraphViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz, videoPanel: videoPanelViz, liveHr: liveHrViz, liveBr: liveBrViz, livePhases: livePhasesViz, liveTargets: liveTargetsViz } = buildVizGallery();
+
+// Stop the polling intervals inside live vitals cells AND any active
+// manifest's refresh intervals when the page goes away (tab close, navigation,
+// dev-server hot-reload). Without this each reload leaves orphaned
+// setInterval()s ticking indefinitely.
+const disposeAllLivePolling = () => {
+  liveHrViz.dispose();
+  liveBrViz.dispose();
+  livePhasesViz.dispose();
+  liveTargetsViz.dispose();
+  disposeCurrentManifest();
+};
+window.addEventListener('pagehide',     disposeAllLivePolling);
+window.addEventListener('beforeunload', disposeAllLivePolling);
+if ((import.meta as ImportMeta & { hot?: { dispose: (cb: () => void) => void } }).hot) {
+  (import.meta as ImportMeta & { hot: { dispose: (cb: () => void) => void } })
+    .hot.dispose(disposeAllLivePolling);
+}
 vizAnchor.add(galleryRoot);
 
 // Per-hand NodeHoverFx: indices 0, 1 = XR hands; 2 = mouse/desktop
@@ -1283,12 +1302,16 @@ const joinPanel = createJoinPanel({
         };
         const resp = await fetch(manifestUrl, { headers });
         const manifest = await resp.json() as DataspaceManifest;
+        // Stop the previous dataspace's refresh intervals before swapping in new ones.
+        disposeCurrentManifest();
         const result = await loadManifest(manifest, token);
+        currentManifestResult = result;
         renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
         vizAnchor.position.set(0, 1.3, 0);
         console.log(`[join] Manifest loaded: ${result.marks.length} marks from "${result.name}"`);
         // Create dataspace menu from manifest HUD config
         createDataspaceMenu(manifest.hud?.items, manifest.hud?.position);
+        attachPrivacyBanner(manifest, /* autoShow */ true);
       } catch (e) {
         console.error('[join] Failed to load manifest:', e);
       }
@@ -1412,6 +1435,64 @@ const dataspaceMenuAnchor = new THREE.Group();
 dataspaceMenuAnchor.name = 'dataspaceMenuAnchor';
 scene.add(dataspaceMenuAnchor);
 
+// --- Active manifest result (so we can stop its refresh intervals on leave/replace) ---
+let currentManifestResult: import('./manifest/loader').LoadResult | null = null;
+function disposeCurrentManifest() {
+  if (currentManifestResult) {
+    currentManifestResult.dispose();
+    currentManifestResult = null;
+  }
+}
+
+// --- Privacy banner (Phase 5) — first-render modal on health-data dataspaces ---
+let privacyBanner: PrivacyBanner | null = null;
+const privacyBannerAnchor = new THREE.Group();
+privacyBannerAnchor.name = 'privacyBannerAnchor';
+scene.add(privacyBannerAnchor);
+
+function placePrivacyBannerInFront() {
+  const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const pos = new THREE.Vector3();
+  xrCam.getWorldPosition(pos);
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.quaternion);
+  fwd.y = 0;
+  if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
+  fwd.normalize();
+  privacyBannerAnchor.position.set(pos.x + fwd.x * 1.0, pos.y - 0.05, pos.z + fwd.z * 1.0);
+  privacyBannerAnchor.lookAt(pos.x, privacyBannerAnchor.position.y, pos.z);
+}
+
+function attachPrivacyBanner(manifest: DataspaceManifest, autoShow: boolean) {
+  /* Build once, then re-skin per dataspace. */
+  if (!privacyBanner) {
+    privacyBanner = createPrivacyBanner();
+    privacyBannerAnchor.add(privacyBanner.group);
+    interact.add({
+      id: privacyBanner.acceptId,
+      object: privacyBanner.acceptButton,
+      onHoverIn: () => {
+        privacyBanner!.acceptButton.set({
+          backgroundColor: new THREE.Color(0x6a4540),
+          backgroundOpacity: 1.0,
+        });
+      },
+      onHoverOut: () => {
+        privacyBanner!.acceptButton.set({
+          backgroundColor: new THREE.Color(0x4a3530),
+          backgroundOpacity: 0.92,
+        });
+      },
+      onSelect: () => privacyBanner!.hide(),
+    });
+  }
+  const facts = privacyFactsFromManifest(manifest);
+  privacyBanner.setFacts(facts);
+  if (autoShow && facts.hasHealthData) {
+    placePrivacyBannerInFront();
+    privacyBanner.show();
+  }
+}
+
 function handleDataspaceMenuAction(actionId: string) {
   switch (actionId) {
     case 'recenter':
@@ -1428,6 +1509,8 @@ function handleDataspaceMenuAction(actionId: string) {
     case 'leave-dataspace':
       vizAnchor.visible = false;
       hideDataspaceMenu();
+      disposeCurrentManifest();
+      privacyBanner?.hide();
       showJoinPanel();
       break;
     case 'toggle-ambient':
@@ -1442,6 +1525,14 @@ function handleDataspaceMenuAction(actionId: string) {
       break;
     case 'toggle-labels':
       console.log('[dataspace-menu] toggle-labels action triggered');
+      break;
+    case 'show-privacy':
+      if (privacyBanner) {
+        placePrivacyBannerInFront();
+        privacyBanner.show();
+      } else {
+        console.warn('[dataspace-menu] show-privacy: no banner attached for this dataspace');
+      }
       break;
     default:
       console.warn(`[dataspace-menu] unhandled custom action: ${actionId}`);
@@ -1545,7 +1636,9 @@ if (isManifestMode && urlManifest) {
     try {
       const resp = await fetch(urlManifest);
       const manifest = await resp.json() as DataspaceManifest;
+      disposeCurrentManifest();
       const result = await loadManifest(manifest);
+      currentManifestResult = result;
       renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
       vizAnchor.position.set(0, 1.3, 0);
       vizAnchor.visible = true;
@@ -1553,6 +1646,8 @@ if (isManifestMode && urlManifest) {
       // Create dataspace menu from manifest HUD config
       createDataspaceMenu(manifest.hud?.items, manifest.hud?.position);
       showDataspaceMenu();
+      // Privacy banner: auto-show on entry if any device is tagged `health-data`.
+      attachPrivacyBanner(manifest, /* autoShow */ true);
     } catch (e) {
       console.error('[manifest] Failed to load manifest from URL:', e);
       // Fall back to the demo gallery so the user sees something useful.

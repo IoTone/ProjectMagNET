@@ -21,12 +21,23 @@ export interface LoadedMark {
   drillable: boolean;
   hoverable: boolean;
   draggable: boolean;
+  /**
+   * Optional updater. The loader calls this on the cadence specified by the
+   * mark's `data.refreshInterval` (seconds). The spec passed in already has
+   * its `data` field re-mutated to inline form with the latest fetched payload.
+   */
+  refresh?: (spec: MarkSpec) => void;
 }
 
 export interface LoadResult {
   name: string;
   scaleTag: string;
   marks: LoadedMark[];
+  /**
+   * Stop all scheduled refresh intervals. Call on dataspace teardown to avoid
+   * stranded setInterval()s polling forever.
+   */
+  dispose: () => void;
 }
 
 type Builder = (spec: MarkSpec) => LoadedMark | null;
@@ -41,31 +52,44 @@ export function registerMarkBuilder(type: MarkType, builder: Builder) {
 /** Load a manifest and instantiate all its marks. */
 export async function loadManifest(manifest: DataspaceManifest, token?: string): Promise<LoadResult> {
   const marks: LoadedMark[] = [];
+  const intervals: Array<ReturnType<typeof setInterval>> = [];
+
+  /** Re-fetch a URL data source and mutate spec.data with the new inline data.
+   *  Returns true on success. */
+  async function fetchInto(spec: MarkSpec, url: string, shape: string): Promise<boolean> {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const resp = await fetch(url, { headers });
+      if (!resp.ok) {
+        console.warn(`[manifest] ${url} → ${resp.status}`);
+        return false;
+      }
+      const json = await resp.json();
+      (spec.data as any) = { source: 'inline', ...shapeToField(shape, json) };
+      return true;
+    } catch (e) {
+      console.warn(`[manifest] failed to fetch ${url}:`, e);
+      return false;
+    }
+  }
 
   for (const spec of manifest.marks) {
+    let urlSpec: { url: string; shape: string; refreshInterval: number } | null = null;
+
     if (spec.data.source === 'url') {
       const urlData = spec.data;
       const url = urlData.url;
 
       // Handle WebSocket data sources (wss:// or ws://)
       if (url.startsWith('wss://') || url.startsWith('ws://')) {
-        // Skip WebSocket sources for now — they require a live server
         console.warn(`[manifest] skipping WebSocket source ${url} (not yet connected)`);
         continue;
       }
 
-      try {
-        const headers: Record<string, string> = {};
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-        const resp = await fetch(url, { headers });
-        const json = await resp.json();
-        (spec.data as any) = { source: 'inline', ...shapeToField(urlData.shape, json) };
-      } catch (e) {
-        console.warn(`[manifest] failed to fetch ${url}:`, e);
-        continue;
-      }
+      urlSpec = { url, shape: urlData.shape, refreshInterval: urlData.refreshInterval ?? 0 };
+      const ok = await fetchInto(spec, url, urlData.shape);
+      if (!ok) continue;
     }
 
     const builder = builders.get(spec.type);
@@ -75,13 +99,27 @@ export async function loadManifest(manifest: DataspaceManifest, token?: string):
     }
 
     const loaded = builder(spec);
-    if (loaded) marks.push(loaded);
+    if (!loaded) continue;
+    marks.push(loaded);
+
+    /* If the mark has a URL source with a positive refreshInterval AND the
+     * builder produced a `refresh` callback, schedule periodic re-fetches. */
+    if (urlSpec && urlSpec.refreshInterval > 0 && loaded.refresh) {
+      const handle = setInterval(async () => {
+        const ok = await fetchInto(spec, urlSpec!.url, urlSpec!.shape);
+        if (ok) loaded.refresh!(spec);
+      }, urlSpec.refreshInterval * 1000);
+      intervals.push(handle);
+    }
   }
+
+  const dispose = () => { for (const h of intervals) clearInterval(h); intervals.length = 0; };
 
   return {
     name: manifest.name,
     scaleTag: manifest.scaleTag,
     marks,
+    dispose,
   };
 }
 

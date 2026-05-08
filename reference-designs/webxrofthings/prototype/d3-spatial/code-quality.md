@@ -1,9 +1,27 @@
 # Code Quality & Performance Audit
 
-**Snapshot:** 2026-04-29
-**Scope:** `prototype/d3-spatial/` — 55 TS files, ~8.8k LOC
+**Snapshot:** 2026-05-08 (revised; original audit 2026-04-29)
+**Scope:** `prototype/d3-spatial/` — 57 TS files, ~10.5k LOC
 **Target devices:** Meta Quest 3 (primary), Snap Spectacles, Apple Vision Pro (untested)
 **Renderer:** three.js r161 WebGL2; WebGPU evaluation pending
+
+---
+
+## 0. Status update since the original audit
+
+What's landed against this audit's recommendations between 2026-04-29 and 2026-05-08:
+
+| Area | Item | Status |
+|---|---|---|
+| §2.8 build script | `tsc --noEmit && vite build` (was leaking `.js` next to `.ts` source) | ✅ done |
+| §1.x material lifecycle | Per-mark `disposeGroupTree` helper + dispose hooks in line/bar/scatter/arc/streamgraph manifest builders, gallery live-cell `dispose()`, manifest loader `LoadResult.dispose()` wired to pagehide / HMR / `leave-dataspace` action | ✅ done (partial — see §1.2 below) |
+| §2.x lighting on dynamic geometry | Switched ridgeline + streamgraph from `MeshStandardMaterial` to `MeshBasicMaterial` (the per-frame `position` updates never recompute normals; the standard material was collapsing to ~black on optical passthrough) | ✅ done |
+| §2.x palette discipline | Ridgeline switched to a warm-only palette; line outline uses `TEXT.body` instead of pure white (was invisible on bright passthrough) | ✅ done |
+| §1.1 main.ts split | Still pending. Has *grown* during this period — privacy banner, mDNS-aware HUD action, multi-manifest dispose tracking, three new live-cell wires. Currently >1700 LOC. Higher priority than originally scored. | ⏳ |
+| §2.1 renderer flags / §2.3 raycast layers / §2.2 alloc pool | Not yet attempted. Highest perf ROI; gated by access to a Quest 3 for measuring before/after. | ⏳ |
+| §2.5 Troika text pooling/atlas | Not attempted. Bigger lift than originally hoped because troika doesn't yet target `WebGPURenderer`, so a pure-WebGL pool is still useful. | ⏳ |
+
+The audit's overall posture stands: WebGPU is gated by Troika; the highest-ROI WebGL work is the renderer-flags + raycast-layers + alloc-pool sweep (§2.1–2.3); main.ts urgently needs a split.
 
 ---
 

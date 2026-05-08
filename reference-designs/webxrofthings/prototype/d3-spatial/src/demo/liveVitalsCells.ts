@@ -103,6 +103,167 @@ export function buildLiveLineCell(opts: LiveLineOpts): LiveCell {
   };
 }
 
+/* ─── Live multi-target floor map — for /targets ─────────────────────── */
+
+export interface LiveTargetsOpts {
+  url: string;
+  refreshMs?: number;
+  width?: number;
+  height?: number;
+  /** Lateral half-extent in metres (cell maps -extent_m..+extent_m to ±width/2). */
+  extent_m?: number;
+  /** Forward extent in metres (cell maps 0..max_distance_m to bottom..top). */
+  max_distance_m?: number;
+  /** Half field-of-view in degrees, measured from the +y forward axis. */
+  fov_deg?: number;
+}
+
+const TARGET_PALETTE = [0xff7a8a, 0xffd97a, 0x88ff99]; // warm coral, amber, mint
+const MAX_TARGETS = 3;
+
+export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
+  const {
+    url,
+    refreshMs = 1000,
+    width = 0.32,
+    height = 0.16,
+    extent_m = 2.5,
+    max_distance_m = 4.0,
+    fov_deg = 50,
+  } = opts;
+
+  const group = new THREE.Group();
+  group.name = `live-targets:${url}`;
+
+  const fovRad = (fov_deg * Math.PI) / 180;
+  const radarCellY = -height / 2;
+  const tanFov = Math.tan(fovRad);
+
+  /* Map radar (x_m, y_m) → cell-panel coords. */
+  const mapXY = (x_m: number, y_m: number) => ({
+    x: (x_m / extent_m) * (width / 2),
+    y: radarCellY + (y_m / max_distance_m) * height,
+  });
+
+  /* Cone outline: two lines from the radar at ±fov, clipped to whichever
+   * cell boundary they hit first. */
+  let edgeX: number, edgeY: number;
+  const fullEdgeLat = height * tanFov;
+  if (fullEdgeLat > width / 2) {
+    edgeX = width / 2;
+    edgeY = (width / 2) / tanFov;
+  } else {
+    edgeX = fullEdgeLat;
+    edgeY = height;
+  }
+  const coneVerts = new Float32Array([
+    0, radarCellY, 0.001,   edgeX, radarCellY + edgeY, 0.001,
+    0, radarCellY, 0.001,  -edgeX, radarCellY + edgeY, 0.001,
+  ]);
+  const coneGeo = new THREE.BufferGeometry();
+  coneGeo.setAttribute('position', new THREE.BufferAttribute(coneVerts, 3));
+  const lineMat = new THREE.LineBasicMaterial({
+    color: TEXT.muted, transparent: true, opacity: 0.55,
+  });
+  group.add(new THREE.LineSegments(coneGeo, lineMat));
+
+  /* Range arc — 1.5 m, where HR/BR detection is spec'd. */
+  function arcGeo(radius_m: number, segments = 32): THREE.BufferGeometry {
+    const r = (radius_m / max_distance_m) * height;
+    const verts: number[] = [];
+    const a0 = Math.PI / 2 - fovRad;
+    const a1 = Math.PI / 2 + fovRad;
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const a = a0 + (a1 - a0) * t;
+      verts.push(r * Math.cos(a), radarCellY + r * Math.sin(a), 0.001);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+    return g;
+  }
+  const hrArcGeo = arcGeo(1.5);
+  group.add(new THREE.Line(hrArcGeo, lineMat));
+
+  /* Radar marker — small upward triangle at the bottom-center. */
+  const markerVerts = new Float32Array([
+    -0.005, radarCellY - 0.004, 0.002,
+     0.005, radarCellY - 0.004, 0.002,
+     0,     radarCellY + 0.005, 0.002,
+  ]);
+  const markerGeo = new THREE.BufferGeometry();
+  markerGeo.setAttribute('position', new THREE.BufferAttribute(markerVerts, 3));
+  markerGeo.setIndex([0, 1, 2]);
+  const markerMat = new THREE.MeshBasicMaterial({
+    color: TEXT.body, transparent: true, opacity: 0.9,
+  });
+  group.add(new THREE.Mesh(markerGeo, markerMat));
+
+  /* Pre-allocate target glyphs; reposition per refresh. */
+  const glyphGeo = new THREE.SphereGeometry(0.008, 12, 12);
+  const glyphMats: THREE.MeshBasicMaterial[] = [];
+  const glyphs: THREE.Mesh[] = [];
+  for (let i = 0; i < MAX_TARGETS; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: TARGET_PALETTE[i % TARGET_PALETTE.length]!,
+      transparent: true, opacity: 0.95,
+    });
+    glyphMats.push(mat);
+    const m = new THREE.Mesh(glyphGeo, mat);
+    m.visible = false;
+    group.add(m);
+    glyphs.push(m);
+  }
+
+  async function refresh() {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) return;
+      const data = await resp.json() as {
+        count?: number;
+        targets?: Array<{ id: number; x_m: number; y_m: number }>;
+      };
+      const targets = data.targets ?? [];
+
+      for (let i = 0; i < MAX_TARGETS; i++) {
+        const t = targets[i];
+        if (t && Number.isFinite(t.x_m) && Number.isFinite(t.y_m)) {
+          const p = mapXY(t.x_m, t.y_m);
+          /* Clamp to cell rectangle so a far-out target sticks at the edge
+           * rather than disappearing — keeps the radar's view of out-of-cone
+           * targets visible. */
+          const cx = Math.max(-width / 2, Math.min(width / 2, p.x));
+          const cy = Math.max(-height / 2, Math.min(height / 2, p.y));
+          glyphs[i]!.position.set(cx, cy, 0.005);
+          glyphs[i]!.visible = true;
+        } else {
+          glyphs[i]!.visible = false;
+        }
+      }
+    } catch {
+      for (const g of glyphs) g.visible = false;
+    }
+  }
+
+  refresh();
+  const handle = setInterval(refresh, refreshMs);
+
+  return {
+    group,
+    tick: () => { /* static between refreshes */ },
+    dispose: () => {
+      clearInterval(handle);
+      coneGeo.dispose();
+      hrArcGeo.dispose();
+      markerGeo.dispose();
+      glyphGeo.dispose();
+      lineMat.dispose();
+      markerMat.dispose();
+      for (const m of glyphMats) m.dispose();
+    },
+  };
+}
+
 /* ─── Live phases streamgraph — for /phases ───────────────────────────── */
 
 export interface LivePhasesOpts {
