@@ -86,23 +86,22 @@ void craw_status_led_tick(int dt_ms) {
             break;
 
         case CRAW_LED_IDLE: {
+            /* Yellow gentle breath — radar is up but nothing in the cone. */
             float frac = (float)(s_phase_ms % 4000) / 4000.0f;
-            float v = 0.20f + 0.20f * pulse(frac);
-            hsv_to_rgb(180.0f, 0.55f, v, &r, &g, &b);
+            float v = 0.25f + 0.25f * pulse(frac);
+            hsv_to_rgb(48.0f, 0.95f, v, &r, &g, &b);
+            (void)s_data;
             break;
         }
 
         case CRAW_LED_PRESENCE: {
-            /* HR-mapped hue: 50 BPM → 240° (blue-violet), 100+ BPM → 0° (red).
-             * Below 50 BPM clamp at 240°; above 100 clamp at 0°. */
-            float bpm = (float)s_data;
-            float hue;
-            if (bpm <= 50.0f) hue = 240.0f;
-            else if (bpm >= 100.0f) hue = 0.0f;
-            else hue = 240.0f * (1.0f - (bpm - 50.0f) / 50.0f);
+            /* Blue pulse — radar is actively tracking a person. The
+             * `data_int` slot is reserved for future use (e.g. BPM-tinted
+             * shade); for now the colour is single-tone for clarity. */
             float frac = (float)(s_phase_ms % 2000) / 2000.0f;
-            float v = 0.35f + 0.25f * pulse(frac);
-            hsv_to_rgb(hue, 0.90f, v, &r, &g, &b);
+            float v = 0.40f + 0.30f * pulse(frac);
+            hsv_to_rgb(220.0f, 0.95f, v, &r, &g, &b);
+            (void)s_data;
             break;
         }
 
@@ -119,6 +118,16 @@ void craw_status_led_tick(int dt_ms) {
         case CRAW_LED_TEST_FAIL:
             /* 4 Hz red flash — self-test failed. */
             if ((s_phase_ms / 125) % 2 == 0) { r = 220; g = 0; b = 0; }
+            break;
+
+        case CRAW_LED_WIFI_OFFLINE:
+            /* 4 Hz yellow blink — WiFi disconnected or all attempts failed.
+             * Same cadence as TEST_FAIL but yellow (hue 48°) at full brightness
+             * so the eye reads it as "alarm" not "background breath" the way
+             * the slow IDLE yellow does. Distinct from TEST_FAIL by colour. */
+            if ((s_phase_ms / 125) % 2 == 0) {
+                hsv_to_rgb(48.0f, 1.0f, 0.85f, &r, &g, &b);
+            }
             break;
     }
 

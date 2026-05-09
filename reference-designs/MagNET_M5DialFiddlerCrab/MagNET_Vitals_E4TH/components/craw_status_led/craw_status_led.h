@@ -21,11 +21,14 @@ extern "C" {
 typedef enum {
     CRAW_LED_OFF = 0,
     CRAW_LED_BOOTING,        /* solid amber */
-    CRAW_LED_IDLE,           /* slow soft cyan pulse, ~4s period */
-    CRAW_LED_PRESENCE,       /* pulse, hue mapped from BPM (50→blue-violet, 100→red) */
+    CRAW_LED_IDLE,           /* yellow breath — radar OK, no presence */
+    CRAW_LED_PRESENCE,       /* blue pulse — radar OK, person tracked  */
     CRAW_LED_ERROR,          /* 1 Hz red blink */
     CRAW_LED_TEST_OK,        /* solid green — self-test passed */
     CRAW_LED_TEST_FAIL,      /* 4 Hz red flash — self-test failed */
+    CRAW_LED_WIFI_OFFLINE,   /* 4 Hz yellow blink — WiFi disconnected or auth-failed.
+                                Preempts IDLE/PRESENCE when set so the offline state
+                                is unambiguous at a glance. */
 } craw_led_mode_t;
 
 /** Initialize the WS2812 driver on the given GPIO. One LED. */

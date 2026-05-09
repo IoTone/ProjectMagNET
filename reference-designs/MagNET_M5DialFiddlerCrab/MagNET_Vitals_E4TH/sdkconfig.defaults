@@ -29,3 +29,10 @@ CONFIG_CRAW_LED_GPIO=1
 CONFIG_CRAW_MR60_UART_PORT=0
 CONFIG_CRAW_MR60_RX_GPIO=17
 CONFIG_CRAW_MR60_TX_GPIO=16
+
+# Bump esp_http_server's per-request header buffer. Browsers send headers
+# (cookies, sec-ch-*, accept-language, etc.) that overflow the 512-byte
+# default and the device returns 431. The Vite dev proxy strips most of
+# these but raw `curl` or other clients won't, so size it generously.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=4096
+CONFIG_HTTPD_MAX_URI_LEN=512

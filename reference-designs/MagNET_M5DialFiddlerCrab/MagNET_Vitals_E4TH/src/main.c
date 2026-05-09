@@ -56,6 +56,7 @@
 #include "craw_ble_provision.h"
 
 #include "http_vitals.h"
+#include "mdns.h"
 
 static const char *TAG = "vitals";
 
@@ -115,9 +116,44 @@ static void setup_usb_serial(void) {
     usb_serial_jtag_driver_install(&cfg);
 }
 
+/* ───── mDNS — resolve `magnet-vitals.local` on the LAN ─────────────── */
+
+#define VITALS_MDNS_HOSTNAME       "magnet-vitals"
+#define VITALS_MDNS_INSTANCE_NAME  "MagNET Vitals"
+
+static bool s_mdns_started = false;
+
+static void start_mdns(void) {
+    if (s_mdns_started) return;
+    /* Idempotent across the WiFi-flap path: WiFi up → start; WiFi down →
+     * leave running (mdns can be reused; no need to free/reinit). */
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) { ESP_LOGW(TAG, "mdns_init: %s", esp_err_to_name(err)); return; }
+    err = mdns_hostname_set(VITALS_MDNS_HOSTNAME);
+    if (err != ESP_OK) { ESP_LOGW(TAG, "mdns_hostname_set: %s", esp_err_to_name(err)); return; }
+    err = mdns_instance_name_set(VITALS_MDNS_INSTANCE_NAME);
+    if (err != ESP_OK) ESP_LOGW(TAG, "mdns_instance_name_set: %s", esp_err_to_name(err));
+
+    /* Advertise the HTTP server on port 80. If two MagNET-Vitals nodes are
+     * on the same LAN they'll collide — add a MAC suffix to the hostname
+     * if you ever need multiple devices simultaneously. */
+    mdns_txt_item_t txt[] = {
+        { "role",  "vitals" },
+        { "model", "MR60BHA2" },
+    };
+    err = mdns_service_add(NULL, "_http", "_tcp", 80, txt, sizeof(txt) / sizeof(txt[0]));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mdns_service_add: %s", esp_err_to_name(err));
+        return;
+    }
+    s_mdns_started = true;
+    usb_printf("[mDNS] http://%s.local/ resolved on the LAN\r\n", VITALS_MDNS_HOSTNAME);
+}
+
 /* ───── Provisioning state mirrored to BLE ──────────────────────────── */
 
-static volatile int s_prov_state = 0;   /* mirrors craw_ble_prov_state_t */
+static volatile int  s_prov_state  = 0;   /* mirrors craw_ble_prov_state_t */
+static volatile bool s_wifi_online = false;  /* drives WIFI_OFFLINE LED override */
 static char s_ip_str[20] = "N/A";
 
 static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
@@ -129,8 +165,11 @@ static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
             craw_ble_provision_set_ip(s_ip_str);
             craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTED);
             s_prov_state = CRAW_BLE_PROV_CONNECTED;
+            s_wifi_online = true;
+            start_mdns();
             if (http_vitals_start() == ESP_OK) {
-                usb_printf("[HTTP] vitals server up at http://%s/\r\n", s_ip_str);
+                usb_printf("[HTTP] vitals server up at http://%s/  (or http://%s.local/)\r\n",
+                           s_ip_str, VITALS_MDNS_HOSTNAME);
             }
             break;
         case CRAW_WIFI_EVENT_DISCONNECTED:
@@ -138,6 +177,7 @@ static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
             strncpy(s_ip_str, "N/A", sizeof(s_ip_str));
             craw_ble_provision_set_ip(s_ip_str);
             http_vitals_stop();
+            s_wifi_online = false;
             break;
         case CRAW_WIFI_EVENT_CONNECT_FAILED:
             usb_print("\r\n[WiFi] connect failed\r\n");
@@ -145,6 +185,7 @@ static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
             craw_ble_provision_set_ip(s_ip_str);
             craw_ble_provision_set_status(CRAW_BLE_PROV_FAILED);
             s_prov_state = CRAW_BLE_PROV_FAILED;
+            s_wifi_online = false;
             break;
     }
 }
@@ -177,6 +218,7 @@ static void on_prov_event(craw_ble_prov_state_t state,
 /* ───── Vitals tick task (radar→LED + periodic lux) ─────────────────── */
 
 static volatile bool s_led_enabled = true;
+static volatile bool s_radar_ok    = false;   /* set by self-test; gates vitals_task LED control */
 static int64_t s_lux_last_us = 0;
 static float   s_lux_value   = 0.0f;
 static bool    s_lux_valid   = false;
@@ -190,14 +232,22 @@ static void vitals_task(void *arg) {
         craw_mr60_state_t s;
         craw_mr60_get_state(&s);
 
-        if (s_led_enabled) {
-            if (s.present && s.bpm > 0.0f) {
-                craw_status_led_set_mode(CRAW_LED_PRESENCE, (int)(s.bpm + 0.5f));
-            } else {
-                craw_status_led_set_mode(CRAW_LED_IDLE, 0);
-            }
-        } else {
+        if (!s_led_enabled) {
             craw_status_led_set_mode(CRAW_LED_OFF, 0);
+        } else if (!s_radar_ok) {
+            /* Self-test never passed (or rebind in progress) — leave the LED
+             * in its current TEST_FAIL flashing-red pattern. Don't overwrite. */
+        } else if (!s_wifi_online) {
+            /* Radar's fine but WiFi is down (never connected, lost link, or
+             * all auth attempts failed). Yellow rapid-blink preempts the
+             * radar-driven LED so the offline state is visible at a glance —
+             * it's the most common reason the unit appears "stuck" without
+             * the user knowing why. */
+            craw_status_led_set_mode(CRAW_LED_WIFI_OFFLINE, 0);
+        } else if (s.present) {
+            craw_status_led_set_mode(CRAW_LED_PRESENCE, (int)(s.bpm + 0.5f));
+        } else {
+            craw_status_led_set_mode(CRAW_LED_IDLE, 0);
         }
         craw_status_led_tick(LOOP_TICK_MS);
 
@@ -310,10 +360,11 @@ static void w_mr60_test(void) {
         usb_print("  PASS\r\n");
         craw_status_led_set_mode(CRAW_LED_TEST_OK, 0);
         vTaskDelay(pdMS_TO_TICKS(2000));
+        s_radar_ok = true;     /* hand LED control back to vitals_task (yellow/blue) */
     } else {
         usb_print("  FAIL — run `mr60-diag` to see counters\r\n");
         craw_status_led_set_mode(CRAW_LED_TEST_FAIL, 0);
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        s_radar_ok = false;    /* keep flashing red until next successful test */
     }
     forth_push(ok ? 1 : 0);
 }
@@ -328,6 +379,10 @@ static void w_mr60_rebind(void) {
     int rx = (int)forth_pop();
     usb_printf("\r\nRebinding radar UART → port=%d  rx=GPIO%d  tx=GPIO%d\r\n",
                CONFIG_CRAW_MR60_UART_PORT, rx, tx);
+    /* Drop OK flag so the LED stays in its current pattern until `mr60-test`
+     * confirms the new pins actually produce frames. */
+    s_radar_ok = false;
+    craw_status_led_set_mode(CRAW_LED_TEST_FAIL, 0);
     craw_mr60_deinit();
     vTaskDelay(pdMS_TO_TICKS(150));
     esp_err_t err = craw_mr60_init((uart_port_t)CONFIG_CRAW_MR60_UART_PORT, rx, tx);
@@ -454,6 +509,7 @@ void app_main(void) {
         usb_print("  RESULT: PASS — radar wiring + protocol verified.\r\n\r\n");
         craw_status_led_set_mode(CRAW_LED_TEST_OK, 0);
         vTaskDelay(pdMS_TO_TICKS(2500));   /* hold green so the user sees it */
+        s_radar_ok = true;                 /* unlock IDLE/PRESENCE in vitals_task */
     } else {
         usb_print("  RESULT: FAIL.\r\n");
         if (diag.bytes_received == 0) {
@@ -475,10 +531,9 @@ void app_main(void) {
         }
         usb_print("    The Forth REPL still works; try `mr60-diag` periodically while you debug.\r\n\r\n");
         craw_status_led_set_mode(CRAW_LED_TEST_FAIL, 0);
-        /* Hold the FAIL pattern for 5 s, then let the normal vitals_task take over
-         * (which will fall back to IDLE if presence stays 0). The user can re-run
-         * the self-test on demand from the REPL via `mr60-test`. */
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        /* Stay flashing red until a successful re-init via `mr60-rebind` + `mr60-test`.
+         * vitals_task respects s_radar_ok=false and won't overwrite the LED. */
+        s_radar_ok = false;
     }
 
     /* Provisioning. */
