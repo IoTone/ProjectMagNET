@@ -20,13 +20,35 @@ const __dirname = dirname(__filename);
 export const CHAR_SET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 6;
 
+/**
+ * Hardcoded "demo" codes that always resolve to a specific use-case manifest.
+ * Coexist with the rotating dev code — fixed codes are checked first, the
+ * rotating code is checked second. Each fixed code corresponds to one
+ * dataspace, so the manifest path can be selected per-code instead of being
+ * a server-wide default.
+ *
+ * Paths are resolved relative to the `examples/` directory at server-create
+ * time. Override via the `fixedCodes` option for tests.
+ */
+export const DEFAULT_FIXED_CODES: Record<string, string> = {
+  DEMO01: 'uc1-vitals.json',
+  DEMO02: 'uc2-room.json',
+  DEMO03: 'uc3-poster.json',
+  DEMO04: 'uc4-airplane.json',
+};
+
 export interface JoinServerOptions {
   /** Default 'hlxr-dev-secret'. */
   jwtSecret?: string;
   /** Default 300 (5 min). 0 disables rotation timer. */
   rotationSeconds?: number;
-  /** Path to manifest JSON. Default: examples/room-dataspace.json relative to server/ . */
+  /** Default manifest for the rotating dev code. examples/room-dataspace.json by default. */
   manifestPath?: string;
+  /**
+   * Map of fixed code → absolute manifest path. Defaults to DEFAULT_FIXED_CODES
+   * resolved against `examples/`. Pass a custom map (with absolute paths) in tests.
+   */
+  fixedCodes?: Record<string, string>;
   /** Per-IP rate limit per 60s window. Default 5. */
   rateLimitPerMinute?: number;
   /** Whether to start the rotation interval timer. Default true. */
@@ -47,7 +69,18 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
   const JWT_SECRET = opts.jwtSecret ?? 'hlxr-dev-secret';
   const ROTATION_SECONDS = opts.rotationSeconds ?? 300;
   const RATE_LIMIT = opts.rateLimitPerMinute ?? 5;
-  const manifestPath = opts.manifestPath ?? join(__dirname, '..', 'examples', 'room-dataspace.json');
+  const examplesDir = join(__dirname, '..', 'examples');
+  const manifestPath = opts.manifestPath ?? join(examplesDir, 'room-dataspace.json');
+  // Resolve fixed-code paths against examples/ when caller didn't provide
+  // absolute paths. Tests pass absolute paths to point at fixtures.
+  const fixedCodes: Record<string, string> = (() => {
+    const raw = opts.fixedCodes ?? DEFAULT_FIXED_CODES;
+    const resolved: Record<string, string> = {};
+    for (const [code, p] of Object.entries(raw)) {
+      resolved[code.toUpperCase()] = p.startsWith('/') ? p : join(examplesDir, p);
+    }
+    return resolved;
+  })();
 
   const app = express();
   app.use(express.json());
@@ -115,6 +148,27 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
 
     const upper = code.toUpperCase();
 
+    // Fixed codes win over the rotating code so a tester typing DEMO03 always
+    // gets UC3, even on the rare case the rotating generator happens to hit
+    // the same letters. (CHAR_SET excludes 0/1 so DEMO0X can't actually be
+    // rotated into, but we belt-and-suspenders the order anyway.)
+    if (upper in fixedCodes) {
+      const dataspace = upper.toLowerCase();
+      const session = crypto.randomUUID();
+      const token = jwt.sign(
+        { dataspace, session, manifest_path: fixedCodes[upper], iat: Math.floor(Date.now() / 1000) },
+        JWT_SECRET,
+        { expiresIn: '1h' },
+      );
+      res.json({
+        status: 'accepted',
+        token,
+        manifest_url: '/api/v1/manifest',
+        dataspace,
+      });
+      return;
+    }
+
     if (upper === currentCode || upper === previousCode) {
       const session = crypto.randomUUID();
       const token = jwt.sign(
@@ -147,17 +201,24 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
     }
 
     const token = auth.slice(7);
+    let payload: jwt.JwtPayload;
     try {
-      jwt.verify(token, JWT_SECRET);
+      payload = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload;
     } catch {
       res.status(401).json({ error: 'invalid_token' });
       return;
     }
 
+    // Per-code dispatch: tokens minted for fixed codes carry their manifest
+    // path in `manifest_path`. Tokens from the rotating code fall through to
+    // the server's default manifestPath, preserving prior behaviour.
+    const path = typeof payload.manifest_path === 'string'
+      ? payload.manifest_path
+      : manifestPath;
     try {
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      const manifest = JSON.parse(readFileSync(path, 'utf-8'));
       res.json(manifest);
-    } catch (e) {
+    } catch {
       res.status(500).json({ error: 'manifest_read_failed' });
     }
   });
@@ -188,6 +249,10 @@ if (isMain) {
 
   console.log(`[join-server] Initial code: ${server.getCurrentCode()} (rotates every ${ROTATION_SECONDS}s)`);
   console.log(`[join-server] Set CODE_ROTATION_SECONDS env var to change (current: ${ROTATION_SECONDS}s)`);
+  console.log(`[join-server] Fixed UC codes:`);
+  for (const [code, path] of Object.entries(DEFAULT_FIXED_CODES)) {
+    console.log(`  ${code}  →  ${path}`);
+  }
 
   server.app.listen(PORT, () => {
     console.log(`[join-server] Mock join server running on http://localhost:${PORT}`);

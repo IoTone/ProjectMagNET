@@ -158,6 +158,113 @@ describe('mock-join-server — GET /api/v1/manifest', () => {
   });
 });
 
+describe('mock-join-server — fixed UC codes', () => {
+  // Build server with custom fixed codes pointing at fixtures we know exist.
+  // Using examples/* keeps the test grounded in real manifests instead of mocks.
+  function buildWithFixedCodes() {
+    return createJoinServer({
+      jwtSecret: JWT_SECRET,
+      startRotationTimer: false,
+      rateLimitPerMinute: 1000,
+    });
+  }
+
+  it.each([
+    ['DEMO01', 'demo01'],
+    ['DEMO02', 'demo02'],
+    ['DEMO03', 'demo03'],
+    ['DEMO04', 'demo04'],
+  ])('%s is accepted and resolves to dataspace=%s', async (code, dataspace) => {
+    const s = buildWithFixedCodes();
+    const res = await request(s.app).post('/api/v1/join').send({ code });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('accepted');
+    expect(res.body.dataspace).toBe(dataspace);
+    expect(typeof res.body.token).toBe('string');
+    s.stopRotationTimer();
+  });
+
+  it('is case-insensitive (demo03 → DEMO03)', async () => {
+    const s = buildWithFixedCodes();
+    const res = await request(s.app).post('/api/v1/join').send({ code: 'demo03' });
+    expect(res.body.status).toBe('accepted');
+    expect(res.body.dataspace).toBe('demo03');
+    s.stopRotationTimer();
+  });
+
+  it('serves the per-code manifest, not the rotating-code default', async () => {
+    const s = buildWithFixedCodes();
+    // UC1 manifest has the vitals device; UC3 has the gallery marks.
+    // Validating each code should fetch a manifest with the corresponding shape.
+    const j1 = await request(s.app).post('/api/v1/join').send({ code: 'DEMO01' });
+    const m1 = await request(s.app)
+      .get('/api/v1/manifest')
+      .set('Authorization', `Bearer ${j1.body.token}`);
+    expect(m1.status).toBe(200);
+    expect(m1.body.name).toBe('kords-personal-health');
+    expect(Array.isArray(m1.body.udm_devices)).toBe(true);
+    expect(m1.body.udm_devices.length).toBeGreaterThan(0);
+
+    const j3 = await request(s.app).post('/api/v1/join').send({ code: 'DEMO03' });
+    const m3 = await request(s.app)
+      .get('/api/v1/manifest')
+      .set('Authorization', `Bearer ${j3.body.token}`);
+    expect(m3.status).toBe(200);
+    expect(m3.body.name).toBe('uc3-poster-session');
+    expect(Array.isArray(m3.body.marks)).toBe(true);
+
+    s.stopRotationTimer();
+  });
+
+  it('falls back to the default manifest for tokens minted by the rotating code', async () => {
+    const s = buildWithFixedCodes();
+    const j = await request(s.app).post('/api/v1/join').send({ code: s.getCurrentCode() });
+    const m = await request(s.app)
+      .get('/api/v1/manifest')
+      .set('Authorization', `Bearer ${j.body.token}`);
+    expect(m.status).toBe(200);
+    // Default is examples/room-dataspace.json — name is 'lab-room-alpha'.
+    expect(m.body.name).toBe('lab-room-alpha');
+    s.stopRotationTimer();
+  });
+
+  it('rejects an unknown code that resembles a fixed code (e.g. DEMO99)', async () => {
+    const s = buildWithFixedCodes();
+    const res = await request(s.app).post('/api/v1/join').send({ code: 'DEMO99' });
+    expect(res.body.status).toBe('rejected');
+    s.stopRotationTimer();
+  });
+
+  it('honors a custom fixedCodes map', async () => {
+    const s = createJoinServer({
+      jwtSecret: JWT_SECRET,
+      startRotationTimer: false,
+      rateLimitPerMinute: 1000,
+      // Use uc4-airplane.json as the target so we can distinguish it from defaults.
+      fixedCodes: { TEST01: 'uc4-airplane.json' },
+    });
+    const j = await request(s.app).post('/api/v1/join').send({ code: 'TEST01' });
+    expect(j.body.status).toBe('accepted');
+    expect(j.body.dataspace).toBe('test01');
+    const m = await request(s.app)
+      .get('/api/v1/manifest')
+      .set('Authorization', `Bearer ${j.body.token}`);
+    expect(m.body.name).toBe('uc4-airplane');
+    s.stopRotationTimer();
+  });
+
+  it('default-untouched DEMO01 fixed code is NOT also accepted as the rotating code', async () => {
+    // Belt-and-suspenders: confirm fixed codes don't accidentally enter the
+    // expiredCodes set when the rotating code rotates past them.
+    const s = buildWithFixedCodes();
+    for (let i = 0; i < 50; i++) s.rotateCode();
+    const res = await request(s.app).post('/api/v1/join').send({ code: 'DEMO01' });
+    expect(res.body.status).toBe('accepted');
+    expect(res.body.dataspace).toBe('demo01');
+    s.stopRotationTimer();
+  });
+});
+
 describe('mock-join-server — GET /api/v1/code', () => {
   it('returns current code and a positive expiresIn', async () => {
     const s = createJoinServer({ jwtSecret: JWT_SECRET, rotationSeconds: 300, startRotationTimer: false });

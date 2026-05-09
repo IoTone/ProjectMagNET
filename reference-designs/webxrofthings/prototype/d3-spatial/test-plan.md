@@ -282,21 +282,40 @@ Start the dev server: `VITALS_HOST=http://magnet-vitals.local npm run dev`. Open
 | **Live data cells** | gallery → bottom row | HR/BR placeholder lines visible; phases streamgraph scrolls; targets cell shows cone outline |
 | **Hover feedback** | mouse-hover any mark | scale 1.05 + emissive bump + outline; inspector card pops up nearby |
 
-### 6.3 UC3 dataspace end-to-end (~15 minutes)
+### 6.3 UC1 vitals dataspace via DEMO01 (~15 minutes)
 
 With the device flashed and on the same LAN as your laptop:
 
 1. **Device boot:** `pio run -e esp32c6 -t upload -t monitor`. LED → amber → solid green (self-test pass) → cyan idle. Banner shows `radar: UART0 rx=GPIO17 tx=GPIO16` and `LED: GPIO1`.
 2. **Provisioning:** if first flash, BLE-provision via nRF Connect to your WiFi.
 3. **mDNS:** at the REPL, `prov-status`. With WiFi up, console prints `[mDNS] http://magnet-vitals.local/ resolved on the LAN`. Confirm: `curl -s http://magnet-vitals.local/vitals | jq .` returns JSON.
-4. **Open UC3:** browser → `localhost:5173/?manifest=/examples/uc3-personal-health.json`.
+4. **Open UC1:** browser → `localhost:5173/`. Type **DEMO01** in the join slots and press Submit.
    - Privacy banner pops up (warm coral border, "Privacy notice" title, "I understand" button).
    - Click "I understand" → banner hides, dataspace marks visible.
-   - Verify 4 marks: HR line, BR line, phases streamgraph (scrolling), HR radial gauge.
+   - Verify 4 marks from `examples/uc1-vitals.json`: HR line, BR line, phases streamgraph (scrolling), HR radial gauge.
    - **Walk into the radar cone**: device LED flips cyan → blue (presence pulse). Targets cell shows a coral glyph at your position. After ~1 minute, HR line populates with first sample.
 5. **Show-privacy HUD action:** click 🔒 in the dataspace HUD → banner re-opens.
 6. **Leave-dataspace:** click 🚪 → marks disappear, join panel returns. (Confirms `manifestController.dispose()` clears the active intervals.)
 7. **Refresh-interval:** open DevTools → Network. Filter to `/api/v1/vitals/`. Watch HR-history fetch every 30 s and phases fetch every 1.5 s.
+
+(URL-based loader `?manifest=/examples/uc1-vitals.json` still works for direct testing without the join panel.)
+
+### 6.3.1 Fixed UC join codes (~3 minutes, hardware-free)
+
+The mock-join-server resolves `DEMO01–04` to per-use-case manifests. Quick check that all four codes route correctly:
+
+| Code   | Dataspace          | Manifest                | Expected content (placeholder content for unbuilt UCs)             |
+| ------ | ------------------ | ----------------------- | ------------------------------------------------------------------ |
+| DEMO01 | UC1 vitals         | `uc1-vitals.json`       | Vitals device + 4 marks (HR/BR/phases/targets) — needs real device |
+| DEMO02 | UC2 home auto.     | `uc2-room.json`         | Camera + temperature scaffold — pending P4 build-out               |
+| DEMO03 | UC3 poster session | `uc3-poster.json`       | Tree/treemap/sankey marks — pending P2 curated content             |
+| DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Single placeholder scatter — pending P5                            |
+
+Run `npm run server` (the join server) in a second terminal, then `npm run dev`. From the join panel, type each code in turn and verify:
+- Code accepted (green checkmark, "Connected to demo-XXX")
+- Manifest renders something visible (even if minimal for UC2/UC4)
+- Leave-dataspace returns to the join panel cleanly
+- Rotating dev code (printed in the server console) still resolves to the default `room-dataspace.json` for backward compatibility
 
 ### 6.4 Live cells in the gallery (~5 minutes)
 

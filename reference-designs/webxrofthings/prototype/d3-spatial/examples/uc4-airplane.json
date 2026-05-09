@@ -1,0 +1,36 @@
+{
+  "version": "1",
+  "name": "uc4-airplane",
+  "scaleTag": "vehicle",
+  "owner": "dkords@gmail.com",
+  "acousticEnvironment": "vehicle",
+
+  "udm_version": "1.0",
+  "udm_doc_version": "0.1.0",
+
+  "_comment": "UC4 placeholder. Real content lands in P5 (IMU sim + HLS player + spatial photo gallery).",
+
+  "udm_devices": [],
+  "usm_services": [],
+
+  "marks": [
+    {
+      "id": "uc4-placeholder",
+      "type": "scatter",
+      "title": "Airplane dataspace",
+      "subtitle": "Coming in P5: IMU sim · HLS video · spatial photos",
+      "data": {
+        "source": "inline",
+        "points": [
+          { "x": 0, "y": 0, "z": 0, "label": "fuselage" },
+          { "x": -0.4, "y": 0, "z": 0, "label": "left-wing" },
+          { "x": 0.4, "y": 0, "z": 0, "label": "right-wing" },
+          { "x": 0, "y": 0.1, "z": -0.2, "label": "tail" }
+        ]
+      },
+      "config": {},
+      "drillable": false,
+      "hoverable": true
+    }
+  ]
+}

@@ -236,7 +236,9 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
     currentState = newState;
     switch (newState) {
       case JoinState.IDLE:
-        updateStatus('Enter the code shown on the host device', TEXT.muted);
+        // Mention the fixed UC codes alongside the generic prompt so testers
+        // can jump directly into a use-case dataspace without a host device.
+        updateStatus('Enter a code  ·  try DEMO01 / DEMO02 / DEMO03 / DEMO04', TEXT.muted);
         break;
       case JoinState.ENTERING: {
         const n = filledCount();
