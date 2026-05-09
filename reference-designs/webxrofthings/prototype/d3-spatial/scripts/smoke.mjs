@@ -399,6 +399,47 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 
+// ─── Staging: mock the device endpoints so smoke is hermetic ───────────
+//
+// The dev server proxies `/api/v1/vitals/*` → MagNET Vitals device and
+// `/camera/*` → ESP32-CAM. Smoke must NOT depend on a live LAN, so we
+// intercept those URLs at the browser level with Playwright route() and
+// return canned responses. This way the live cells exercise their real
+// fetch+swap path against deterministic data, and the rest of the page
+// still 500-free.
+//
+// The bodies match the device's documented response shapes (see
+// MagNET_Vitals_E4TH/README.md → HTTP endpoints). Empty arrays preserve
+// the "placeholder visible" visual state that the existing baseline shots
+// were taken with — non-empty mocks would require re-baselining.
+
+async function mockDeviceEndpoints(page) {
+  await page.route(/\/api\/v1\/vitals\/heart-rate\/history$/, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ samples: [] }) }));
+  await page.route(/\/api\/v1\/vitals\/breathing\/history$/, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ samples: [] }) }));
+  await page.route(/\/api\/v1\/vitals\/phases$/, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) }));
+  await page.route(/\/api\/v1\/vitals\/targets$/, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ count: 0, targets: [] }) }));
+  await page.route(/\/api\/v1\/vitals\/vitals$/, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      bpm: 0, rpm: 0, presence: false, distance_cm: 0, range_flag: 0, lux: null,
+      total_phase: 0, breath_phase: 0, heart_phase: 0, target_count: 0,
+      fw_version: '0x00000000', timestamp_us: 0,
+    })}));
+  // Catch-all for any other vitals endpoint — empty 200.
+  await page.route(/\/api\/v1\/vitals\//, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
+  // Camera frames — 1×1 transparent PNG keeps the videoPanel placeholder.
+  const PIXEL_PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+    'base64',
+  );
+  await page.route(/\/camera\//, route =>
+    route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL_PNG }));
+}
+
 const errors = [];
 page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
 page.on('console', msg => {
@@ -409,6 +450,7 @@ page.on('console', msg => {
 
 const shots = [];
 try {
+  await mockDeviceEndpoints(page);
   await page.goto('http://127.0.0.1:5179/', { waitUntil: 'load', timeout: 15000 });
   await page.waitForFunction(() => (window).__demo?.setCameraPose, { timeout: 10000 });
   await sleep(1500);

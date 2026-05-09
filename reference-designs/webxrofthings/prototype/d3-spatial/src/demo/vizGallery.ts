@@ -98,27 +98,40 @@ export function buildVizGallery(): GalleryResult {
   });
 
   // Live MagNET Vitals device — pulled through the Vite proxy (`/api/v1/vitals/*`).
-  // Cells show a placeholder line until the first fetch lands. HR/BR refresh at
-  // 30 s; phases refresh at 1.5 s for a continuously-scrolling waveform.
+  // HR/BR use snapshot endpoints (`/heart-rate`, `/breathing`) and accumulate
+  // into a client-side rolling buffer — the device's `/history` endpoints
+  // only update every 60 s (firmware ring-buffer cadence), which makes the
+  // line look frozen in a demo. 3 s × 60 buffer = 3-minute trace; cadence is
+  // a deliberate compromise between visible motion and not overloading the
+  // device's esp_http_server (4 cells × ~0.5 req/s each was crashing the C6).
   const liveHr = buildLiveLineCell({
-    url: '/api/v1/vitals/heart-rate/history',
-    refreshMs: 30000, width: 0.32, height: 0.16,
+    url: '/api/v1/vitals/heart-rate',
+    refreshMs: 3000, width: 0.32, height: 0.16,
     color: 0xff7a8a, vMin: 40, vMax: 130,
+    pluck: (j) => (j?.presence && typeof j.bpm === 'number' && j.bpm > 0) ? j.bpm : null,
+    historyLength: 60,
   });
   const liveBr = buildLiveLineCell({
-    url: '/api/v1/vitals/breathing/history',
-    refreshMs: 30000, width: 0.32, height: 0.16,
+    url: '/api/v1/vitals/breathing',
+    refreshMs: 3000, width: 0.32, height: 0.16,
     color: 0xffb873, vMin: 4, vMax: 30,
+    pluck: (j) => (typeof j?.rpm === 'number' && j.rpm > 0) ? j.rpm : null,
+    historyLength: 60,
   });
   const livePhases = buildLivePhasesCell({
     url: '/api/v1/vitals/phases',
     refreshMs: 1500, width: 0.32, height: 0.16,
     windowSize: 120, scrollSpeed: 12,
   });
+  // Tabletop tilt (~70°) lays the floor map mostly horizontal so the orbs
+  // read as physical bodies in space rather than dots on a wall poster.
   const liveTargets = buildLiveTargetsCell({
     url: '/api/v1/vitals/targets',
     refreshMs: 1000, width: 0.32, height: 0.16,
     extent_m: 2.5, max_distance_m: 4.0, fov_deg: 50,
+    tilt_rad: (70 * Math.PI) / 180,
+    glyph_radius: 0.014,
+    glyph_lift: 0.03,
   });
 
   const specs = [

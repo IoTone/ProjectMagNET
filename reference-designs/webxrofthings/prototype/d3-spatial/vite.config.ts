@@ -44,11 +44,32 @@ export default defineConfig({
         target: 'http://localhost:3001',
         changeOrigin: true,
       },
+      // ESP32-CAM proxy. Override the host in your shell when DHCP shifts:
+      //   CAMERA_HOST=http://192.168.1.55  npm run dev
+      //   CAMERA_HOST=http://magnet-cam-8610.local  npm run dev
+      // - rewrite drops the `/camera` prefix so /camera/capture → /capture on the device
+      // - cameraAgent forces IPv4 + no keep-alive (the ESP32-CAM's tiny TCP stack
+      //   gives ECONNRESET on the second request of a keep-alive session and
+      //   sometimes resolves over IPv6 with no listener)
+      // - configure/proxyReq drops browser headers the camera's 512-byte header
+      //   buffer can't hold; same pattern as /api/v1/vitals above
       '/camera': {
-        target: 'http://magnet-cam-80e4.local/',
+        target: process.env.CAMERA_HOST || 'http://magnet-cam-8610.local',
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/camera/, ''),
         agent: cameraAgent,
+        configure: (proxy: any) => {
+          proxy.on('proxyReq', (proxyReq: any) => {
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
       } as any,
     },
   },

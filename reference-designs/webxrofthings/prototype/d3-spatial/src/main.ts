@@ -8,13 +8,13 @@ import { buildDemoScene } from './demo/marks';
 import { buildVizGallery } from './demo/vizGallery';
 import { Interact, hoverFeedback } from './interact/Interact';
 import { InspectorCard } from './ui/InspectorCard';
-import { Toolbar } from './ui/Toolbar';
+import { createToolbarController } from './ui/toolbarController';
 import { TEXT } from './ui/palette';
 import { NodeHoverFx } from './ui/NodeHoverFx';
 import { Breadcrumb } from './ui/Breadcrumb';
 import { VizHud } from './ui/VizHud';
 import { SpatialHoverAudio } from './audio/SpatialHoverAudio';
-import { AmbientBed } from './audio/AmbientBed';
+import { createAmbientController } from './audio/ambientController';
 import { makeAmbientFoaBuffer } from './audio/proceduralBed';
 import { DragBrush } from './interact/DragBrush';
 import { FingertipGrab } from './interact/FingertipGrab';
@@ -24,22 +24,35 @@ import { syntheticHR } from './demo/heartRate';
 import { createJoinPanel } from './onboarding/JoinPanel';
 import { JoinState } from './onboarding/types';
 import { registerAllBuilders } from './manifest/builders';
-import { loadManifest } from './manifest/loader';
+import { createManifestController, type ManifestController } from './manifest/manifestController';
 import { renderManifestToScene } from './manifest/renderManifest';
-import { createPrivacyBanner, privacyFactsFromManifest, PrivacyBanner } from './ui/PrivacyBanner';
+import { createPrivacyBannerController, type PrivacyBannerController } from './ui/privacyBannerController';
 import type { DataspaceManifest } from './manifest/schema';
 import { DEFAULT_HUD_ITEMS } from './manifest/schema';
 import { DataspaceMenu } from './ui/DataspaceMenu';
 import { HandMenu } from './ui/HandMenu';
 
 const renderer = new THREE.WebGLRenderer({
-  antialias: true,
+  // antialias: false → on Quest 3 we rely on the WebXR layer's multisample
+  //   framebuffer (MSAA 4x by default) instead of paying for context-level MSAA
+  //   that the XR composite would discard anyway. Desktop preview falls back to
+  //   ordinary aliased rendering, which the smoke shots still capture cleanly.
+  // alpha: true → required for `alpha=0` clear colour during the XR session
+  //   (passthrough composition).
+  // preserveDrawingBuffer dropped → was the single biggest non-obvious mobile
+  //   cost; defeats tile-based deferred renderers' eviction. We only ever read
+  //   the framebuffer for screenshots, which the smoke harness does via
+  //   Playwright's page.screenshot(), not WebGL readback.
+  antialias: false,
   alpha: true,
-  preserveDrawingBuffer: true,
+  powerPreference: 'high-performance',
 });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
+renderer.shadowMap.enabled = false;          // we don't render shadows
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.xr.setFramebufferScaleFactor(0.9);  // foveation hint; dial 0.7–1.0 per device
 renderer.setClearColor(0x0b1220, 1);
 
 renderer.xr.addEventListener('sessionstart', () => {
@@ -728,50 +741,16 @@ const sunburstEntry = setupHierarchyUI('sunburst', sunburstViz, sunburstCell);
 const packEntry = setupHierarchyUI('pack', packViz, packCell);
 
 const audio = new SpatialHoverAudio(camera);
-let ambientBed: AmbientBed | null = null;
-let ambientState: 'off' | 'loading' | 'on' | 'error' = 'off';
 
 const initAudioOnce = () => { audio.init(); };
 window.addEventListener('pointerdown', initAudioOnce, { once: true });
 window.addEventListener('keydown', initAudioOnce, { once: true });
 
-async function startAmbient() {
-  if (ambientState !== 'off' && ambientState !== 'error') return;
-  ambientState = 'loading';
-  updateAudioHud();
-  try {
-    await audio.init();
-    const ctx = audio.listener.context as AudioContext;
-    if (ctx.state === 'suspended') await ctx.resume();
-    const buf = makeAmbientFoaBuffer(ctx, 4);
-    ambientBed = new AmbientBed(ctx, camera);
-    await ambientBed.loadFromBuffer(buf, { order: 1, gain: 0.35 });
-    ambientBed.start();
-    ambientState = 'on';
-  } catch (e) {
-    console.error('ambient bed failed:', e);
-    ambientState = 'error';
-  }
-  updateAudioHud();
-}
-
-function stopAmbient() {
-  if (!ambientBed) return;
-  ambientBed.stop();
-  ambientBed = null;
-  ambientState = 'off';
-  updateAudioHud();
-}
-
-const audioHud = new Text();
-audioHud.text = '♪ ambient: off';
-audioHud.fontSize = 0.014;
-audioHud.color = TEXT.muted;
-audioHud.anchorX = 'left';
-audioHud.anchorY = 'bottom';
-audioHud.position.set(-0.3, -0.28, 0);
-audioHud.sync();
-uiAnchor.add(audioHud);
+const ambient = createAmbientController({ audio, camera });
+ambient.hud.position.set(-0.3, -0.28, 0);
+uiAnchor.add(ambient.hud);
+const startAmbient = () => ambient.start();
+const stopAmbient  = () => ambient.stop();
 
 const debugHud = new Text();
 debugHud.text = '—';
@@ -796,19 +775,6 @@ function updateDebugHud(dt: number) {
   const ctrlVis = rig.controllers.filter(c => c.visible).length;
   debugHud.text = `${xr} · cam y=${pos.y.toFixed(2)} · ctrls=${ctrlVis} · hover=${hov}`;
   debugHud.sync();
-}
-
-function updateAudioHud() {
-  const badges = {
-    off:     { text: '♪ ambient: off', color: TEXT.dim },
-    loading: { text: '♪ ambient: loading…', color: TEXT.warn },
-    on:      { text: '♪ ambient: ON · 4ch FOA · HRTF rotating', color: TEXT.accent },
-    error:   { text: '♪ ambient: error', color: TEXT.error },
-  };
-  const b = badges[ambientState];
-  audioHud.text = b.text;
-  audioHud.color = b.color;
-  audioHud.sync();
 }
 
 const feedbacks = new Map<string, ReturnType<typeof hoverFeedback>>();
@@ -1021,7 +987,7 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
   },
   async startAmbient() { await startAmbient(); },
   stopAmbient() { stopAmbient(); },
-  audioState: () => ambientState,
+  audioState: () => ambient.getState(),
   showVizGallery(show: boolean) { showVizGallery(show); },
   galleryItems: () => galleryItems.map(i => ({ id: i.id, title: i.title, worldPos: i.worldPos.toArray() })),
   forceHover(i: number | null) {
@@ -1295,26 +1261,8 @@ scene.add(joinPanelAnchor);
 const joinPanel = createJoinPanel({
   onAccepted: async (_code: string, token?: string, manifestUrl?: string, _dataspace?: string) => {
     if (token && manifestUrl) {
-      // Real server flow: fetch manifest with token, then render
-      try {
-        const headers: Record<string, string> = {
-          'Authorization': `Bearer ${token}`,
-        };
-        const resp = await fetch(manifestUrl, { headers });
-        const manifest = await resp.json() as DataspaceManifest;
-        // Stop the previous dataspace's refresh intervals before swapping in new ones.
-        disposeCurrentManifest();
-        const result = await loadManifest(manifest, token);
-        currentManifestResult = result;
-        renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
-        vizAnchor.position.set(0, 1.3, 0);
-        console.log(`[join] Manifest loaded: ${result.marks.length} marks from "${result.name}"`);
-        // Create dataspace menu from manifest HUD config
-        createDataspaceMenu(manifest.hud?.items, manifest.hud?.position);
-        attachPrivacyBanner(manifest, /* autoShow */ true);
-      } catch (e) {
-        console.error('[join] Failed to load manifest:', e);
-      }
+      // Real server flow: fetch manifest with token, then render via the controller.
+      await manifestController.loadFromUrl(manifestUrl, token);
     }
     // Wait 1s, then hide panel and show the viz
     setTimeout(() => {
@@ -1383,7 +1331,8 @@ window.addEventListener('keydown', e => {
   if (e.key === 'g' || e.key === 'G') showVizGallery(!vizAnchor.visible);
 });
 
-const toolbar = new Toolbar({
+const toolbarController = createToolbarController({
+  scene, camera, renderer, interact,
   buttons: [
     { id: 'join',    label: 'Join',    onSelect: () => { showJoinPanel(); } },
     { id: 'gallery', label: 'Gallery', active: defaultToGallery && !isJoinMode,  onSelect: () => { hideJoinPanel(); stopMorphMode(); showVizGallery(true);  placeAnchorInFrontOfUser(); } },
@@ -1393,40 +1342,8 @@ const toolbar = new Toolbar({
     { id: 'floor', label: 'Set Floor', onSelect: () => placeFloorUnderHead() },
   ],
 });
-scene.add(toolbar.group);
-
-for (const btn of toolbar.buttons) {
-  const origBg = btn.block.backgroundColor?.clone?.() ?? new THREE.Color(0x0f1a2c);
-  interact.add({
-    id: `btn:${btn.id}`,
-    object: btn.block,
-    onHoverIn: () => {
-      btn.block.set({ backgroundColor: new THREE.Color(0x2a4a6a), backgroundOpacity: 1.0 });
-    },
-    onHoverOut: (_ctx) => {
-      btn.block.set({ backgroundColor: origBg, backgroundOpacity: 0.92 });
-    },
-    onSelect: () => btn.onSelect(),
-  });
-}
-
-function placeToolbarNearUser() {
-  const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
-  const pos = new THREE.Vector3();
-  xrCam.getWorldPosition(pos);
-  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.quaternion);
-  fwd.y = 0;
-  if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
-  fwd.normalize();
-  const distance = 0.8;
-  toolbar.group.position.set(
-    pos.x + fwd.x * distance,
-    pos.y - 0.35,
-    pos.z + fwd.z * distance,
-  );
-  toolbar.group.lookAt(pos.x, toolbar.group.position.y, pos.z);
-}
-placeToolbarNearUser();
+const toolbar = toolbarController.toolbar;
+const placeToolbarNearUser = () => toolbarController.placeNearUser();
 
 // --- P1.3: Configurable Dataspace HUD / Hand Menu ---
 let dataspaceMenu: DataspaceMenu | null = null;
@@ -1435,63 +1352,31 @@ const dataspaceMenuAnchor = new THREE.Group();
 dataspaceMenuAnchor.name = 'dataspaceMenuAnchor';
 scene.add(dataspaceMenuAnchor);
 
-// --- Active manifest result (so we can stop its refresh intervals on leave/replace) ---
-let currentManifestResult: import('./manifest/loader').LoadResult | null = null;
-function disposeCurrentManifest() {
-  if (currentManifestResult) {
-    currentManifestResult.dispose();
-    currentManifestResult = null;
-  }
-}
-
 // --- Privacy banner (Phase 5) — first-render modal on health-data dataspaces ---
-let privacyBanner: PrivacyBanner | null = null;
-const privacyBannerAnchor = new THREE.Group();
-privacyBannerAnchor.name = 'privacyBannerAnchor';
-scene.add(privacyBannerAnchor);
+const privacyBanner: PrivacyBannerController = createPrivacyBannerController({
+  scene, camera, renderer, interact,
+});
 
-function placePrivacyBannerInFront() {
-  const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
-  const pos = new THREE.Vector3();
-  xrCam.getWorldPosition(pos);
-  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.quaternion);
-  fwd.y = 0;
-  if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
-  fwd.normalize();
-  privacyBannerAnchor.position.set(pos.x + fwd.x * 1.0, pos.y - 0.05, pos.z + fwd.z * 1.0);
-  privacyBannerAnchor.lookAt(pos.x, privacyBannerAnchor.position.y, pos.z);
-}
-
-function attachPrivacyBanner(manifest: DataspaceManifest, autoShow: boolean) {
-  /* Build once, then re-skin per dataspace. */
-  if (!privacyBanner) {
-    privacyBanner = createPrivacyBanner();
-    privacyBannerAnchor.add(privacyBanner.group);
-    interact.add({
-      id: privacyBanner.acceptId,
-      object: privacyBanner.acceptButton,
-      onHoverIn: () => {
-        privacyBanner!.acceptButton.set({
-          backgroundColor: new THREE.Color(0x6a4540),
-          backgroundOpacity: 1.0,
-        });
-      },
-      onHoverOut: () => {
-        privacyBanner!.acceptButton.set({
-          backgroundColor: new THREE.Color(0x4a3530),
-          backgroundOpacity: 0.92,
-        });
-      },
-      onSelect: () => privacyBanner!.hide(),
-    });
-  }
-  const facts = privacyFactsFromManifest(manifest);
-  privacyBanner.setFacts(facts);
-  if (autoShow && facts.hasHealthData) {
-    placePrivacyBannerInFront();
-    privacyBanner.show();
-  }
-}
+// --- Active manifest result (so we can stop its refresh intervals on leave/replace) ---
+const manifestController: ManifestController = createManifestController({
+  privacyBanner,
+  render: (result) => {
+    renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
+    vizAnchor.position.set(0, 1.3, 0);
+  },
+  onLoaded: (manifest, result) => {
+    console.log(`[manifest] Loaded ${result.marks.length} marks from "${result.name}"`);
+    createDataspaceMenu(manifest.hud?.items, manifest.hud?.position);
+  },
+  onError: (_e, source) => {
+    if (source === 'url') {
+      // Fall back to the demo gallery so the user sees something useful.
+      galleryRoot.visible = true;
+      vizAnchor.visible = true;
+    }
+  },
+});
+const disposeCurrentManifest = () => manifestController.dispose();
 
 function handleDataspaceMenuAction(actionId: string) {
   switch (actionId) {
@@ -1514,8 +1399,7 @@ function handleDataspaceMenuAction(actionId: string) {
       showJoinPanel();
       break;
     case 'toggle-ambient':
-      if (ambientState === 'on') stopAmbient();
-      else startAmbient();
+      ambient.toggle();
       break;
     case 'reload-marks':
       console.log('[dataspace-menu] reload-marks action triggered');
@@ -1527,12 +1411,7 @@ function handleDataspaceMenuAction(actionId: string) {
       console.log('[dataspace-menu] toggle-labels action triggered');
       break;
     case 'show-privacy':
-      if (privacyBanner) {
-        placePrivacyBannerInFront();
-        privacyBanner.show();
-      } else {
-        console.warn('[dataspace-menu] show-privacy: no banner attached for this dataspace');
-      }
+      privacyBanner.show();   // controller is a no-op if no manifest has been attached
       break;
     default:
       console.warn(`[dataspace-menu] unhandled custom action: ${actionId}`);
@@ -1629,32 +1508,16 @@ function doHRUpdate() {
 
 // ─── Startup: manifest mode or join mode ───────────────────────────
 if (isManifestMode && urlManifest) {
-  // Direct manifest URL — skip join, fetch and render immediately.
-  // Hide the demo gallery so the manifest marks aren't drawn on top of it.
+  // Direct manifest URL — skip join, hide the demo gallery, hand off to the
+  // controller. On success it shows the dataspace HUD; on failure the
+  // controller's onError callback re-shows the gallery.
   galleryRoot.visible = false;
-  (async () => {
-    try {
-      const resp = await fetch(urlManifest);
-      const manifest = await resp.json() as DataspaceManifest;
-      disposeCurrentManifest();
-      const result = await loadManifest(manifest);
-      currentManifestResult = result;
-      renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
-      vizAnchor.position.set(0, 1.3, 0);
+  manifestController.loadFromUrl(urlManifest).then(() => {
+    if (manifestController.hasActive()) {
       vizAnchor.visible = true;
-      console.log(`[manifest] Loaded ${result.marks.length} marks from "${result.name}"`);
-      // Create dataspace menu from manifest HUD config
-      createDataspaceMenu(manifest.hud?.items, manifest.hud?.position);
       showDataspaceMenu();
-      // Privacy banner: auto-show on entry if any device is tagged `health-data`.
-      attachPrivacyBanner(manifest, /* autoShow */ true);
-    } catch (e) {
-      console.error('[manifest] Failed to load manifest from URL:', e);
-      // Fall back to the demo gallery so the user sees something useful.
-      galleryRoot.visible = true;
-      vizAnchor.visible = true;
     }
-  })();
+  });
 } else if (isJoinMode) {
   // Show join panel on startup
   showJoinPanel();

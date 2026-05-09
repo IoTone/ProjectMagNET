@@ -32,6 +32,47 @@ function disposeGroup(g: THREE.Object3D) {
   });
 }
 
+/**
+ * Self-rescheduling poller with exponential backoff.
+ *
+ * Why not setInterval: ESP-IDF's esp_http_server has only 7 listen sockets
+ * by default and doesn't keep-alive cleanly through Vite's proxy. With
+ * setInterval, a slow or failing device piles up overlapping fetches and
+ * eventually starves its own httpd or watchdogs out. Self-rescheduling
+ * setTimeout naturally serializes — the next tick can't fire until the
+ * previous fetch resolves — and lets us back off when the device errors
+ * so we give it room to recover instead of hammering it on the way down.
+ *
+ * `refresh` should resolve to `true` when the request succeeded (or returned
+ * legitimately empty data — that's not a device fault) and `false` when the
+ * device returned a non-2xx or threw. Backoff doubles per consecutive error,
+ * capped at MAX_BACKOFF, and resets on the first success.
+ */
+const MAX_BACKOFF_MS = 30_000;
+function startPolling(
+  refreshMs: number,
+  refresh: () => Promise<boolean>,
+): () => void {
+  let errs = 0;
+  let cancelled = false;
+  let handle: ReturnType<typeof setTimeout> | null = null;
+  const tick = async () => {
+    if (cancelled) return;
+    let ok = false;
+    try { ok = await refresh(); } catch { /* defensive — refresh swallows its own */ }
+    if (cancelled) return;
+    errs = ok ? 0 : errs + 1;
+    const delay = errs > 0
+      ? Math.min(refreshMs * (1 << Math.min(errs - 1, 5)), MAX_BACKOFF_MS)
+      : refreshMs;
+    handle = setTimeout(tick, delay);
+  };
+  // Fire immediately so the first paint isn't gated on a refreshMs delay;
+  // matches the prior setInterval behavior where refresh() ran synchronously.
+  void tick();
+  return () => { cancelled = true; if (handle) clearTimeout(handle); };
+}
+
 /* ─── Live line — for heart-rate / breathing history ──────────────────── */
 
 export interface LiveLineOpts {
@@ -43,10 +84,26 @@ export interface LiveLineOpts {
   /** Optional fixed Y range; auto-fit per-frame if omitted. */
   vMin?: number;
   vMax?: number;
+  /**
+   * Scalar / snapshot mode. If set, treats each fetch as a single value
+   * (extracted by `pluck`) instead of a series. The cell maintains a
+   * rolling client-side buffer of the last `historyLength` plucked values.
+   * Use this against snapshot endpoints (`/heart-rate`, `/breathing`)
+   * which return the *current* reading rather than a server-side history.
+   *
+   * Return null/undefined from `pluck` to skip that tick (e.g. when
+   * presence is false → BPM is 0 → don't pollute the buffer).
+   */
+  pluck?: (json: any) => number | null | undefined;
+  /** Buffer size for scalar mode. Default 60. */
+  historyLength?: number;
 }
 
 export function buildLiveLineCell(opts: LiveLineOpts): LiveCell {
-  const { url, refreshMs = 30000, width = 0.32, height = 0.16, color = TEXT.primary } = opts;
+  const {
+    url, refreshMs = 30000, width = 0.32, height = 0.16, color = TEXT.primary,
+    pluck, historyLength = 60,
+  } = opts;
   const group = new THREE.Group();
   group.name = `live-line:${url}`;
 
@@ -57,13 +114,30 @@ export function buildLiveLineCell(opts: LiveLineOpts): LiveCell {
   );
   group.add(current);
 
-  async function refresh() {
+  // Scalar-mode rolling buffer.
+  const scalarBuf: Array<{ t: number; v: number }> = [];
+
+  async function refresh(): Promise<boolean> {
     try {
       const resp = await fetch(url);
-      if (!resp.ok) return;
-      const json = await resp.json() as { samples?: Array<{ t: number; v: number }> } | Array<{ t: number; v: number }>;
-      const samples = Array.isArray(json) ? json : (json.samples ?? []);
-      if (samples.length < 2) return;
+      if (!resp.ok) return false;
+      const json = await resp.json();
+
+      let samples: Array<{ t: number; v: number }>;
+      if (pluck) {
+        // Snapshot mode — extract one value, push into rolling buffer.
+        const v = pluck(json);
+        // Pluck returning null is "no presence yet", not a device error.
+        if (v == null || !Number.isFinite(v)) return true;
+        scalarBuf.push({ t: Date.now(), v });
+        while (scalarBuf.length > historyLength) scalarBuf.shift();
+        samples = scalarBuf;
+      } else {
+        // Series mode — accept either bare array or `{samples: [...]}`.
+        samples = Array.isArray(json) ? json : (json.samples ?? []);
+      }
+
+      if (samples.length < 2) return true;
 
       let tMin = Infinity, tMax = -Infinity, vMin = Infinity, vMax = -Infinity;
       for (const s of samples) {
@@ -88,18 +162,19 @@ export function buildLiveLineCell(opts: LiveLineOpts): LiveCell {
       disposeGroup(current);
       group.add(next);
       current = next;
+      return true;
     } catch {
       /* leave placeholder / last-good in place */
+      return false;
     }
   }
 
-  refresh();
-  const handle = setInterval(refresh, refreshMs);
+  const stop = startPolling(refreshMs, refresh);
 
   return {
     group,
     tick: () => { /* static between refreshes */ },
-    dispose: () => { clearInterval(handle); },
+    dispose: () => { stop(); },
   };
 }
 
@@ -116,6 +191,17 @@ export interface LiveTargetsOpts {
   max_distance_m?: number;
   /** Half field-of-view in degrees, measured from the +y forward axis. */
   fov_deg?: number;
+  /**
+   * Tilt in radians around the X axis — visual "lay flat" hint. Defaults to 0
+   * (vertical panel like every other cell). Pass e.g. 70°·π/180 to tilt the
+   * floor map toward the viewer like a tabletop. Title/subtitle text stays
+   * upright because they're attached to the gallery cell, not this group.
+   */
+  tilt_rad?: number;
+  /** Glyph radius in metres. Default 0.012. */
+  glyph_radius?: number;
+  /** Glyph z-lift above the floor map (looks like the orbs are floating). */
+  glyph_lift?: number;
 }
 
 const TARGET_PALETTE = [0xff7a8a, 0xffd97a, 0x88ff99]; // warm coral, amber, mint
@@ -130,10 +216,16 @@ export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
     extent_m = 2.5,
     max_distance_m = 4.0,
     fov_deg = 50,
+    tilt_rad = 0,
+    glyph_radius = 0.012,
+    glyph_lift = 0.025,
   } = opts;
 
   const group = new THREE.Group();
   group.name = `live-targets:${url}`;
+  // Tilt around X — leans the floor map toward the viewer like a tabletop.
+  // Negative angle pulls the bottom edge (radar marker) closer to the camera.
+  if (tilt_rad !== 0) group.rotation.x = -tilt_rad;
 
   const fovRad = (fov_deg * Math.PI) / 180;
   const radarCellY = -height / 2;
@@ -199,13 +291,18 @@ export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
   });
   group.add(new THREE.Mesh(markerGeo, markerMat));
 
-  /* Pre-allocate target glyphs; reposition per refresh. */
-  const glyphGeo = new THREE.SphereGeometry(0.008, 12, 12);
-  const glyphMats: THREE.MeshBasicMaterial[] = [];
+  /* Pre-allocate target glyphs as glowing 3D orbs (Standard material with
+   * emissive so the scene's hemisphere + directional light both shade them
+   * AND they stay readable against bright passthrough). Repositioned per
+   * refresh; scaled to `glyph_radius` so callers can tune. */
+  const glyphGeo = new THREE.SphereGeometry(glyph_radius, 18, 14);
+  const glyphMats: THREE.MeshStandardMaterial[] = [];
   const glyphs: THREE.Mesh[] = [];
   for (let i = 0; i < MAX_TARGETS; i++) {
-    const mat = new THREE.MeshBasicMaterial({
-      color: TARGET_PALETTE[i % TARGET_PALETTE.length]!,
+    const c = TARGET_PALETTE[i % TARGET_PALETTE.length]!;
+    const mat = new THREE.MeshStandardMaterial({
+      color: c, emissive: c, emissiveIntensity: 0.7,
+      roughness: 0.35, metalness: 0.1,
       transparent: true, opacity: 0.95,
     });
     glyphMats.push(mat);
@@ -215,10 +312,10 @@ export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
     glyphs.push(m);
   }
 
-  async function refresh() {
+  async function refresh(): Promise<boolean> {
     try {
       const resp = await fetch(url);
-      if (!resp.ok) return;
+      if (!resp.ok) return false;
       const data = await resp.json() as {
         count?: number;
         targets?: Array<{ id: number; x_m: number; y_m: number }>;
@@ -234,25 +331,26 @@ export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
            * targets visible. */
           const cx = Math.max(-width / 2, Math.min(width / 2, p.x));
           const cy = Math.max(-height / 2, Math.min(height / 2, p.y));
-          glyphs[i]!.position.set(cx, cy, 0.005);
+          glyphs[i]!.position.set(cx, cy, glyph_lift);
           glyphs[i]!.visible = true;
         } else {
           glyphs[i]!.visible = false;
         }
       }
+      return true;
     } catch {
       for (const g of glyphs) g.visible = false;
+      return false;
     }
   }
 
-  refresh();
-  const handle = setInterval(refresh, refreshMs);
+  const stop = startPolling(refreshMs, refresh);
 
   return {
     group,
     tick: () => { /* static between refreshes */ },
     dispose: () => {
-      clearInterval(handle);
+      stop();
       coneGeo.dispose();
       hrArcGeo.dispose();
       markerGeo.dispose();
@@ -291,12 +389,12 @@ export function buildLivePhasesCell(opts: LivePhasesOpts): LiveCell {
 
   let currentViz: StreamgraphViz | null = null;
 
-  async function refresh() {
+  async function refresh(): Promise<boolean> {
     try {
       const resp = await fetch(url);
-      if (!resp.ok) return;
+      if (!resp.ok) return false;
       const data = await resp.json() as number[][];
-      if (!Array.isArray(data) || data.length < 1 || (data[0]?.length ?? 0) < 2) return;
+      if (!Array.isArray(data) || data.length < 1 || (data[0]?.length ?? 0) < 2) return true;
 
       const series: StreamgraphSeries[] = data.map((values, i) => ({
         category: PHASE_LABELS[i] ?? `series-${i}`,
@@ -314,17 +412,18 @@ export function buildLivePhasesCell(opts: LivePhasesOpts): LiveCell {
       }
       currentViz = buildStreamgraph(series, { width, height, windowSize, scrollSpeed });
       group.add(currentViz.group);
+      return true;
     } catch {
       /* leave previous frame in place */
+      return false;
     }
   }
 
-  refresh();
-  const handle = setInterval(refresh, refreshMs);
+  const stop = startPolling(refreshMs, refresh);
 
   return {
     group,
     tick: (time: number) => { currentViz?.tick(time); },
-    dispose: () => { clearInterval(handle); },
+    dispose: () => { stop(); },
   };
 }

@@ -93,17 +93,27 @@ Goal: unit tests for pure logic. Adds `npm test`, `npm run test:watch`.
 
 Target: ~30 tests, <2 s suite time. Coverage baseline established.
 
-### Phase 2 — visual regression on smoke (half day)
+### Phase 2 — visual regression on smoke (landed 2026-05-08)
 
-Goal: catch unintentional UI drift on the existing 88-shot tour.
+Every existing milestone shot is now a regression test.
 
-- [ ] Commit a baseline set under `demo/shots-baseline/`.
-- [ ] Extend `scripts/smoke.mjs` with a `--diff` flag using `pixelmatch` or `odiff-bin`. Threshold: 0.5% pixel diff per shot.
-- [ ] On diff: write `demo/shots-diff/<name>.png` and exit non-zero.
-- [ ] Add `npm run smoke:diff` script.
-- [ ] Document baseline-update flow in `CONTRIBUTING.md` (`npm run smoke -- --update-baseline`).
+- [x] Baseline committed under `demo/shots-baseline/` (99 PNGs, ~9 MB).
+- [x] `scripts/smoke-diff.mjs` — pixelmatch + pngjs over current vs. baseline. Per-pixel threshold 0.1, max-diff-ratio 0.005 (0.5% of pixels). Failed shots write a red-overlay diff PNG to `demo/shots-diff/`. Exits 0 on full pass, 1 on regression, 2 on usage.
+- [x] `scripts/smoke-baseline.mjs` — promotes the current run into the baseline (run after intentional UI changes; commit the new baseline alongside the code change).
+- [x] npm scripts: `smoke:diff`, `smoke:baseline`. Plus `--quiet`, `--threshold=`, `--max-diff-ratio=` flags on diff for CI tuning.
+- [x] `demo/shots-diff/` is `.gitignore`d (transient output).
 
-This is the highest leverage step — every existing milestone shot becomes a regression test for free.
+Workflow:
+
+```bash
+npm run smoke           # produce demo/shots/*.png  (~4 min)
+npm run smoke:diff      # compare against baseline  (~5 s)
+# if a regression is intentional:
+npm run smoke:baseline  # promote new shots into demo/shots-baseline/
+git add demo/shots-baseline/
+```
+
+Sanity-check verified — 99/99 pass against the seeded baseline at exit 0; an injected wrong image was caught (FAIL with diff PNG written) at exit 1.
 
 ### Phase 3 — integration on the manifest path (1–2 days)
 
@@ -175,35 +185,175 @@ The Phase 1 sweep also caught two real defects in production code:
 
 ### Recent additions (2026-04-30 → 2026-05-08)
 
-Test count grew from 50 → **68/68 passing** (~1 s suite) without regressing. New tests landed alongside new features:
+Test count grew from 50 → **68/68 passing**. New tests landed alongside new features:
 
 | Module | New tests | Notes |
 |---|---|---|
 | `src/viz/streamgraph` | 6 (file-level) | Animated streamgraph mark; tests cover construction, scrolling, palette use |
 | `src/manifest/schema` | +12 (32 total) | UDM-MagNET v1.0 cross-references, deprecated alias warnings, `_comment`/`_doc` underscore-prefixed annotation tolerance |
 
-Coverage **regressed** in aggregate because three substantial new modules landed without tests: `src/manifest/builders.ts` grew from ~100 → 378 LOC (line/bar/scatter/arc adapters added), `src/manifest/loader.ts` grew with refresh-interval handling, and the new `src/demo/liveVitalsCells.ts` (HR/BR/phases/targets cells) is untested. Aggregate over included paths: **45.0%** lines (was 58.2%). The covered modules — `tween`, `schema`, `mock-join-server`, `camera-proxy` — are unchanged or marginally improved.
+Coverage briefly regressed because three substantial new modules landed without tests (builders, loader-refresh, liveVitalsCells). The first of those was backfilled below.
 
-| File | Stmts | Branch | Funcs | Lines |
-|---|---|---|---|---|
-| `src/util/tween.ts` | 100% | 100% | 90% | 100% |
-| `src/manifest/schema.ts` | 91.5% | 84.3% | 100% | 91.5% |
-| `server/mock-join-server.ts` | 87.5% | 78.5% | 87.5% | 87.5% |
-| `server/camera-proxy.ts` | 80.6% | 71.4% | 100% | 80.6% |
-| `src/manifest/loader.ts` | 0% | — | — | 0% (refresh path untested) |
-| `src/manifest/builders.ts` | 0% | — | — | 0% (line/bar/scatter/arc adapters untested) |
-| `src/manifest/renderManifest.ts` | 0% | — | — | 0% (still WebGL-bound) |
-| **Aggregate** | **45.0%** | **81.7%** | **84.0%** | **45.0%** |
+### Builders backfill (landed 2026-05-08)
 
-The work since the original baseline (mostly viz + integration glue) outpaced the test-writing cadence. Highest-leverage backfills, in order:
+Added `src/manifest/builders.test.ts` — **16 tests** driving every chart-style adapter (`line`, `bar`, `scatter`, `arc`) plus `streamgraph` through the public `loadManifest()` path. Each builder gets:
 
-1. **`src/manifest/builders.ts`** — add unit tests against the four chart-style adapters (line/bar/scatter/arc). Each is a pure transform from `MarkSpec` + (mocked) extracted data → a `THREE.Group`. JSDOM works; no GPU needed.
-2. **`src/manifest/loader.ts` refresh path** — supertest-style test against a fake `fetch` that returns successive payloads, asserting `mark.refresh` is invoked per-cadence.
-3. **`src/demo/liveVitalsCells.ts`** — same pattern as the loader: stub `fetch`, fire intervals, assert mesh swaps.
+- Initial render with a valid synthetic series / distribution
+- Empty / placeholder behaviour
+- `refresh()` swap verification (asserting the inner `THREE.Group` UUID changes after `refresh(spec)`)
+
+### Loader-refresh backfill (landed 2026-05-08)
+
+Added `src/manifest/loader.test.ts` — **14 tests** with a mocked `fetch` and vitest fake timers. Coverage:
+
+- Initial URL fetch: success, non-OK, network error, WebSocket-skip, inline-pass-through
+- `samples: [...]` series wrapper unwrapping
+- Bearer-token forwarding
+- `refreshInterval = 0` schedules nothing; missing `refresh()` schedules nothing; positive interval ticks per-cadence and calls `mark.refresh(spec)`
+- Per-mark independent intervals
+- Survives transient refresh failures (404, network error) and recovers
+- `LoadResult.dispose()` clears intervals; idempotent on double-call
+
+### Live cells backfill (landed 2026-05-08)
+
+Added `src/demo/liveVitalsCells.test.ts` — **18 tests** for `buildLiveLineCell`, `buildLivePhasesCell`, `buildLiveTargetsCell`. Same `fetch`+fake-timer harness as the loader tests. Coverage:
+
+- All three builders: placeholder visible synchronously, swapped after first fetch, rebuilt on each tick, dispose stops polling
+- Line cell: accepts both `{samples:[]}` wrapper and bare array; keeps placeholder on `< 2` samples; survives 404 + network error
+- Phases cell: skips swap on empty / single-value distributions; `tick()` is safe before the streamgraph exists; forwards to inner viz once built
+- Targets cell: static cone+arc+marker present pre-fetch; visible glyph count matches target count; capped at 3 (`MAX_TARGETS`); positions update across ticks; hides all on fetch error
+
+Also tightened `vitest.config.ts` coverage `include` to only the modules that actually have unit tests — was including `src/manifest/renderManifest.ts` (untested) which masked the real coverage posture; gallery-only viz files (`force.ts`, `pack.ts`, etc.) are excluded for the same reason.
+
+Total **116/116 tests passing** (~1 s suite).
+
+| File | Stmts | Branch | Funcs | Lines | Δ from 2026-04-29 |
+|---|---|---|---|---|---|
+| `src/util/tween.ts` | 100% | 100% | 90% | 100% | — |
+| `src/manifest/schema.ts` | 91.5% | 84.3% | 100% | 91.5% | −6.3 |
+| `src/manifest/builders.ts` | **86.2%** | 74.6% | 100% | **86.2%** | **+86.2** |
+| `src/manifest/loader.ts` | **90.6%** | 78.6% | 70% | **90.6%** | **+90.6** |
+| `src/viz/streamgraph.ts` | **100%** | 93.1% | 87.5% | **100%** | new |
+| `src/demo/liveVitalsCells.ts` | **98.2%** | 82.8% | 93.3% | **98.2%** | **+98.2** |
+| `server/mock-join-server.ts` | 87.5% | 78.5% | 87.5% | 87.5% | — |
+| `server/camera-proxy.ts` | 80.6% | 71.4% | 100% | 80.6% | — |
+| `src/manifest/renderManifest.ts` | 0% | — | — | 0% | (still WebGL-bound) |
+| **Aggregate over tested paths** | **84.5%** | **81.2%** | **89.0%** | **84.5%** | **+26.3** |
+
+Only `renderManifest.ts` remains uncovered in the tracked scope. It needs either JSDOM with mocked WebGL or a refactor that splits the math from the THREE wiring. Defer until either we adopt headless three (e.g. via `@react-three/fiber` testing utilities) or do the §1.1 main-area refactor that would also touch it.
+
+Out of scope for the current coverage scope (intentionally excluded from `include`):
+
+- `src/viz/{tree,treemap,sunburst,pack,force,sankey,ridgeline,parallel,edgeBundle,tangledTree,tidyTree}.ts` — gallery viz builders, exercised visually by the smoke harness; would need WebGL or headless-three for unit testing
+- `src/ui/**`, `src/onboarding/**`, `src/audio/**`, `src/interact/**`, `src/dataspace/**`, `src/chart/**` — UI glue / WebXR-coupled / large surfaces with low return on unit testing
+- `src/main.ts` — orchestration; should be split first (§1.1 in code-quality.md)
 
 ---
 
-## 6. Open questions
+## 6. Manual / on-device testing
+
+The unit suite covers logic; a lot of recent work is interactive UI + WebXR + device-coupled and only a human can sign it off. Run these after a checkout that touches anything below the line.
+
+### 6.1 Quick wide pass — 5 minutes
+
+Run from `prototype/d3-spatial/`:
+
+```bash
+npm run typecheck       # → silent
+npm test                # → 116/116 passing in ~1 s
+npm run build           # → clean, ~2.5 s
+npm run smoke           # → 99 PNGs in demo/shots/, ~4 min
+npm run smoke:diff      # → 99/99 pass against baseline, exit 0
+```
+
+Any non-zero exit is a regression. If `smoke:diff` reports `FAIL` rows, compare `demo/shots-diff/<name>.png` (red overlay) to decide whether the change is intentional. Promote an intentional drift with `npm run smoke:baseline` and commit `demo/shots-baseline/`.
+
+### 6.2 Browser preview — desktop UX (~10 minutes)
+
+Start the dev server: `VITALS_HOST=http://magnet-vitals.local npm run dev`. Open `localhost:5173/`.
+
+| Area | Procedure | Pass when |
+|---|---|---|
+| **Mouse navigation** | right-drag / wheel / middle-drag | orbit / zoom / pan around the scene |
+| **Mouse select** | left-click any toolbar button | button highlights, action fires (gallery/charts/morph/recenter etc.) |
+| **Keyboard** | press `g` | gallery toggles |
+| **Toolbar** | each of the 6 buttons in turn | each fires its callback; active state badge tracks Gallery/Charts/Morph |
+| **Floor + recenter** | click `Set Floor`, then `Recenter` | grid drops to head-relative floor; viz anchor flips in front |
+| **Live data cells** | gallery → bottom row | HR/BR placeholder lines visible; phases streamgraph scrolls; targets cell shows cone outline |
+| **Hover feedback** | mouse-hover any mark | scale 1.05 + emissive bump + outline; inspector card pops up nearby |
+
+### 6.3 UC3 dataspace end-to-end (~15 minutes)
+
+With the device flashed and on the same LAN as your laptop:
+
+1. **Device boot:** `pio run -e esp32c6 -t upload -t monitor`. LED → amber → solid green (self-test pass) → cyan idle. Banner shows `radar: UART0 rx=GPIO17 tx=GPIO16` and `LED: GPIO1`.
+2. **Provisioning:** if first flash, BLE-provision via nRF Connect to your WiFi.
+3. **mDNS:** at the REPL, `prov-status`. With WiFi up, console prints `[mDNS] http://magnet-vitals.local/ resolved on the LAN`. Confirm: `curl -s http://magnet-vitals.local/vitals | jq .` returns JSON.
+4. **Open UC3:** browser → `localhost:5173/?manifest=/examples/uc3-personal-health.json`.
+   - Privacy banner pops up (warm coral border, "Privacy notice" title, "I understand" button).
+   - Click "I understand" → banner hides, dataspace marks visible.
+   - Verify 4 marks: HR line, BR line, phases streamgraph (scrolling), HR radial gauge.
+   - **Walk into the radar cone**: device LED flips cyan → blue (presence pulse). Targets cell shows a coral glyph at your position. After ~1 minute, HR line populates with first sample.
+5. **Show-privacy HUD action:** click 🔒 in the dataspace HUD → banner re-opens.
+6. **Leave-dataspace:** click 🚪 → marks disappear, join panel returns. (Confirms `manifestController.dispose()` clears the active intervals.)
+7. **Refresh-interval:** open DevTools → Network. Filter to `/api/v1/vitals/`. Watch HR-history fetch every 30 s and phases fetch every 1.5 s.
+
+### 6.4 Live cells in the gallery (~5 minutes)
+
+`localhost:5173/` (no `?manifest=`). Press `g` if not in gallery. Bottom row should have:
+- **HR · live** (warm coral line, label "MagNET Vitals · 60 min, 1/min")
+- **BR · live** (warm peach line)
+- **phases · live** (3-channel streamgraph, scrolling)
+- **targets · live** (top-down floor map: cone + 1.5 m arc + radar marker)
+
+With device offline → all four show grey-muted placeholders / empty floor map. With device online + presence → live data visible within 1.5 s for phases and targets, within 30–60 s for HR/BR (history-bound).
+
+### 6.5 Audio + ambient HUD (~2 minutes)
+
+In gallery view:
+- Bottom-left HUD shows `♪ ambient: off` (dim).
+- Trigger via dataspace HUD action `toggle-ambient` (or via demo `__demo.startAmbient()` from console).
+- HUD transitions: `loading…` (warm) → `ON · 4ch FOA · HRTF rotating` (mint accent).
+- Audible: ambient pad in headphones (mute by default in screenshots).
+- Toggle off → `off` again.
+
+### 6.6 On-device (Quest 3 / Spectacles) — 15 minutes when you have a headset
+
+Requires a tunnel: `cloudflared tunnel --url http://localhost:5173`.
+
+| Area | Procedure | Pass when |
+|---|---|---|
+| **AR session enters** | tap the AR button on the headset | scene appears against passthrough; LED-amber renderer-clear no longer shows |
+| **Marks visible** | look around the gallery | every mark renders against passthrough — **not** dark/black (validates the MeshStandardMaterial → MeshBasicMaterial fix on streamgraph + ridgeline) |
+| **Controller select** | trigger on a mark | hover highlight + select fires the same as desktop |
+| **Hand tracking** | pinch-grab a force-graph node | drag works; release returns the node to physics |
+| **Radial gauge / streamgraph readability** | look at the UC3 marks against bright passthrough | warm-only palette is legible; no faint blue text |
+| **Renderer flag side effects** (after CQ-PR-1) | observe FPS overlay | frame time should drop modestly vs the pre-flag build (no `preserveDrawingBuffer`, MSAA off-loaded to XR layer); aliased text edges may be visible — file an issue if intolerable |
+
+There is no automated XR test path. Human screen-cap + notes go into `MagNET_Vitals_E4TH/test-logs/<date>-<short-name>.md` if you want a reproducible record.
+
+### 6.7 CI verification — once per workflow change
+
+Push any commit touching `reference-designs/webxrofthings/prototype/d3-spatial/**` to a branch and open a PR. The GitHub Actions workflow `d3-spatial-ci.yml` should:
+
+1. **`verify` job** runs on push + PR: `npm ci`, `typecheck`, `test`, `build`. Should be green in ~3 min with npm cache warm.
+2. **`smoke` job** runs on PR only: installs Playwright Chromium, runs smoke + diff. ~4 min.
+3. **On smoke failure**, the `smoke-diff-<run_id>` artifact contains both `demo/shots-diff/` (red-overlay diffs) and the new `demo/shots/` for review.
+
+If a workflow run hangs at npm ci, the cache key isn't matching; check `cache-dependency-path` in the YAML.
+
+### 6.8 Known not-yet-tested surfaces
+
+- **`src/manifest/renderManifest.ts`** — only exercised by the smoke shots; no unit coverage.
+- **`src/onboarding/JoinPanel.ts`** — slot-wheel, code entry, validation. Smoke covers the visual; logic is untested.
+- **`src/main.ts`** orchestrator — being progressively split into controllers, but the remaining ~1600 LOC is the scene/interact/drill-in spine.
+- **WebXR session lifecycle** — `sessionstart` / `sessionend` handlers, hand-tracking pinch semantics, fingertip-grab math.
+- **Camera proxy + ESP32-CAM streaming** — hardware loop; manual.
+- **MagNET Vitals firmware** (`MagNET_Vitals_E4TH/`) — see [its own test plan](../../../MagNET_M5DialFiddlerCrab/MagNET_Vitals_E4TH/test-plan.md).
+
+---
+
+## 7. Open questions
 
 - **Visual diff tooling**: `pixelmatch` (npm, simple) vs `odiff-bin` (faster, native). Default to `pixelmatch` unless smoke run-time becomes painful.
 - **Vitest vs node:test**: vitest has the better DX with our Vite stack; node:test has zero deps. Pick vitest.
