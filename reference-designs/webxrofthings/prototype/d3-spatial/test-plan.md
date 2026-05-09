@@ -97,11 +97,11 @@ Target: ~30 tests, <2 s suite time. Coverage baseline established.
 
 Every existing milestone shot is now a regression test.
 
-- [x] Baseline committed under `demo/shots-baseline/` (99 PNGs, ~9 MB).
+- [~] Baseline lives under `demo/shots-baseline/` (99 PNGs, ~9 MB). **Currently `.gitignore`d** — to be re-added once the canonical baseline is finalized; until then each workstation/CI job regenerates its own. See §6.7 for the CI implication.
 - [x] `scripts/smoke-diff.mjs` — pixelmatch + pngjs over current vs. baseline. Per-pixel threshold 0.1, max-diff-ratio 0.005 (0.5% of pixels). Failed shots write a red-overlay diff PNG to `demo/shots-diff/`. Exits 0 on full pass, 1 on regression, 2 on usage.
 - [x] `scripts/smoke-baseline.mjs` — promotes the current run into the baseline (run after intentional UI changes; commit the new baseline alongside the code change).
 - [x] npm scripts: `smoke:diff`, `smoke:baseline`. Plus `--quiet`, `--threshold=`, `--max-diff-ratio=` flags on diff for CI tuning.
-- [x] `demo/shots-diff/` is `.gitignore`d (transient output).
+- [x] `demo/shots-diff/` is `.gitignore`d (transient output). `demo/shots-baseline/` is also `.gitignore`d (see §6.7).
 
 Workflow:
 
@@ -306,7 +306,18 @@ With the device flashed and on the same LAN as your laptop:
 - **phases · live** (3-channel streamgraph, scrolling)
 - **targets · live** (top-down floor map: cone + 1.5 m arc + radar marker)
 
-With device offline → all four show grey-muted placeholders / empty floor map. With device online + presence → live data visible within 1.5 s for phases and targets, within 30–60 s for HR/BR (history-bound).
+With device online + presence → live data visible within 1.5 s for phases and targets, within ~3 s for HR/BR (snapshot-polled into a 60-sample client buffer). All four badges should be invisible in this state — the "no chrome when healthy" baseline.
+
+**Status badge (offline indicator)** — corner of each live cell, 3 states:
+- **live** → no badge (clean).
+- **stale** → small amber dot top-right after a single failed fetch. Comes back to live after 1 success.
+- **offline** → red `OFFLINE · 12s` pill (seconds since last success). Triggered by 3+ consecutive errors with no success ever, OR > 6 × refreshMs of silence after a prior success. Recovery to live requires **2** consecutive successes (debounce — single-fetch flaps stay in stale).
+
+Manual badge pass:
+1. Device on at start → load demo → all four cells show no badge for at least 10 s of polling.
+2. Power-cycle device while demo is open → within ~6 s for `targets` (1 Hz refresh) and ~18 s for HR/BR (3 Hz refresh) the badges escalate to the red `OFFLINE` pill, with the seconds counter ticking up.
+3. Plug device back in → badges should drop to stale (amber dot) on the first success, then disappear on the second. Should NOT immediately go from offline → live on a single success.
+4. Boot demo with device already off → badges should appear within ~3 × refreshMs (no prior success → 3 errors triggers offline directly, skipping stale).
 
 ### 6.5 Audio + ambient HUD (~2 minutes)
 
@@ -341,6 +352,9 @@ Push any commit touching `reference-designs/webxrofthings/prototype/d3-spatial/*
 3. **On smoke failure**, the `smoke-diff-<run_id>` artifact contains both `demo/shots-diff/` (red-overlay diffs) and the new `demo/shots/` for review.
 
 If a workflow run hangs at npm ci, the cache key isn't matching; check `cache-dependency-path` in the YAML.
+
+> **Known gap — visual baseline not in repo.**
+> `demo/shots-baseline/` is `.gitignore`d and not currently committed. Until it's re-added, the `smoke` job's `smoke:diff` step has nothing to compare against and will either fail outright (no baseline directory) or compare against a freshly-self-generated baseline (no-op). Treat the smoke job as **render-only** in this state — it confirms the demo loads and produces 99 PNGs, but does **not** catch visual regressions. The `verify` job (typecheck + unit tests + build) is unaffected and is the load-bearing CI signal until the baseline is restored.
 
 ### 6.8 Known not-yet-tested surfaces
 

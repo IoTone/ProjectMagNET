@@ -14,10 +14,31 @@ import { buildLineMark } from '../chart/marks/line';
 import { buildStreamgraph, StreamgraphSeries, StreamgraphViz } from '../viz/streamgraph';
 import { TEXT } from '../ui/palette';
 
+export type LiveCellState = 'live' | 'stale' | 'offline';
+
+export interface LiveCellStatus {
+  state: LiveCellState;
+  /** ms since last successful fetch, or null if never. */
+  lastSuccessAgoMs: number | null;
+}
+
 export interface LiveCell {
   group: THREE.Group;
   tick(time: number): void;
   dispose(): void;
+  /**
+   * Connection health derived from the polling loop. Drives the gallery's
+   * status badge. Hysteresis rules (in `startPolling`):
+   *  - `live`     when no errors and last success is within `2 × refreshMs`
+   *               of now (or initial state, before any fetch).
+   *  - `stale`    when there's been at least one consecutive error but
+   *               the cell isn't yet considered offline.
+   *  - `offline`  when there are 3+ consecutive failures and no success
+   *               has ever landed, OR when last success is older than
+   *               `6 × refreshMs`. Recovery requires 2 consecutive
+   *               successes (debounce against single-success flaps).
+   */
+  getStatus(): LiveCellStatus;
 }
 
 function disposeGroup(g: THREE.Object3D) {
@@ -49,28 +70,86 @@ function disposeGroup(g: THREE.Object3D) {
  * capped at MAX_BACKOFF, and resets on the first success.
  */
 const MAX_BACKOFF_MS = 30_000;
+const OFFLINE_AFTER_REFRESH_MULTIPLES = 6;
+const RECOVERY_SUCCESS_COUNT = 2;
+
+interface PollingHandle {
+  stop(): void;
+  getStatus(): LiveCellStatus;
+}
+
 function startPolling(
   refreshMs: number,
   refresh: () => Promise<boolean>,
-): () => void {
+): PollingHandle {
   let errs = 0;
+  let consecutiveSuccesses = 0;
+  let lastSuccessTs: number | null = null;
+  // Sticky offline flag — once we transition to offline we stay there until
+  // RECOVERY_SUCCESS_COUNT successes land, even if the latest fetch happened
+  // to succeed. Prevents single-success flaps from clearing a real outage.
+  let stickyOffline = false;
   let cancelled = false;
   let handle: ReturnType<typeof setTimeout> | null = null;
+
+  const offlineWindowMs = refreshMs * OFFLINE_AFTER_REFRESH_MULTIPLES;
+
   const tick = async () => {
     if (cancelled) return;
     let ok = false;
     try { ok = await refresh(); } catch { /* defensive — refresh swallows its own */ }
     if (cancelled) return;
-    errs = ok ? 0 : errs + 1;
+    if (ok) {
+      errs = 0;
+      consecutiveSuccesses++;
+      lastSuccessTs = Date.now();
+      if (stickyOffline && consecutiveSuccesses >= RECOVERY_SUCCESS_COUNT) {
+        stickyOffline = false;
+      }
+    } else {
+      errs++;
+      consecutiveSuccesses = 0;
+      // Latch the offline flag the moment we cross either threshold so the
+      // status reads correctly between ticks. Two distinct entry conditions:
+      //   - never connected (lastSuccessTs null) and 3+ tries failed
+      //   - had a success previously, but it's now stale beyond the window
+      // Important: the time-based check requires lastSuccessTs to exist —
+      // otherwise we'd flip offline on the first error before ever connecting.
+      if (lastSuccessTs == null && errs >= 3) {
+        stickyOffline = true;
+      } else if (lastSuccessTs != null && (Date.now() - lastSuccessTs) > offlineWindowMs) {
+        stickyOffline = true;
+      }
+    }
     const delay = errs > 0
       ? Math.min(refreshMs * (1 << Math.min(errs - 1, 5)), MAX_BACKOFF_MS)
       : refreshMs;
     handle = setTimeout(tick, delay);
   };
+
+  function getStatus(): LiveCellStatus {
+    const now = Date.now();
+    const lastSuccessAgoMs = lastSuccessTs == null ? null : now - lastSuccessTs;
+    // Time-based offline check is recomputed on every read — handles the case
+    // where ticks have stopped firing (e.g. backoff is long) but the silence
+    // itself should already register as offline.
+    const timeOffline = lastSuccessTs != null && lastSuccessAgoMs! > offlineWindowMs;
+    const initialOffline = lastSuccessTs == null && errs >= 3;
+    if (stickyOffline || timeOffline || initialOffline) {
+      return { state: 'offline', lastSuccessAgoMs };
+    }
+    if (errs >= 1) return { state: 'stale', lastSuccessAgoMs };
+    return { state: 'live', lastSuccessAgoMs };
+  }
+
   // Fire immediately so the first paint isn't gated on a refreshMs delay;
   // matches the prior setInterval behavior where refresh() ran synchronously.
   void tick();
-  return () => { cancelled = true; if (handle) clearTimeout(handle); };
+
+  return {
+    stop() { cancelled = true; if (handle) clearTimeout(handle); },
+    getStatus,
+  };
 }
 
 /* ─── Live line — for heart-rate / breathing history ──────────────────── */
@@ -169,12 +248,13 @@ export function buildLiveLineCell(opts: LiveLineOpts): LiveCell {
     }
   }
 
-  const stop = startPolling(refreshMs, refresh);
+  const poller = startPolling(refreshMs, refresh);
 
   return {
     group,
     tick: () => { /* static between refreshes */ },
-    dispose: () => { stop(); },
+    dispose: () => { poller.stop(); },
+    getStatus: () => poller.getStatus(),
   };
 }
 
@@ -344,13 +424,13 @@ export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
     }
   }
 
-  const stop = startPolling(refreshMs, refresh);
+  const poller = startPolling(refreshMs, refresh);
 
   return {
     group,
     tick: () => { /* static between refreshes */ },
     dispose: () => {
-      stop();
+      poller.stop();
       coneGeo.dispose();
       hrArcGeo.dispose();
       markerGeo.dispose();
@@ -359,6 +439,7 @@ export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
       markerMat.dispose();
       for (const m of glyphMats) m.dispose();
     },
+    getStatus: () => poller.getStatus(),
   };
 }
 
@@ -419,11 +500,12 @@ export function buildLivePhasesCell(opts: LivePhasesOpts): LiveCell {
     }
   }
 
-  const stop = startPolling(refreshMs, refresh);
+  const poller = startPolling(refreshMs, refresh);
 
   return {
     group,
     tick: (time: number) => { currentViz?.tick(time); },
-    dispose: () => { stop(); },
+    dispose: () => { poller.stop(); },
+    getStatus: () => poller.getStatus(),
   };
 }

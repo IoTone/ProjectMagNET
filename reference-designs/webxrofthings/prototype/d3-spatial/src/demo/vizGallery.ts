@@ -15,6 +15,7 @@ import { buildEdgeBundle, EdgeBundleViz } from '../viz/edgeBundle';
 import { buildMorphDemo, MorphDemo } from './morphDemo';
 import { buildVideoPanel, VideoPanelViz } from '../viz/videoPanel';
 import { buildLiveLineCell, buildLivePhasesCell, buildLiveTargetsCell, LiveCell } from './liveVitalsCells';
+import { buildStatusBadge, StatusBadge } from './liveStatusBadge';
 import { sampleTree, sampleGraph, sampleRidgeline, sampleSankey, sampleTangles, sampleParallel, sampleStreamgraph } from './sampleHierarchy';
 import { TEXT } from '../ui/palette';
 
@@ -161,6 +162,13 @@ export function buildVizGallery(): GalleryResult {
   const cellH = 0.30;
   const rowGap = 0.10;
 
+  // Map cell id → live source so we can attach a status badge per live feed.
+  // Non-live cells (tree, treemap, etc.) get no badge — clean by default.
+  const liveSourceById: Record<string, LiveCell> = {
+    liveHr: liveHr, liveBr: liveBr, livePhases: livePhases, liveTargets: liveTargets,
+  };
+  const statusBadges: StatusBadge[] = [];
+
   specs.forEach((s, i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
@@ -190,6 +198,17 @@ export function buildVizGallery(): GalleryResult {
     sub.position.set(0, -cellH / 2 - 0.015, 0.03);
     sub.sync();
     cell.add(sub);
+
+    // Status badge — only for live cells. Top-right of the cell frame, slightly
+    // forward in z so it never gets occluded by the viz behind it.
+    const liveSource = liveSourceById[s.id];
+    if (liveSource) {
+      const badge = buildStatusBadge(() => liveSource.getStatus(), {
+        position: new THREE.Vector3(cellW / 2 - 0.04, cellH / 2 - 0.012, 0.04),
+      });
+      cell.add(badge.group);
+      statusBadges.push(badge);
+    }
 
     root.add(cell);
     items.push({ id: s.id, title: s.title, group: cell, worldPos: new THREE.Vector3(x, y, 0) });
