@@ -45,6 +45,48 @@
       "udm_spatial_anchor_x": { "x": -0.6, "y": 1.0, "z": -0.8 }
     },
     {
+      "udm_key": "smart-light-001",
+      "udm_uuid": "urn:device:smart-bulb:001",
+      "_comment": "Simulated smart bulb. Mutable via POST /api/v1/actuator/light. Real hardware would be a Matter / Zigbee / WiFi-IP-controlled bulb.",
+      "udm_model_name": "Smart Bulb (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Living-room ceiling",
+      "udm_type": "actuator",
+      "udm_class": ["actuator", "lighting", "iot"],
+      "udm_capabilities": ["on-off", "brightness", "color-rgb", "ramp"],
+      "udm_services_link": ["light-state", "light-history"],
+      "udm_tags": ["room", "actuator", "simulated"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 2.4, "z": 0.0 }
+    },
+    {
+      "udm_key": "thermostat-001",
+      "udm_uuid": "urn:device:thermostat:001",
+      "_comment": "Simulated thermostat. Mutable via POST /api/v1/actuator/thermostat. Server drifts current_c toward setpoint_c at ~0.1°C/min.",
+      "udm_model_name": "Thermostat (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Living-room thermostat",
+      "udm_type": "actuator",
+      "udm_class": ["actuator", "thermostat", "iot"],
+      "udm_capabilities": ["setpoint", "mode-heat-cool-off", "current-temperature"],
+      "udm_services_link": ["thermostat-state"],
+      "udm_tags": ["room", "actuator", "simulated"],
+      "udm_spatial_anchor_x": { "x": -1.2, "y": 1.4, "z": -0.2 }
+    },
+    {
+      "udm_key": "speaker-001",
+      "udm_uuid": "urn:device:smart-speaker:001",
+      "_comment": "Simulated smart speaker for audio notifications. POST /api/v1/actuator/speaker/play {sound_id} to trigger.",
+      "udm_model_name": "Smart Speaker (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Living-room speaker",
+      "udm_type": "actuator",
+      "udm_class": ["actuator", "audio", "iot"],
+      "udm_capabilities": ["audio-notification", "preset-sounds"],
+      "udm_services_link": ["speaker-state"],
+      "udm_tags": ["room", "actuator", "simulated"],
+      "udm_spatial_anchor_x": { "x": 1.2, "y": 1.0, "z": -0.4 }
+    },
+    {
       "udm_key": "envhub-001",
       "udm_uuid": "urn:device:env-sensor-hub:001",
       "_comment": "Simulated environmental sensor hub. Backed by mock-join-server for the demo; real hardware would be a multi-sensor I2C board (e.g. BME680 + AQI + pollen counter).",
@@ -219,6 +261,78 @@
           "usm_characteristic_constraints": { "values": ["low", "moderate", "high", "very-high"] } }
       ],
       "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "light-state",
+      "usm_uuid": "urn:service:light-state:001",
+      "usm_service_name": "Smart bulb state",
+      "usm_type": "actuator",
+      "usm_class": ["actuator", "lighting", "mutable"],
+      "usm_service_endpoint": {
+        "GET":  { "url": "/api/v1/actuator/light",  "content-type": "application/json" },
+        "POST": { "url": "/api/v1/actuator/light",  "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 5 },
+      "characteristics": [
+        { "usm_characteristic_id": "on",             "usm_characteristic_format": "boolean" },
+        { "usm_characteristic_id": "brightness_pct", "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 100 } },
+        { "usm_characteristic_id": "color",          "usm_characteristic_format": "{r,g,b}" },
+        { "usm_characteristic_id": "ramp_ms",        "usm_characteristic_format": "number" }
+      ],
+      "usm_tags": ["actuator", "mutable", "simulated"]
+    },
+    {
+      "usm_key": "light-history",
+      "usm_uuid": "urn:service:light-series:001",
+      "usm_service_name": "Smart bulb brightness history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "lighting"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/actuator/light/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "brightness_pct (0-100, 0 when off)", "t_unit": "ms_since_epoch" } }
+      ],
+      "usm_tags": ["live", "simulated"]
+    },
+    {
+      "usm_key": "thermostat-state",
+      "usm_uuid": "urn:service:thermostat-state:001",
+      "usm_service_name": "Thermostat state",
+      "usm_type": "actuator",
+      "usm_class": ["actuator", "thermostat", "mutable"],
+      "usm_service_endpoint": {
+        "GET":  { "url": "/api/v1/actuator/thermostat", "content-type": "application/json" },
+        "POST": { "url": "/api/v1/actuator/thermostat", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 5 },
+      "characteristics": [
+        { "usm_characteristic_id": "setpoint_c", "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 10, "max": 32 } },
+        { "usm_characteristic_id": "current_c", "usm_characteristic_format": "number" },
+        { "usm_characteristic_id": "mode",      "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["heat", "cool", "off"] } }
+      ],
+      "usm_tags": ["actuator", "mutable", "simulated"]
+    },
+    {
+      "usm_key": "speaker-state",
+      "usm_uuid": "urn:service:speaker-state:001",
+      "usm_service_name": "Smart speaker state",
+      "usm_type": "actuator",
+      "usm_class": ["actuator", "audio", "trigger"],
+      "usm_service_endpoint": {
+        "GET":  { "url": "/api/v1/actuator/speaker",      "content-type": "application/json" },
+        "POST": { "url": "/api/v1/actuator/speaker/play", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "last_played_id",     "usm_characteristic_format": "string|null" },
+        { "usm_characteristic_id": "last_played_ago_ms", "usm_characteristic_format": "number|null" },
+        { "usm_characteristic_id": "available_sounds",   "usm_characteristic_format": "array<string>" }
+      ],
+      "usm_tags": ["actuator", "trigger", "simulated"]
     }
   ],
 
@@ -304,6 +418,22 @@
       "config": { "vMin": 0, "vMax": 12, "color": 11533744 },
       "deviceRef": "envhub-001",
       "serviceRef": "pollen-history",
+      "hoverable": true
+    },
+    {
+      "id": "light-brightness",
+      "type": "line",
+      "title": "Light · brightness",
+      "subtitle": "last 60 min · 0=off",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/actuator/light/history",
+        "shape": "series",
+        "refreshInterval": 5
+      },
+      "config": { "vMin": 0, "vMax": 100, "color": 16769280 },
+      "deviceRef": "smart-light-001",
+      "serviceRef": "light-history",
       "hoverable": true
     },
     {

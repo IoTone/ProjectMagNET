@@ -404,6 +404,131 @@ describe('mock-join-server — UC2 environmental sensors (P4a)', () => {
   });
 });
 
+describe('mock-join-server — UC2 actuators (P4b)', () => {
+  function buildAct() {
+    return createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });
+  }
+
+  /* ─── Lighting ─── */
+  it('GET /api/v1/actuator/light returns the default state (on, ~70%, warm white)', async () => {
+    const s = buildAct();
+    const res = await request(s.app).get('/api/v1/actuator/light');
+    expect(res.status).toBe(200);
+    expect(res.body.on).toBe(true);
+    expect(res.body.brightness_pct).toBe(70);
+    expect(res.body.color).toEqual({ r: 255, g: 220, b: 180 });
+    expect(res.body.ramp_ms).toBe(500);
+    s.stopRotationTimer();
+  });
+
+  it('POST mutates lighting brightness and persists across reads', async () => {
+    const s = buildAct();
+    await request(s.app).post('/api/v1/actuator/light').send({ brightness_pct: 35 });
+    const res = await request(s.app).get('/api/v1/actuator/light');
+    expect(res.body.brightness_pct).toBe(35);
+    expect(res.body.on).toBe(true);
+    s.stopRotationTimer();
+  });
+
+  it('POST clamps brightness to [0, 100]', async () => {
+    const s = buildAct();
+    await request(s.app).post('/api/v1/actuator/light').send({ brightness_pct: 250 });
+    const high = await request(s.app).get('/api/v1/actuator/light');
+    expect(high.body.brightness_pct).toBe(100);
+    await request(s.app).post('/api/v1/actuator/light').send({ brightness_pct: -10 });
+    const low = await request(s.app).get('/api/v1/actuator/light');
+    expect(low.body.brightness_pct).toBe(0);
+    s.stopRotationTimer();
+  });
+
+  it('POST color updates RGB, clamping each channel to [0, 255]', async () => {
+    const s = buildAct();
+    await request(s.app).post('/api/v1/actuator/light').send({ color: { r: 999, g: 100, b: -50 } });
+    const res = await request(s.app).get('/api/v1/actuator/light');
+    expect(res.body.color).toEqual({ r: 255, g: 100, b: 0 });
+    s.stopRotationTimer();
+  });
+
+  it('light/history records 0 brightness whenever the light is off', async () => {
+    const s = buildAct();
+    await request(s.app).post('/api/v1/actuator/light').send({ on: false, brightness_pct: 80 });
+    const hist = await request(s.app).get('/api/v1/actuator/light/history');
+    // The most-recent sample reflects current state — off means 0 in the line.
+    expect(hist.body.samples[hist.body.samples.length - 1].v).toBe(0);
+    s.stopRotationTimer();
+  });
+
+  /* ─── Thermostat ─── */
+  it('GET /api/v1/actuator/thermostat returns defaults (21°C setpoint, 19.5°C current, heat)', async () => {
+    const s = buildAct();
+    const res = await request(s.app).get('/api/v1/actuator/thermostat');
+    expect(res.body.setpoint_c).toBe(21.0);
+    expect(res.body.mode).toBe('heat');
+    // current_c may have drifted a hair on the first read but stays close to 19.5.
+    expect(Math.abs(res.body.current_c - 19.5)).toBeLessThan(0.5);
+    s.stopRotationTimer();
+  });
+
+  it('POST clamps setpoint to [10, 32] °C', async () => {
+    const s = buildAct();
+    await request(s.app).post('/api/v1/actuator/thermostat').send({ setpoint_c: 50 });
+    const high = await request(s.app).get('/api/v1/actuator/thermostat');
+    expect(high.body.setpoint_c).toBe(32);
+    await request(s.app).post('/api/v1/actuator/thermostat').send({ setpoint_c: 0 });
+    const low = await request(s.app).get('/api/v1/actuator/thermostat');
+    expect(low.body.setpoint_c).toBe(10);
+    s.stopRotationTimer();
+  });
+
+  it('POST mode accepts heat/cool/off, ignores anything else', async () => {
+    const s = buildAct();
+    await request(s.app).post('/api/v1/actuator/thermostat').send({ mode: 'cool' });
+    expect((await request(s.app).get('/api/v1/actuator/thermostat')).body.mode).toBe('cool');
+    await request(s.app).post('/api/v1/actuator/thermostat').send({ mode: 'auto' });   // unknown
+    expect((await request(s.app).get('/api/v1/actuator/thermostat')).body.mode).toBe('cool');   // unchanged
+    s.stopRotationTimer();
+  });
+
+  /* ─── Speaker ─── */
+  it('GET /api/v1/actuator/speaker returns the available sound list and a never-played state on boot', async () => {
+    const s = buildAct();
+    const res = await request(s.app).get('/api/v1/actuator/speaker');
+    expect(res.body.last_played_id).toBeNull();
+    expect(res.body.last_played_ago_ms).toBeNull();
+    expect(res.body.available_sounds).toContain('chime');
+    expect(res.body.available_sounds).toContain('doorbell');
+    s.stopRotationTimer();
+  });
+
+  it('POST /play records the played sound and elapsed time', async () => {
+    const s = buildAct();
+    const play = await request(s.app).post('/api/v1/actuator/speaker/play').send({ sound_id: 'chime' });
+    expect(play.body.played).toBe('chime');
+    expect(typeof play.body.at).toBe('number');
+    const after = await request(s.app).get('/api/v1/actuator/speaker');
+    expect(after.body.last_played_id).toBe('chime');
+    expect(after.body.last_played_ago_ms).toBeGreaterThanOrEqual(0);
+    expect(after.body.last_played_ago_ms).toBeLessThan(1000);
+    s.stopRotationTimer();
+  });
+
+  it('POST /play rejects unknown sound_id with 400 and lists available sounds', async () => {
+    const s = buildAct();
+    const res = await request(s.app).post('/api/v1/actuator/speaker/play').send({ sound_id: 'fart' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('unknown_sound');
+    expect(Array.isArray(res.body.available)).toBe(true);
+    s.stopRotationTimer();
+  });
+
+  it('POST /play with no sound_id defaults to "chime"', async () => {
+    const s = buildAct();
+    const play = await request(s.app).post('/api/v1/actuator/speaker/play').send({});
+    expect(play.body.played).toBe('chime');
+    s.stopRotationTimer();
+  });
+});
+
 describe('mock-join-server — GET /api/v1/code', () => {
   it('returns current code and a positive expiresIn', async () => {
     const s = createJoinServer({ jwtSecret: JWT_SECRET, rotationSeconds: 300, startRotationTimer: false });

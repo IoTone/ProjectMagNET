@@ -307,7 +307,7 @@ The mock-join-server resolves `DEMO01–04` to per-use-case manifests. Quick che
 | Code   | Dataspace          | Manifest                | Expected content (placeholder content for unbuilt UCs)             |
 | ------ | ------------------ | ----------------------- | ------------------------------------------------------------------ |
 | DEMO01 | UC1 vitals         | `uc1-vitals.json`       | Vitals device + 5 marks (HR/BR/phases/targets/body-temp) — body-temp is simulated; rest needs real device |
-| DEMO02 | UC2 home auto.     | `uc2-room.json`         | Camera + temperature scaffold — pending P4 build-out               |
+| DEMO02 | UC2 home auto.     | `uc2-room.json`         | Camera + room temp + AQI/baro/pollen sensors + lighting/thermostat/speaker actuators (state mutable via curl; in-XR controls deferred to P4c) |
 | DEMO03 | UC3 poster session | `uc3-poster.json`       | Tree/treemap/sankey marks — pending P2 curated content             |
 | DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Single placeholder scatter — pending P5                            |
 
@@ -316,6 +316,37 @@ Run `npm run server` (the join server) in a second terminal, then `npm run dev`.
 - Manifest renders something visible (even if minimal for UC2/UC4)
 - Leave-dataspace returns to the join panel cleanly
 - Rotating dev code (printed in the server console) still resolves to the default `room-dataspace.json` for backward compatibility
+
+### 6.3.2 UC2 actuator control via curl (~5 minutes, hardware-free)
+
+DEMO02 includes simulated lighting, thermostat, and speaker actuators. State is mutable via POST while the dataspace is loaded. Requires `npm run server` running.
+
+```bash
+# Lighting — read state, dim to 30%, change to red
+curl -s http://localhost:3001/api/v1/actuator/light | jq
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"brightness_pct": 30, "color": {"r": 255, "g": 60, "b": 60}}' \
+  http://localhost:3001/api/v1/actuator/light | jq
+
+# Light brightness line in the dataspace should drop to 30 within 5s
+# (next refreshInterval). Toggle off:
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"on": false}' http://localhost:3001/api/v1/actuator/light | jq
+# Line should drop to 0.
+
+# Thermostat — set to 24°C cool mode
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"setpoint_c": 24, "mode": "cool"}' \
+  http://localhost:3001/api/v1/actuator/thermostat | jq
+# Re-read after 60s — current_c should drift toward 24°C at ~0.1°C/min.
+
+# Speaker — trigger a chime
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"sound_id": "chime"}' \
+  http://localhost:3001/api/v1/actuator/speaker/play | jq
+```
+
+(Audio playback is server-side state today — actual sound output requires the in-XR audio controller to subscribe, which lands with P4c controls.)
 
 ### 6.4 Live cells in the gallery (~5 minutes)
 

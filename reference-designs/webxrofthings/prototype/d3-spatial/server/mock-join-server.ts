@@ -358,6 +358,143 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
     res.json({ count, level: pollenLevel(count), timestamp_us: now * 1000 });
   });
 
+  // ─── UC2 actuators (P4b) — lighting / thermostat / speaker ─────────────
+  // Stateful: GET reads current state, POST mutates. Each actuator keeps an
+  // in-memory state record + an event log. The history endpoints return
+  // 60-sample series suitable for line marks; samples are read straight from
+  // the event log (or filled with the current value if the log is sparse).
+  //
+  // No persistence — server restart resets state to defaults. That's fine
+  // for a demo: it's the dataspace's job, not the test fixture's.
+
+  interface LightState {
+    on: boolean;
+    brightness_pct: number;     // 0-100
+    color: { r: number; g: number; b: number };  // 0-255 each
+    ramp_ms: number;             // transition time on change
+    last_changed_at: number;     // ms epoch
+  }
+  const lightState: LightState = {
+    on: true, brightness_pct: 70,
+    color: { r: 255, g: 220, b: 180 },   // warm white default
+    ramp_ms: 500,
+    last_changed_at: Date.now(),
+  };
+  // Event log: [{t_ms, brightness_pct, on}] for the brightness history line.
+  const lightHistory: Array<{ t: number; v: number }> = [];
+
+  app.get('/api/v1/actuator/light', (_req, res) => {
+    res.json({ ...lightState, timestamp_us: Date.now() * 1000 });
+  });
+  app.post('/api/v1/actuator/light', (req, res) => {
+    const body = req.body as Partial<LightState> & { on?: boolean };
+    if (typeof body.on === 'boolean') lightState.on = body.on;
+    if (typeof body.brightness_pct === 'number') {
+      lightState.brightness_pct = Math.max(0, Math.min(100, body.brightness_pct));
+    }
+    if (body.color && typeof body.color === 'object') {
+      const { r, g, b } = body.color;
+      if ([r, g, b].every(c => typeof c === 'number')) {
+        lightState.color = {
+          r: Math.max(0, Math.min(255, r)),
+          g: Math.max(0, Math.min(255, g)),
+          b: Math.max(0, Math.min(255, b)),
+        };
+      }
+    }
+    if (typeof body.ramp_ms === 'number' && body.ramp_ms >= 0) {
+      lightState.ramp_ms = body.ramp_ms;
+    }
+    lightState.last_changed_at = Date.now();
+    lightHistory.push({ t: lightState.last_changed_at, v: lightState.on ? lightState.brightness_pct : 0 });
+    while (lightHistory.length > 200) lightHistory.shift();
+    res.json({ ...lightState, timestamp_us: Date.now() * 1000 });
+  });
+  app.get('/api/v1/actuator/light/history', (_req, res) => {
+    // Return up to 60 samples covering the last hour. If the event log is
+    // sparse (typical), pad with the current value at 1-min intervals so
+    // the line mark always has a continuous trace.
+    const now = Date.now();
+    const samples: Array<{ t: number; v: number }> = [];
+    for (let i = 59; i >= 0; i--) {
+      const t = now - i * 60_000;
+      // Find the latest event at or before t; fall back to current state.
+      let v = lightState.on ? lightState.brightness_pct : 0;
+      for (let j = lightHistory.length - 1; j >= 0; j--) {
+        if (lightHistory[j]!.t <= t) { v = lightHistory[j]!.v; break; }
+      }
+      samples.push({ t, v });
+    }
+    res.json({ samples });
+  });
+
+  interface ThermostatState {
+    setpoint_c: number;     // user-requested temp
+    current_c: number;       // actual room temp (drifts toward setpoint)
+    mode: 'heat' | 'cool' | 'off';
+    last_changed_at: number;
+  }
+  const thermo: ThermostatState = {
+    setpoint_c: 21.0, current_c: 19.5, mode: 'heat',
+    last_changed_at: Date.now(),
+  };
+  // Drift current_c toward setpoint_c slowly — every snapshot read
+  // re-computes based on elapsed time, so we don't need a timer.
+  function thermoTick(now: number) {
+    const dt = (now - thermo.last_changed_at) / 1000;  // seconds since last change
+    if (thermo.mode === 'off') return;
+    // ~0.1°C/min in either direction, capped at the setpoint.
+    const rate = 0.1 / 60;     // °C/sec
+    const diff = thermo.setpoint_c - thermo.current_c;
+    if (Math.abs(diff) < 0.05) return;
+    const step = Math.sign(diff) * Math.min(Math.abs(diff), rate * dt);
+    thermo.current_c = Math.round((thermo.current_c + step) * 10) / 10;
+    thermo.last_changed_at = now;
+  }
+  app.get('/api/v1/actuator/thermostat', (_req, res) => {
+    const now = Date.now();
+    thermoTick(now);
+    res.json({ ...thermo, timestamp_us: now * 1000 });
+  });
+  app.post('/api/v1/actuator/thermostat', (req, res) => {
+    const body = req.body as Partial<ThermostatState>;
+    const now = Date.now();
+    thermoTick(now);
+    if (typeof body.setpoint_c === 'number') {
+      thermo.setpoint_c = Math.max(10, Math.min(32, body.setpoint_c));
+    }
+    if (body.mode === 'heat' || body.mode === 'cool' || body.mode === 'off') {
+      thermo.mode = body.mode;
+    }
+    thermo.last_changed_at = now;
+    res.json({ ...thermo, timestamp_us: now * 1000 });
+  });
+
+  interface SpeakerState {
+    last_played_id: string | null;
+    last_played_at: number;       // ms epoch, 0 if never
+    available_sounds: string[];
+  }
+  const speaker: SpeakerState = {
+    last_played_id: null, last_played_at: 0,
+    available_sounds: ['chime', 'doorbell', 'alarm', 'notification'],
+  };
+  app.get('/api/v1/actuator/speaker', (_req, res) => {
+    const now = Date.now();
+    res.json({ ...speaker, last_played_ago_ms: speaker.last_played_at ? now - speaker.last_played_at : null, timestamp_us: now * 1000 });
+  });
+  app.post('/api/v1/actuator/speaker/play', (req, res) => {
+    const body = req.body as { sound_id?: string };
+    const sound = body.sound_id ?? 'chime';
+    if (!speaker.available_sounds.includes(sound)) {
+      res.status(400).json({ error: 'unknown_sound', available: speaker.available_sounds });
+      return;
+    }
+    speaker.last_played_id = sound;
+    speaker.last_played_at = Date.now();
+    res.json({ played: sound, at: speaker.last_played_at });
+  });
+
   return {
     app,
     getCurrentCode: () => currentCode,
