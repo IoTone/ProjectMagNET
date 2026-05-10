@@ -276,6 +276,88 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
     });
   });
 
+  // ─── UC2 environmental sensors (P4a) — AQI / barometer / pollen ────────
+  // Same deterministic-time pattern as body-temp. Each feed has a snapshot
+  // endpoint (current value + categorical level) and a 60-sample history.
+  // Internal generators live alongside the endpoints so tests can assert
+  // value bounds without re-implementing the maths.
+
+  function aqiAt(t: number): number {
+    const m = t / 60_000;
+    return 50 + 25 * Math.sin(m / 30) + 10 * Math.sin(m / 7.5);
+  }
+  function aqiCategory(aqi: number): string {
+    if (aqi < 50) return 'good';
+    if (aqi < 100) return 'moderate';
+    if (aqi < 150) return 'unhealthy-for-sensitive';
+    if (aqi < 200) return 'unhealthy';
+    if (aqi < 300) return 'very-unhealthy';
+    return 'hazardous';
+  }
+  app.get('/api/v1/sensor/aqi/history', (_req, res) => {
+    const now = Date.now();
+    const samples: Array<{ t: number; v: number }> = [];
+    for (let i = 59; i >= 0; i--) {
+      const t = now - i * 60_000;
+      samples.push({ t, v: Math.round(aqiAt(t)) });
+    }
+    res.json({ samples });
+  });
+  app.get('/api/v1/sensor/aqi', (_req, res) => {
+    const now = Date.now();
+    const aqi = Math.round(aqiAt(now));
+    res.json({ aqi, category: aqiCategory(aqi), timestamp_us: now * 1000 });
+  });
+
+  function hpaAt(t: number): number {
+    // Atmospheric pressure: ~1009-1021 hPa range, slow weather-like drift.
+    const m = t / 60_000;
+    return 1015 + 5 * Math.sin(m / 60) + Math.sin(m / 7);
+  }
+  app.get('/api/v1/sensor/barometer/history', (_req, res) => {
+    const now = Date.now();
+    const samples: Array<{ t: number; v: number }> = [];
+    for (let i = 59; i >= 0; i--) {
+      const t = now - i * 60_000;
+      samples.push({ t, v: Math.round(hpaAt(t) * 10) / 10 });
+    }
+    res.json({ samples });
+  });
+  app.get('/api/v1/sensor/barometer', (_req, res) => {
+    const now = Date.now();
+    const hpa = Math.round(hpaAt(now) * 10) / 10;
+    // Trend over the last 30 min — useful demo signal for "weather changing".
+    const earlier = hpaAt(now - 30 * 60_000);
+    const trend = hpa - earlier > 0.5 ? 'rising' : hpa - earlier < -0.5 ? 'falling' : 'steady';
+    res.json({ hpa, trend, timestamp_us: now * 1000 });
+  });
+
+  function pollenAt(t: number): number {
+    // Daily cycle — pollen peaks mid-morning. Range ~1-7 (clipped at 0).
+    const m = t / 60_000;
+    return Math.max(0, 4 + 3 * Math.sin(m / 120) + 0.5 * Math.sin(m * 1.7));
+  }
+  function pollenLevel(count: number): string {
+    if (count < 2.4) return 'low';
+    if (count < 4.8) return 'moderate';
+    if (count < 7.2) return 'high';
+    return 'very-high';
+  }
+  app.get('/api/v1/sensor/pollen/history', (_req, res) => {
+    const now = Date.now();
+    const samples: Array<{ t: number; v: number }> = [];
+    for (let i = 59; i >= 0; i--) {
+      const t = now - i * 60_000;
+      samples.push({ t, v: Math.round(pollenAt(t) * 10) / 10 });
+    }
+    res.json({ samples });
+  });
+  app.get('/api/v1/sensor/pollen', (_req, res) => {
+    const now = Date.now();
+    const count = Math.round(pollenAt(now) * 10) / 10;
+    res.json({ count, level: pollenLevel(count), timestamp_us: now * 1000 });
+  });
+
   return {
     app,
     getCurrentCode: () => currentCode,

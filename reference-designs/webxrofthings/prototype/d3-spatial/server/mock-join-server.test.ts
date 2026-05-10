@@ -315,6 +315,95 @@ describe('mock-join-server — simulated body-temperature feed (P3)', () => {
   });
 });
 
+describe('mock-join-server — UC2 environmental sensors (P4a)', () => {
+  function buildEnv() {
+    return createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });
+  }
+
+  /* ─── AQI ─── */
+  it('AQI history returns 60 in-band integer samples', async () => {
+    const s = buildEnv();
+    const res = await request(s.app).get('/api/v1/sensor/aqi/history');
+    expect(res.status).toBe(200);
+    expect(res.body.samples.length).toBe(60);
+    for (const sample of res.body.samples) {
+      expect(typeof sample.t).toBe('number');
+      expect(Number.isInteger(sample.v)).toBe(true);   // AQI is rounded to int
+      expect(sample.v).toBeGreaterThanOrEqual(0);
+      expect(sample.v).toBeLessThan(150);              // generator stays sub-100, allow margin
+    }
+    s.stopRotationTimer();
+  });
+
+  it('AQI snapshot returns aqi + a valid category', async () => {
+    const s = buildEnv();
+    const res = await request(s.app).get('/api/v1/sensor/aqi');
+    expect(res.status).toBe(200);
+    expect(typeof res.body.aqi).toBe('number');
+    expect(['good', 'moderate', 'unhealthy-for-sensitive', 'unhealthy', 'very-unhealthy', 'hazardous'])
+      .toContain(res.body.category);
+    s.stopRotationTimer();
+  });
+
+  /* ─── Barometer ─── */
+  it('barometer history returns 60 in-band hPa samples', async () => {
+    const s = buildEnv();
+    const res = await request(s.app).get('/api/v1/sensor/barometer/history');
+    expect(res.body.samples.length).toBe(60);
+    for (const sample of res.body.samples) {
+      expect(sample.v).toBeGreaterThan(1005);
+      expect(sample.v).toBeLessThan(1025);
+    }
+    s.stopRotationTimer();
+  });
+
+  it('barometer snapshot includes hpa + a valid trend', async () => {
+    const s = buildEnv();
+    const res = await request(s.app).get('/api/v1/sensor/barometer');
+    expect(typeof res.body.hpa).toBe('number');
+    expect(['rising', 'falling', 'steady']).toContain(res.body.trend);
+    s.stopRotationTimer();
+  });
+
+  /* ─── Pollen ─── */
+  it('pollen history returns 60 non-negative samples bounded by ~12', async () => {
+    const s = buildEnv();
+    const res = await request(s.app).get('/api/v1/sensor/pollen/history');
+    expect(res.body.samples.length).toBe(60);
+    for (const sample of res.body.samples) {
+      expect(sample.v).toBeGreaterThanOrEqual(0);
+      expect(sample.v).toBeLessThan(12);
+    }
+    s.stopRotationTimer();
+  });
+
+  it('pollen snapshot returns count + a valid level', async () => {
+    const s = buildEnv();
+    const res = await request(s.app).get('/api/v1/sensor/pollen');
+    expect(typeof res.body.count).toBe('number');
+    expect(['low', 'moderate', 'high', 'very-high']).toContain(res.body.level);
+    s.stopRotationTimer();
+  });
+
+  /* ─── snapshot/history coherence ─── */
+  it.each([
+    ['aqi'],
+    ['barometer'],
+    ['pollen'],
+  ])('%s snapshot value matches the most-recent history sample', async (key) => {
+    const s = buildEnv();
+    const snap = await request(s.app).get(`/api/v1/sensor/${key}`);
+    const hist = await request(s.app).get(`/api/v1/sensor/${key}/history`);
+    const last = hist.body.samples[hist.body.samples.length - 1].v;
+    const snapValue = snap.body.aqi ?? snap.body.hpa ?? snap.body.count;
+    // AQI snapshot is integer, history is integer; baro is 0.1-rounded; pollen 0.1-rounded.
+    // Allow ≤1 unit jitter for AQI (integer rounding) and 0.1 for the others.
+    const tolerance = key === 'aqi' ? 1 : 0.11;
+    expect(Math.abs(snapValue - last)).toBeLessThanOrEqual(tolerance);
+    s.stopRotationTimer();
+  });
+});
+
 describe('mock-join-server — GET /api/v1/code', () => {
   it('returns current code and a positive expiresIn', async () => {
     const s = createJoinServer({ jwtSecret: JWT_SECRET, rotationSeconds: 300, startRotationTimer: false });

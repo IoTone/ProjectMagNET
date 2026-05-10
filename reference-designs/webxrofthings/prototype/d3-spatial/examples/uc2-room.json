@@ -43,6 +43,21 @@
       "udm_services_link": ["temp-current", "temp-history"],
       "udm_tags": ["room", "lan-only"],
       "udm_spatial_anchor_x": { "x": -0.6, "y": 1.0, "z": -0.8 }
+    },
+    {
+      "udm_key": "envhub-001",
+      "udm_uuid": "urn:device:env-sensor-hub:001",
+      "_comment": "Simulated environmental sensor hub. Backed by mock-join-server for the demo; real hardware would be a multi-sensor I2C board (e.g. BME680 + AQI + pollen counter).",
+      "udm_model_name": "Env Sensor Hub (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Env Hub",
+      "udm_type": "environmental-sensor",
+      "udm_class": ["environmental-sensor", "iot"],
+      "udm_capabilities": ["air-quality", "barometric-pressure", "pollen-count", "json-http"],
+      "udm_sensors": ["aqi-pm25", "barometer", "pollen-counter"],
+      "udm_services_link": ["aqi-history", "aqi-current", "barometer-history", "barometer-current", "pollen-history", "pollen-current"],
+      "udm_tags": ["room", "environmental", "simulated"],
+      "udm_spatial_anchor_x": { "x": 0.6, "y": 1.4, "z": -0.8 }
     }
   ],
 
@@ -105,6 +120,105 @@
       "characteristics": [
         { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>" }
       ]
+    },
+    {
+      "usm_key": "aqi-history",
+      "usm_uuid": "urn:service:aqi-series:envhub-001",
+      "usm_service_name": "Air quality index history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "air-quality"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/aqi/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "us-aqi", "t_unit": "ms_since_epoch" } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "aqi-current",
+      "usm_uuid": "urn:service:aqi-snapshot:envhub-001",
+      "usm_service_name": "Air quality index snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "air-quality", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/aqi", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 10 },
+      "characteristics": [
+        { "usm_characteristic_id": "aqi",      "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 500 } },
+        { "usm_characteristic_id": "category", "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["good", "moderate", "unhealthy-for-sensitive", "unhealthy", "very-unhealthy", "hazardous"] } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "barometer-history",
+      "usm_uuid": "urn:service:barometer-series:envhub-001",
+      "usm_service_name": "Barometric pressure history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "barometric-pressure"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/barometer/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "hPa", "t_unit": "ms_since_epoch" } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "barometer-current",
+      "usm_uuid": "urn:service:barometer-snapshot:envhub-001",
+      "usm_service_name": "Barometric pressure snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "barometric-pressure", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/barometer", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 30 },
+      "characteristics": [
+        { "usm_characteristic_id": "hpa",   "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 870, "max": 1085 } },
+        { "usm_characteristic_id": "trend", "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["rising", "falling", "steady"] } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "pollen-history",
+      "usm_uuid": "urn:service:pollen-series:envhub-001",
+      "usm_service_name": "Pollen count history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "pollen"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/pollen/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "grains/m3 (scaled 0-12)", "t_unit": "ms_since_epoch" } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "pollen-current",
+      "usm_uuid": "urn:service:pollen-snapshot:envhub-001",
+      "usm_service_name": "Pollen count snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "pollen", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/pollen", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 60 },
+      "characteristics": [
+        { "usm_characteristic_id": "count", "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 12 } },
+        { "usm_characteristic_id": "level", "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["low", "moderate", "high", "very-high"] } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
     }
   ],
 
@@ -142,6 +256,54 @@
       },
       "deviceRef": "magnet-stamp-c3u-a1b2",
       "serviceRef": "temp-history",
+      "hoverable": true
+    },
+    {
+      "id": "aqi-line",
+      "type": "line",
+      "title": "Air quality · AQI",
+      "subtitle": "last 60 min · simulated",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/aqi/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "config": { "vMin": 0, "vMax": 150, "color": 16753280 },
+      "deviceRef": "envhub-001",
+      "serviceRef": "aqi-history",
+      "hoverable": true
+    },
+    {
+      "id": "barometer-line",
+      "type": "line",
+      "title": "Pressure · hPa",
+      "subtitle": "last 60 min · simulated",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/barometer/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "config": { "vMin": 1005, "vMax": 1025, "color": 12106432 },
+      "deviceRef": "envhub-001",
+      "serviceRef": "barometer-history",
+      "hoverable": true
+    },
+    {
+      "id": "pollen-line",
+      "type": "line",
+      "title": "Pollen · count",
+      "subtitle": "last 60 min · simulated",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/pollen/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "config": { "vMin": 0, "vMax": 12, "color": 11533744 },
+      "deviceRef": "envhub-001",
+      "serviceRef": "pollen-history",
       "hoverable": true
     },
     {
