@@ -292,7 +292,7 @@ With the device flashed and on the same LAN as your laptop:
 4. **Open UC1:** browser → `localhost:5173/`. Type **DEMO01** in the join slots and press Submit.
    - Privacy banner pops up (warm coral border, "Privacy notice" title, "I understand" button).
    - Click "I understand" → banner hides, dataspace marks visible.
-   - Verify 4 marks from `examples/uc1-vitals.json`: HR line, BR line, phases streamgraph (scrolling), HR radial gauge.
+   - Verify 5 marks from `examples/uc1-vitals.json`: HR line, BR line, phases streamgraph (scrolling), HR radial gauge, **body-temp line** (simulated, served by mock-join-server, slow wander ~36.5–37.0 °C).
    - **Walk into the radar cone**: device LED flips cyan → blue (presence pulse). Targets cell shows a coral glyph at your position. After ~1 minute, HR line populates with first sample.
 5. **Show-privacy HUD action:** click 🔒 in the dataspace HUD → banner re-opens.
 6. **Leave-dataspace:** click 🚪 → marks disappear, join panel returns. (Confirms `manifestController.dispose()` clears the active intervals.)
@@ -306,7 +306,7 @@ The mock-join-server resolves `DEMO01–04` to per-use-case manifests. Quick che
 
 | Code   | Dataspace          | Manifest                | Expected content (placeholder content for unbuilt UCs)             |
 | ------ | ------------------ | ----------------------- | ------------------------------------------------------------------ |
-| DEMO01 | UC1 vitals         | `uc1-vitals.json`       | Vitals device + 4 marks (HR/BR/phases/targets) — needs real device |
+| DEMO01 | UC1 vitals         | `uc1-vitals.json`       | Vitals device + 5 marks (HR/BR/phases/targets/body-temp) — body-temp is simulated; rest needs real device |
 | DEMO02 | UC2 home auto.     | `uc2-room.json`         | Camera + temperature scaffold — pending P4 build-out               |
 | DEMO03 | UC3 poster session | `uc3-poster.json`       | Tree/treemap/sankey marks — pending P2 curated content             |
 | DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Single placeholder scatter — pending P5                            |

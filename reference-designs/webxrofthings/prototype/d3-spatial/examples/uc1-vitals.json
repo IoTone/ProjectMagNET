@@ -37,6 +37,21 @@
       "udm_tags": ["personal", "lan-only", "no-tls", "health-data", "sleep-only", "non-contact"],
       "udm_spatial_anchor_x": { "x": 0.0, "y": 1.0, "z": -0.4 },
       "udm_fw_version_x": "vitals-e4th-0.3.0"
+    },
+    {
+      "udm_key":   "wearable-body-temp-001",
+      "udm_uuid":  "urn:device:wearable-thermistor:001",
+      "_comment":  "Simulated wearable body-temperature sensor. Backed by mock-join-server for the demo; real hardware would be a wrist or chest thermistor.",
+      "udm_model_name":   "Body-temp wearable (sim)",
+      "udm_vendor":       "MagNET (sim)",
+      "udm_mktg_name":    "BodyTemp Wearable",
+      "udm_type":         "health-sensor",
+      "udm_class":        ["health-sensor", "wearable", "biometric"],
+      "udm_capabilities": ["body-temperature", "json-http", "non-contact"],
+      "udm_sensors": ["thermistor"],
+      "udm_services_link": ["body-temp-history", "body-temp-current"],
+      "udm_tags": ["personal", "biometric", "simulated"],
+      "udm_spatial_anchor_x": { "x": 0.25, "y": 0.95, "z": -0.4 }
     }
   ],
 
@@ -114,6 +129,33 @@
       "usm_service_endpoint": {
         "GET": { "url": "/api/v1/vitals/targets", "content-type": "application/json" }
       }
+    },
+    {
+      "usm_key": "body-temp-history",
+      "usm_uuid": "urn:service:body-temp-series:001",
+      "usm_service_name": "Body temperature history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "biometric", "body-temperature"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/body-temperature/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "celsius", "t_unit": "ms_since_epoch" } }
+      ],
+      "usm_tags": ["live", "biometric", "simulated"]
+    },
+    {
+      "usm_key": "body-temp-current",
+      "usm_uuid": "urn:service:body-temp-snapshot:001",
+      "usm_service_name": "Body temperature snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "biometric", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/body-temperature", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 5 },
+      "usm_tags": ["live", "biometric", "simulated"]
     }
   ],
 
@@ -188,6 +230,26 @@
       },
       "deviceRef": "magnet-vitals-c0d4",
       "serviceRef": "phases",
+      "hoverable": true
+    },
+    {
+      "id": "body-temp-line",
+      "type": "line",
+      "title": "Body temperature",
+      "subtitle": "last 60 min · 1 sample/min · simulated",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/body-temperature/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "config": {
+        "vMin": 36.0,
+        "vMax": 37.5,
+        "color": 16753280
+      },
+      "deviceRef": "wearable-body-temp-001",
+      "serviceRef": "body-temp-history",
       "hoverable": true
     }
   ],

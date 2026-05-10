@@ -265,6 +265,56 @@ describe('mock-join-server — fixed UC codes', () => {
   });
 });
 
+describe('mock-join-server — simulated body-temperature feed (P3)', () => {
+  it('GET /api/v1/sensor/body-temperature/history returns 60 in-band samples', async () => {
+    const s = createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });
+    const res = await request(s.app).get('/api/v1/sensor/body-temperature/history');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.samples)).toBe(true);
+    expect(res.body.samples.length).toBe(60);
+    for (const sample of res.body.samples) {
+      expect(typeof sample.t).toBe('number');
+      expect(typeof sample.v).toBe('number');
+      // Generator wanders ~36.4 - 37.0 °C; assert wider plausible-body band.
+      expect(sample.v).toBeGreaterThan(36.0);
+      expect(sample.v).toBeLessThan(37.5);
+    }
+    s.stopRotationTimer();
+  });
+
+  it('history samples are monotonically time-ascending and 1 minute apart', async () => {
+    const s = createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });
+    const res = await request(s.app).get('/api/v1/sensor/body-temperature/history');
+    const samples: Array<{ t: number; v: number }> = res.body.samples;
+    for (let i = 1; i < samples.length; i++) {
+      const dt = samples[i]!.t - samples[i - 1]!.t;
+      expect(dt).toBe(60_000);
+    }
+    s.stopRotationTimer();
+  });
+
+  it('GET /api/v1/sensor/body-temperature returns a snapshot with celsius + timestamp', async () => {
+    const s = createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });
+    const res = await request(s.app).get('/api/v1/sensor/body-temperature');
+    expect(res.status).toBe(200);
+    expect(typeof res.body.celsius).toBe('number');
+    expect(res.body.celsius).toBeGreaterThan(36.0);
+    expect(res.body.celsius).toBeLessThan(37.5);
+    expect(typeof res.body.timestamp_us).toBe('number');
+    s.stopRotationTimer();
+  });
+
+  it('snapshot value matches the most-recent history sample (within numerical jitter)', async () => {
+    const s = createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });
+    const snap = await request(s.app).get('/api/v1/sensor/body-temperature');
+    const hist = await request(s.app).get('/api/v1/sensor/body-temperature/history');
+    const last = hist.body.samples[hist.body.samples.length - 1].v;
+    // Same generator, calls fractions of a ms apart — values should round-equal.
+    expect(Math.abs(snap.body.celsius - last)).toBeLessThan(0.01);
+    s.stopRotationTimer();
+  });
+});
+
 describe('mock-join-server — GET /api/v1/code', () => {
   it('returns current code and a positive expiresIn', async () => {
     const s = createJoinServer({ jwtSecret: JWT_SECRET, rotationSeconds: 300, startRotationTimer: false });

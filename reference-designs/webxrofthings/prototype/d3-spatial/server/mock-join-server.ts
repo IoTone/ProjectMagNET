@@ -229,6 +229,53 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
     res.json({ code: currentCode, expiresIn });
   });
 
+  // ─── Simulated sensor feeds (P3+) ─────────────────────────────────────
+  // Establishes the "fake feed" pattern used by P3 (UC1 body temperature)
+  // and reused by P4 (UC2 AQI/barometer/pollen) and P5 (UC4 IMU). Each
+  // endpoint returns a deterministic, time-derived signal so the same
+  // request issued at the same wall-clock time yields the same samples —
+  // useful for smoke baselines and visual regression.
+
+  /**
+   * GET /api/v1/sensor/body-temperature/history
+   * Body temperature, last 60 minutes, 1 sample/min. Deterministic noisy
+   * signal centred on 36.7 °C with a slow circadian-like wander (~±0.25 °C),
+   * a faster ~5-min ripple (~±0.05 °C), and a pseudo-noise term derived from
+   * the minute index. Range ~36.4-37.0 °C — comfortable normal band.
+   */
+  app.get('/api/v1/sensor/body-temperature/history', (_req, res) => {
+    const now = Date.now();
+    const samples: Array<{ t: number; v: number }> = [];
+    for (let i = 59; i >= 0; i--) {
+      const t = now - i * 60_000;
+      const m = t / 60_000;
+      const v = 36.7
+        + 0.25 * Math.sin(m / 30)
+        + 0.05 * Math.sin(m / 5)
+        + 0.02 * Math.sin(m * 7.13);
+      samples.push({ t, v: Math.round(v * 100) / 100 });
+    }
+    res.json({ samples });
+  });
+
+  /**
+   * GET /api/v1/sensor/body-temperature
+   * Snapshot of the current body temperature reading (mirrors the device
+   * snapshot endpoints like /heart-rate). Pluck-friendly shape.
+   */
+  app.get('/api/v1/sensor/body-temperature', (_req, res) => {
+    const now = Date.now();
+    const m = now / 60_000;
+    const celsius = 36.7
+      + 0.25 * Math.sin(m / 30)
+      + 0.05 * Math.sin(m / 5)
+      + 0.02 * Math.sin(m * 7.13);
+    res.json({
+      celsius: Math.round(celsius * 100) / 100,
+      timestamp_us: now * 1000,
+    });
+  });
+
   return {
     app,
     getCurrentCode: () => currentCode,
