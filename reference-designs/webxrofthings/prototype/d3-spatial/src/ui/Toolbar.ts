@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
+import { Text } from 'troika-three-text';
 import { TEXT } from './palette';
-import { FONT_BLOCK_OPTS, fontColor, sanitizeText } from './textStyles';
 
 export interface ToolbarButton {
   id: string;
@@ -31,11 +31,7 @@ export class Toolbar {
     let x = -total / 2 + btnW / 2;
 
     for (const b of buttons) {
-      // Block is now a flex container that centers its Text child — no more
-      // absolute-position math for the label. Font URLs come from the shared
-      // textStyles helper so we don't sprinkle the MSDF paths through 7 files.
       const block = new ThreeMeshUI.Block({
-        ...FONT_BLOCK_OPTS,
         width: btnW,
         height: btnH,
         padding: 0.004,
@@ -45,19 +41,21 @@ export class Toolbar {
         borderWidth: 0.0012,
         borderColor: new THREE.Color(b.active ? 0x66ccff : TEXT.muted),
         borderOpacity: 0.9,
-        justifyContent: 'center',
-        alignItems: 'center',
       });
       block.position.set(x, 0, 0);
       block.userData.isToolbarButton = true;
       block.userData.buttonId = b.id;
       x += btnW + gap;
 
-      block.add(new ThreeMeshUI.Text({
-        content: sanitizeText(b.label),
-        fontSize: 0.011,
-        fontColor: fontColor(b.active ? TEXT.emphasis : TEXT.body),
-      }));
+      const text = new Text();
+      text.text = b.label;
+      text.fontSize = 0.011;
+      text.color = b.active ? TEXT.emphasis : TEXT.body;
+      text.anchorX = 'center';
+      text.anchorY = 'middle';
+      text.position.set(0, 0, 0.002);
+      text.sync();
+      block.add(text);
 
       this.group.add(block);
       this.buttons.push({ id: b.id, label: b.label, block, onSelect: b.onSelect });

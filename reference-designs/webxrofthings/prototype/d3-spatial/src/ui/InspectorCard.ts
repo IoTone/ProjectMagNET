@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
+import { Text } from 'troika-three-text';
 import { TEXT } from './palette';
-import { FONT_BLOCK_OPTS, fontColor, sanitizeText } from './textStyles';
 
 export interface InspectorContent {
   title: string;
@@ -9,31 +9,14 @@ export interface InspectorContent {
   value?: string;
 }
 
-/** Invisible Block slot for a single left-anchored text line within the card. */
-function makeLeftSlot(width: number, height: number) {
-  return new ThreeMeshUI.Block({
-    ...FONT_BLOCK_OPTS,
-    width, height,
-    backgroundOpacity: 0,
-    borderOpacity: 0,
-    justifyContent: 'center',
-    alignItems: 'start',
-    textAlign: 'left',
-  });
-}
-
 export class InspectorCard {
   readonly block: any;
-  private titleText: any;
-  private subtitleText: any;
-  private valueText: any;
-  private titleSlot: any;
-  private subtitleSlot: any;
-  private valueSlot: any;
+  private title: Text;
+  private subtitle: Text;
+  private value: Text;
 
   constructor() {
     this.block = new ThreeMeshUI.Block({
-      ...FONT_BLOCK_OPTS,
       width: 0.18,
       height: 0.085,
       padding: 0.01,
@@ -47,44 +30,50 @@ export class InspectorCard {
     this.block.name = 'inspector-card';
     this.block.visible = false;
 
-    // Three stacked left-aligned slots — same y positions as the prior troika
-    // anchors, but each text now lives inside its own MSDF-aware Block.
-    this.titleSlot = makeLeftSlot(0.16, 0.020);
-    this.titleSlot.position.set(0, 0.025, 0.002);
-    this.block.add(this.titleSlot);
-    this.titleText = new ThreeMeshUI.Text({
-      content: '', fontSize: 0.012, fontColor: fontColor(TEXT.primary),
-    });
-    this.titleSlot.add(this.titleText);
+    this.title = new Text();
+    this.title.fontSize = 0.012;
+    this.title.color = TEXT.primary;
+    this.title.anchorX = 'left';
+    this.title.anchorY = 'top';
+    this.title.position.set(-0.08, 0.03, 0.002);
 
-    this.subtitleSlot = makeLeftSlot(0.16, 0.016);
-    this.subtitleSlot.position.set(0, 0.005, 0.002);
-    this.block.add(this.subtitleSlot);
-    this.subtitleText = new ThreeMeshUI.Text({
-      content: '', fontSize: 0.0095, fontColor: fontColor(TEXT.muted),
-    });
-    this.subtitleSlot.add(this.subtitleText);
+    this.subtitle = new Text();
+    this.subtitle.fontSize = 0.0095;
+    this.subtitle.color = TEXT.muted;
+    this.subtitle.anchorX = 'left';
+    this.subtitle.anchorY = 'top';
+    this.subtitle.position.set(-0.08, 0.012, 0.002);
 
-    this.valueSlot = makeLeftSlot(0.16, 0.024);
-    this.valueSlot.position.set(0, -0.020, 0.002);
-    this.block.add(this.valueSlot);
-    this.valueText = new ThreeMeshUI.Text({
-      content: '', fontSize: 0.016, fontColor: fontColor(TEXT.emphasis),
-    });
-    this.valueSlot.add(this.valueText);
+    this.value = new Text();
+    this.value.fontSize = 0.016;
+    this.value.color = TEXT.emphasis;
+    this.value.anchorX = 'left';
+    this.value.anchorY = 'top';
+    this.value.position.set(-0.08, -0.006, 0.002);
+
+    this.block.add(this.title);
+    this.block.add(this.subtitle);
+    this.block.add(this.value);
   }
 
   show(content: InspectorContent) {
-    // Sanitize: titles / subtitles / values come from manifests and live data
-    // that we don't own — we can't assume MSDF-clean ASCII.
-    this.titleText.set({ content: sanitizeText(content.title) });
-    this.subtitleText.set({ content: sanitizeText(content.subtitle ?? '') });
-    this.valueText.set({ content: sanitizeText(content.value ?? '') });
+    this.title.text = content.title;
+    this.subtitle.text = content.subtitle ?? '';
+    this.value.text = content.value ?? '';
+    this.title.sync();
+    this.subtitle.sync();
+    this.value.sync();
     this.block.visible = true;
+    this.title.visible = true;
+    this.subtitle.visible = true;
+    this.value.visible = true;
   }
 
   hide() {
     this.block.visible = false;
+    this.title.visible = false;
+    this.subtitle.visible = false;
+    this.value.visible = false;
   }
 
   placeNear(

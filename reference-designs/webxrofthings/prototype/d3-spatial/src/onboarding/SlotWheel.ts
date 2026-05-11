@@ -5,16 +5,13 @@
  *   up arrow | current char (large) | down arrow
  *
  * Cycles through CHAR_SET (A-Z, 2-9, 30 chars, no 0/O/1/I/L).
- *
- * MSDF text via three-mesh-ui throughout — the big character glyph is the
- * largest text in the join flow, so blurriness was most obvious here.
  */
 
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
+import { Text } from 'troika-three-text';
 import { CHAR_SET } from './types';
 import { TEXT } from '../ui/palette';
-import { FONT_BLOCK_OPTS, fontColor } from '../ui/textStyles';
 
 export interface SlotWheelResult {
   group: THREE.Group;
@@ -45,9 +42,19 @@ export function createSlotWheel(): SlotWheelResult {
 
   let charIndex = 0;
 
-  // Background block — now also the layout parent for the big char glyph.
+  // Current character display (troika text for large char)
+  const charDisplay = new Text();
+  charDisplay.text = CHAR_SET[0]!;
+  charDisplay.fontSize = 0.028;
+  charDisplay.color = TEXT.emphasis;
+  charDisplay.anchorX = 'center';
+  charDisplay.anchorY = 'middle';
+  charDisplay.position.set(0, 0, 0.002);
+  charDisplay.sync();
+  g.add(charDisplay);
+
+  // Background block
   const bgBlock = new ThreeMeshUI.Block({
-    ...FONT_BLOCK_OPTS,
     width: 0.05,
     height: 0.09,
     backgroundOpacity: 0.92,
@@ -56,25 +63,12 @@ export function createSlotWheel(): SlotWheelResult {
     borderWidth: 0.001,
     borderColor: new THREE.Color(0xb8a380),
     borderOpacity: 0.8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  });
+  } as any);
   bgBlock.position.set(0, 0, -0.001);
   g.add(bgBlock);
 
-  // Big current-character glyph — child of bg so it picks up the MSDF font.
-  // We keep a typed `any` reference so we can `.set({content})` on cycle.
-  const charDisplay: any = new ThreeMeshUI.Text({
-    content: CHAR_SET[0]!,
-    fontSize: 0.028,
-    fontColor: fontColor(TEXT.emphasis),
-  });
-  bgBlock.add(charDisplay);
-
-  // Up arrow button — label is now a child of the button block instead of
-  // a sibling in the group, so it inherits font context cleanly.
+  // Up arrow button
   const upBlock = new ThreeMeshUI.Block({
-    ...FONT_BLOCK_OPTS,
     width: 0.04,
     height: 0.02,
     backgroundOpacity: 0.85,
@@ -84,19 +78,20 @@ export function createSlotWheel(): SlotWheelResult {
     alignItems: 'center',
   } as any);
   upBlock.position.set(0, 0.032, 0.002);
-  upBlock.add(new ThreeMeshUI.Text({
-    // The bundled Roboto-msdf lacks both geometric shapes (▲▼) AND the ASCII
-    // caret '^'. Use '+' / '-' — both verified present in the atlas charset.
-    // A richer MSDF font (U+25B2/U+25BC) could restore proper triangles.
-    content: '+',
-    fontSize: 0.014,
-    fontColor: fontColor(TEXT.primary),
-  }));
   g.add(upBlock);
+
+  const upLabel = new Text();
+  upLabel.text = '\u25b2'; // up triangle
+  upLabel.fontSize = 0.012;
+  upLabel.color = TEXT.primary;
+  upLabel.anchorX = 'center';
+  upLabel.anchorY = 'middle';
+  upLabel.position.set(0, 0.032, 0.004);
+  upLabel.sync();
+  g.add(upLabel);
 
   // Down arrow button
   const downBlock = new ThreeMeshUI.Block({
-    ...FONT_BLOCK_OPTS,
     width: 0.04,
     height: 0.02,
     backgroundOpacity: 0.85,
@@ -106,15 +101,21 @@ export function createSlotWheel(): SlotWheelResult {
     alignItems: 'center',
   } as any);
   downBlock.position.set(0, -0.032, 0.002);
-  downBlock.add(new ThreeMeshUI.Text({
-    content: '-',                  // paired with '+' on the up button
-    fontSize: 0.014,
-    fontColor: fontColor(TEXT.primary),
-  }));
   g.add(downBlock);
 
+  const downLabel = new Text();
+  downLabel.text = '\u25bc'; // down triangle
+  downLabel.fontSize = 0.012;
+  downLabel.color = TEXT.primary;
+  downLabel.anchorX = 'center';
+  downLabel.anchorY = 'middle';
+  downLabel.position.set(0, -0.032, 0.004);
+  downLabel.sync();
+  g.add(downLabel);
+
   function updateDisplay() {
-    charDisplay.set({ content: CHAR_SET[charIndex]! });
+    charDisplay.text = CHAR_SET[charIndex]!;
+    charDisplay.sync();
   }
 
   return {
