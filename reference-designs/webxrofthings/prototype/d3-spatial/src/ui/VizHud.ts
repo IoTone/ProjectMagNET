@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
-import { Text } from 'troika-three-text';
 import { TEXT } from './palette';
+import { FONT_BLOCK_OPTS, fontColor } from './textStyles';
 
 export interface VizHudOptions {
   onBack?: () => void;
@@ -12,7 +12,6 @@ export class VizHud {
   readonly group = new THREE.Group();
   private backBtn: InstanceType<typeof ThreeMeshUI.Block>;
   private resetBtn: InstanceType<typeof ThreeMeshUI.Block>;
-  private backText: Text;
   private onBack: (() => void) | undefined;
   private onReset: (() => void) | undefined;
 
@@ -25,8 +24,9 @@ export class VizHud {
     const btnH = 0.02;
     const gap = 0.008;
 
-    // Back button
+    // Back button — MSDF label inherits font context from this Block.
     this.backBtn = new ThreeMeshUI.Block({
+      ...FONT_BLOCK_OPTS,
       width: btnW,
       height: btnH,
       padding: 0.003,
@@ -36,25 +36,23 @@ export class VizHud {
       borderWidth: 0.0012,
       borderColor: new THREE.Color(TEXT.warn),
       borderOpacity: 1.0,
+      justifyContent: 'center',
+      alignItems: 'center',
     });
     this.backBtn.position.set(-(btnW + gap) / 2, 0, 0);
     this.backBtn.userData.isVizHudButton = true;
     this.backBtn.userData.hudAction = 'back';
     this.backBtn.visible = false;
-
-    this.backText = new Text();
-    this.backText.text = 'Back';
-    this.backText.fontSize = 0.011;
-    this.backText.color = TEXT.warn;
-    this.backText.anchorX = 'center';
-    this.backText.anchorY = 'middle';
-    this.backText.position.set(0, 0, 0.002);
-    this.backText.sync();
-    this.backBtn.add(this.backText);
+    this.backBtn.add(new ThreeMeshUI.Text({
+      content: 'Back',
+      fontSize: 0.011,
+      fontColor: fontColor(TEXT.warn),
+    }));
     this.group.add(this.backBtn);
 
     // Reset button
     this.resetBtn = new ThreeMeshUI.Block({
+      ...FONT_BLOCK_OPTS,
       width: btnW,
       height: btnH,
       padding: 0.003,
@@ -64,20 +62,17 @@ export class VizHud {
       borderWidth: 0.0012,
       borderColor: new THREE.Color(TEXT.muted),
       borderOpacity: 0.9,
+      justifyContent: 'center',
+      alignItems: 'center',
     });
     this.resetBtn.position.set((btnW + gap) / 2, 0, 0);
     this.resetBtn.userData.isVizHudButton = true;
     this.resetBtn.userData.hudAction = 'reset';
-
-    const resetText = new Text();
-    resetText.text = 'Reset';
-    resetText.fontSize = 0.011;
-    resetText.color = TEXT.body;
-    resetText.anchorX = 'center';
-    resetText.anchorY = 'middle';
-    resetText.position.set(0, 0, 0.002);
-    resetText.sync();
-    this.resetBtn.add(resetText);
+    this.resetBtn.add(new ThreeMeshUI.Text({
+      content: 'Reset',
+      fontSize: 0.011,
+      fontColor: fontColor(TEXT.body),
+    }));
     this.group.add(this.resetBtn);
   }
 

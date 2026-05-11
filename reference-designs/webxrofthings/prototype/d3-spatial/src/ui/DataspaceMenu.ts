@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
-import { Text } from 'troika-three-text';
 import { TEXT } from './palette';
+import { FONT_BLOCK_OPTS, fontColor } from './textStyles';
 import type { DataspaceHudItem } from '../manifest/schema';
 
 export interface DataspaceMenuOptions {
@@ -13,8 +13,6 @@ export interface DataspaceMenuOptions {
 interface MenuItemEntry {
   item: DataspaceHudItem;
   block: InstanceType<typeof ThreeMeshUI.Block>;
-  iconText: Text;
-  labelText: Text;
 }
 
 const BG_DEFAULT = 0x2a2520;
@@ -48,6 +46,7 @@ export class DataspaceMenu {
 
     for (const item of items) {
       const block = new ThreeMeshUI.Block({
+        ...FONT_BLOCK_OPTS,
         width: ITEM_W,
         height: ITEM_H,
         padding: 0.003,
@@ -64,30 +63,37 @@ export class DataspaceMenu {
       block.userData.menuAction = item.action;
       y -= ITEM_H + ITEM_GAP;
 
-      // Icon (emoji) text — left side
-      const iconText = new Text();
-      iconText.text = item.icon ?? '';
-      iconText.fontSize = 0.012;
-      iconText.color = TEXT.body;
-      iconText.anchorX = 'center';
-      iconText.anchorY = 'middle';
-      iconText.position.set(-ITEM_W / 2 + 0.014, 0, 0.002);
-      iconText.sync();
-      block.add(iconText);
+      // Icon slot (left, centered) + label slot (left of center) — each a
+      // transparent Block so the MSDF Text inside has a layout context.
+      const iconSlot = new ThreeMeshUI.Block({
+        width: 0.018, height: ITEM_H,
+        backgroundOpacity: 0, borderOpacity: 0,
+        justifyContent: 'center', alignItems: 'center',
+      });
+      iconSlot.position.set(-ITEM_W / 2 + 0.014, 0, 0.002);
+      block.add(iconSlot);
+      iconSlot.add(new ThreeMeshUI.Text({
+        content: item.icon ?? '',
+        fontSize: 0.012,
+        fontColor: fontColor(TEXT.body),
+      }));
 
-      // Label text — center/right
-      const labelText = new Text();
-      labelText.text = item.label;
-      labelText.fontSize = 0.01;
-      labelText.color = TEXT.body;
-      labelText.anchorX = 'left';
-      labelText.anchorY = 'middle';
-      labelText.position.set(-ITEM_W / 2 + 0.028, 0, 0.002);
-      labelText.sync();
-      block.add(labelText);
+      const labelSlot = new ThreeMeshUI.Block({
+        width: ITEM_W - 0.032, height: ITEM_H,
+        backgroundOpacity: 0, borderOpacity: 0,
+        justifyContent: 'center', alignItems: 'start',
+        textAlign: 'left',
+      });
+      labelSlot.position.set(0.012, 0, 0.002);
+      block.add(labelSlot);
+      labelSlot.add(new ThreeMeshUI.Text({
+        content: item.label,
+        fontSize: 0.01,
+        fontColor: fontColor(TEXT.body),
+      }));
 
       this.group.add(block);
-      this.entries.push({ item, block, iconText, labelText });
+      this.entries.push({ item, block });
     }
   }
 

@@ -1,8 +1,9 @@
 /**
  * JoinPanel — join-code onboarding panel for entering a dataspace.
  *
- * Phase 1: mock validation (accept any fully-filled 6-char code, reject incomplete).
- * Built with three-mesh-ui blocks + troika-three-text.
+ * Built with three-mesh-ui blocks + MSDF text throughout (no troika) — this
+ * is the first screen users see and the slot characters are big (~28 mm tall)
+ * so any blurriness was very obvious here.
  *
  * Visual style follows XR_UX_BEST_PRACTICES.md: warm palette, 0x2a2520 backgrounds,
  * TEXT.* colors, no blue.
@@ -10,11 +11,11 @@
 
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
-import { Text } from 'troika-three-text';
 import { JoinState, CHAR_SET, SLOT_COUNT } from './types';
 import type { JoinPanelEvents } from './types';
 import { createSlotWheel, SlotWheelResult } from './SlotWheel';
 import { TEXT } from '../ui/palette';
+import { FONT_BLOCK_OPTS, fontColor } from '../ui/textStyles';
 
 export interface JoinPanelResult {
   /** Root group — add to scene. */
@@ -45,6 +46,15 @@ export interface JoinPanelResult {
   dispose(): void;
 }
 
+/** Invisible Block slot — just a centered layout container for one Text. */
+function makeTextSlot(width: number, height: number) {
+  return new ThreeMeshUI.Block({
+    width, height,
+    backgroundOpacity: 0, borderOpacity: 0,
+    justifyContent: 'center', alignItems: 'center',
+  });
+}
+
 export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   const g = new THREE.Group();
   g.name = 'join-panel';
@@ -58,7 +68,11 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   const slotValues: string[] = DEFAULT_CODE.split('');
 
   // --- Root panel block ---
+  // Sets the font once for every nested Text descendant — no need to repeat
+  // FONT_BLOCK_OPTS on the inner Blocks (Text inherits the closest ancestor
+  // Block's font context).
   const rootBlock = new ThreeMeshUI.Block({
+    ...FONT_BLOCK_OPTS,
     width: 0.4,
     height: 0.28,
     padding: 0.02,
@@ -76,19 +90,18 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   g.add(rootBlock);
 
   // --- Title ---
-  const titleText = new Text();
-  titleText.text = 'Join a dataspace';
-  titleText.fontSize = 0.024;
-  titleText.color = TEXT.primary;
-  titleText.anchorX = 'center';
-  titleText.anchorY = 'middle';
-  titleText.position.set(0, 0.10, 0.005);
-  titleText.sync();
-  g.add(titleText);
+  const titleSlot = makeTextSlot(0.36, 0.030);
+  titleSlot.position.set(0, 0.10, 0.005);
+  g.add(titleSlot);
+  titleSlot.add(new ThreeMeshUI.Text({
+    content: 'Join a dataspace',
+    fontSize: 0.024,
+    fontColor: fontColor(TEXT.primary),
+  }));
 
   // --- Code slots ---
   const slotBlocks: any[] = [];
-  const slotTexts: Text[] = [];
+  const slotTexts: any[] = [];
   const slotWidth = 0.04;
   const slotHeight = 0.05;
   const slotGap = 0.008;
@@ -112,28 +125,27 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
     g.add(block);
     slotBlocks.push(block);
 
-    const charText = new Text();
-    charText.text = slotValues[i] || '';
-    charText.fontSize = 0.028;
-    charText.color = TEXT.emphasis;
-    charText.anchorX = 'center';
-    charText.anchorY = 'middle';
-    charText.position.set(startX + i * (slotWidth + slotGap), 0.035, 0.006);
-    charText.sync();
-    g.add(charText);
+    // Character is a child of the slot block, so layout centers it for free
+    // and it inherits the MSDF font from rootBlock through the hierarchy.
+    const charText: any = new ThreeMeshUI.Text({
+      content: slotValues[i] || '',
+      fontSize: 0.028,
+      fontColor: fontColor(TEXT.emphasis),
+    });
+    block.add(charText);
     slotTexts.push(charText);
   }
 
   // --- Status text ---
-  const statusText = new Text();
-  statusText.text = 'Press Submit to join with code AAAAAA';
-  statusText.fontSize = 0.014;
-  statusText.color = TEXT.muted;
-  statusText.anchorX = 'center';
-  statusText.anchorY = 'middle';
-  statusText.position.set(0, -0.015, 0.005);
-  statusText.sync();
-  g.add(statusText);
+  const statusSlot = makeTextSlot(0.36, 0.020);
+  statusSlot.position.set(0, -0.015, 0.005);
+  g.add(statusSlot);
+  const statusText: any = new ThreeMeshUI.Text({
+    content: 'Press Submit to join with code AAAAAA',
+    fontSize: 0.014,
+    fontColor: fontColor(TEXT.muted),
+  });
+  statusSlot.add(statusText);
 
   // --- Buttons ---
   const submitBlock = new ThreeMeshUI.Block({
@@ -147,16 +159,11 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   } as any);
   submitBlock.position.set(-0.05, -0.055, 0.003);
   g.add(submitBlock);
-
-  const submitLabel = new Text();
-  submitLabel.text = 'Submit';
-  submitLabel.fontSize = 0.011;
-  submitLabel.color = TEXT.accent;
-  submitLabel.anchorX = 'center';
-  submitLabel.anchorY = 'middle';
-  submitLabel.position.set(-0.05, -0.055, 0.006);
-  submitLabel.sync();
-  g.add(submitLabel);
+  submitBlock.add(new ThreeMeshUI.Text({
+    content: 'Submit',
+    fontSize: 0.011,
+    fontColor: fontColor(TEXT.accent),
+  }));
 
   const clearBlock = new ThreeMeshUI.Block({
     width: 0.07,
@@ -169,27 +176,21 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   } as any);
   clearBlock.position.set(0.04, -0.055, 0.003);
   g.add(clearBlock);
-
-  const clearLabel = new Text();
-  clearLabel.text = 'Clear';
-  clearLabel.fontSize = 0.011;
-  clearLabel.color = TEXT.muted;
-  clearLabel.anchorX = 'center';
-  clearLabel.anchorY = 'middle';
-  clearLabel.position.set(0.04, -0.055, 0.006);
-  clearLabel.sync();
-  g.add(clearLabel);
+  clearBlock.add(new ThreeMeshUI.Text({
+    content: 'Clear',
+    fontSize: 0.011,
+    fontColor: fontColor(TEXT.muted),
+  }));
 
   // --- Footer ---
-  const footerText = new Text();
-  footerText.text = '\ud83d\udd12 secure \u00b7 hlxr.org';
-  footerText.fontSize = 0.010;
-  footerText.color = TEXT.dim;
-  footerText.anchorX = 'center';
-  footerText.anchorY = 'middle';
-  footerText.position.set(0, -0.10, 0.005);
-  footerText.sync();
-  g.add(footerText);
+  const footerSlot = makeTextSlot(0.36, 0.015);
+  footerSlot.position.set(0, -0.10, 0.005);
+  g.add(footerSlot);
+  footerSlot.add(new ThreeMeshUI.Text({
+    content: '🔒 secure · hlxr.org',
+    fontSize: 0.010,
+    fontColor: fontColor(TEXT.dim),
+  }));
 
   // --- Slot wheel ---
   const slotWheel: SlotWheelResult = createSlotWheel();
@@ -207,8 +208,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
 
   function updateSlotVisuals() {
     for (let i = 0; i < SLOT_COUNT; i++) {
-      slotTexts[i]!.text = slotValues[i] || '';
-      slotTexts[i]!.sync();
+      slotTexts[i].set({ content: slotValues[i] || '' });
 
       const isActive = i === activeSlotIndex;
       const isFilled = slotValues[i]!.length > 0;
@@ -227,9 +227,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   }
 
   function updateStatus(text: string, color: number) {
-    statusText.text = text;
-    statusText.color = color;
-    statusText.sync();
+    statusText.set({ content: text, fontColor: new THREE.Color(color) });
   }
 
   function setState(newState: JoinState) {
@@ -249,7 +247,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
         updateStatus('Joining...', TEXT.warn);
         break;
       case JoinState.ACCEPTED:
-        updateStatus('\u2713 Connected to demo-dataspace', TEXT.accent);
+        updateStatus('✓ Connected to demo-dataspace', TEXT.accent);
         break;
       case JoinState.REJECTED:
         updateStatus('Code not recognized', TEXT.error);
@@ -530,12 +528,9 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
     visible: () => g.visible,
     dispose: () => {
       window.removeEventListener('keydown', handleKeydown);
-      titleText.dispose();
-      statusText.dispose();
-      footerText.dispose();
-      submitLabel.dispose();
-      clearLabel.dispose();
-      for (const t of slotTexts) t.dispose();
+      // three-mesh-ui Texts are owned by their parent Blocks and don't need
+      // per-instance dispose — removing the panel group from the scene tears
+      // down the GL resources via three-mesh-ui's internal cleanup.
     },
   };
 }

@@ -4,16 +4,22 @@
  * exposes, where data goes, and asks for an explicit acknowledgement before
  * the user proceeds.
  *
- * Built with three-mesh-ui blocks + troika text, matching InspectorCard's
- * pattern. The "I understand" button registers with the Interact system
- * via the exported `acceptId` so existing mouse + XR-controller select
- * paths work without special-casing.
+ * Built entirely with three-mesh-ui blocks + MSDF text (no troika) so every
+ * glyph stays crisp on optical passthrough. Each text region lives inside
+ * its own invisible Block wrapper that owns the layout slot; this preserves
+ * the prior absolute layout (positions tuned to the card frame) while
+ * giving every Text instance the parent-Block-with-font context that
+ * ThreeMeshUI.Text needs.
+ *
+ * The "I understand" button registers with the Interact system via the
+ * exported `acceptId` so existing mouse + XR-controller select paths work
+ * without special-casing.
  */
 
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
-import { Text } from 'troika-three-text';
 import { TEXT } from './palette';
+import { FONT_BLOCK_OPTS, fontColor } from './textStyles';
 
 export interface PrivacyFacts {
   dataspaceName: string;
@@ -41,12 +47,24 @@ export interface PrivacyBanner {
 
 const ACCEPT_ID = 'privacy-banner:accept';
 
+/** Build an invisible Block wrapper of a fixed size — Text needs a Block parent. */
+function makeTextSlot(width: number, height: number, alignment: 'top' | 'middle' = 'middle') {
+  return new ThreeMeshUI.Block({
+    width, height,
+    backgroundOpacity: 0,
+    borderOpacity: 0,
+    justifyContent: alignment === 'top' ? 'start' : 'center',
+    alignItems: 'center',
+  });
+}
+
 export function createPrivacyBanner(): PrivacyBanner {
   const group = new THREE.Group();
   group.name = 'privacy-banner';
   group.visible = false;
 
   const card = new ThreeMeshUI.Block({
+    ...FONT_BLOCK_OPTS,
     width: 0.50,
     height: 0.32,
     padding: 0.018,
@@ -59,35 +77,51 @@ export function createPrivacyBanner(): PrivacyBanner {
   });
   group.add(card);
 
-  const title = new Text();
-  title.text = 'Privacy notice';
-  title.fontSize = 0.022;
-  title.color = TEXT.primary;
-  title.anchorX = 'center';
-  title.anchorY = 'top';
-  title.position.set(0, 0.135, 0.003);
-  title.sync();
-  card.add(title);
+  // ─── Title slot ─────────────────────────────────────────────────────
+  const titleSlot = makeTextSlot(0.46, 0.030);
+  titleSlot.position.set(0, 0.120, 0.003);
+  card.add(titleSlot);
+  titleSlot.add(new ThreeMeshUI.Text({
+    content: 'Privacy notice',
+    fontSize: 0.022,
+    fontColor: fontColor(TEXT.primary),
+  }));
 
-  const subtitle = new Text();
-  subtitle.fontSize = 0.012;
-  subtitle.color = TEXT.muted;
-  subtitle.anchorX = 'center';
-  subtitle.anchorY = 'top';
-  subtitle.position.set(0, 0.108, 0.003);
-  card.add(subtitle);
+  // ─── Subtitle slot ─────────────────────────────────────────────────
+  const subtitleSlot = makeTextSlot(0.46, 0.020);
+  subtitleSlot.position.set(0, 0.090, 0.003);
+  card.add(subtitleSlot);
+  // `any` cast: ThreeMeshUI.Text's types don't expose `set()` even though
+  // it's a documented runtime API — same workaround the Block bindings use.
+  const subtitleText: any = new ThreeMeshUI.Text({
+    content: '',
+    fontSize: 0.012,
+    fontColor: fontColor(TEXT.muted),
+  });
+  subtitleSlot.add(subtitleText);
 
-  const body = new Text();
-  body.fontSize = 0.011;
-  body.color = TEXT.body;
-  body.anchorX = 'center';
-  body.anchorY = 'top';
-  body.position.set(0, 0.080, 0.003);
-  body.maxWidth = 0.46;
-  /* lineHeight is a real Troika prop; the .d.ts in this version omits it. */
-  (body as unknown as { lineHeight: number }).lineHeight = 1.4;
-  card.add(body);
+  // ─── Body slot (multi-line, wrapping) ─────────────────────────────
+  // Block width controls wrap; height is generous because we don't know
+  // how many lines the facts produce until setFacts() runs.
+  const bodySlot = new ThreeMeshUI.Block({
+    width: 0.46, height: 0.16,
+    backgroundOpacity: 0,
+    borderOpacity: 0,
+    padding: 0,
+    justifyContent: 'start',
+    alignItems: 'center',
+    textAlign: 'center',
+  });
+  bodySlot.position.set(0, -0.005, 0.003);
+  card.add(bodySlot);
+  const bodyText: any = new ThreeMeshUI.Text({
+    content: '',
+    fontSize: 0.011,
+    fontColor: fontColor(TEXT.body),
+  });
+  bodySlot.add(bodyText);
 
+  // ─── Accept button ─────────────────────────────────────────────────
   const acceptButton = new ThreeMeshUI.Block({
     width: 0.18,
     height: 0.038,
@@ -104,20 +138,14 @@ export function createPrivacyBanner(): PrivacyBanner {
   acceptButton.position.set(0, -0.118, 0.005);
   acceptButton.name = ACCEPT_ID;
   card.add(acceptButton);
-
-  const acceptText = new Text();
-  acceptText.text = 'I understand';
-  acceptText.fontSize = 0.014;
-  acceptText.color = TEXT.body;
-  acceptText.anchorX = 'center';
-  acceptText.anchorY = 'middle';
-  acceptText.position.set(0, 0, 0.002);
-  acceptText.sync();
-  acceptButton.add(acceptText);
+  acceptButton.add(new ThreeMeshUI.Text({
+    content: 'I understand',
+    fontSize: 0.014,
+    fontColor: fontColor(TEXT.body),
+  }));
 
   function setFacts(facts: PrivacyFacts) {
-    subtitle.text = `${facts.dataspaceName}  ·  scale: ${facts.scaleTag}`;
-    subtitle.sync();
+    subtitleText.set({ content: `${facts.dataspaceName}  ·  scale: ${facts.scaleTag}` });
 
     const lines: string[] = [];
     lines.push(
@@ -140,8 +168,7 @@ export function createPrivacyBanner(): PrivacyBanner {
     }
     lines.push('');
     lines.push('Click "I understand" to enter the dataspace.');
-    body.text = lines.join('\n');
-    body.sync();
+    bodyText.set({ content: lines.join('\n') });
   }
 
   return {

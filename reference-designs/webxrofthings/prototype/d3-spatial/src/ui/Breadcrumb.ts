@@ -1,16 +1,21 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
-import { Text } from 'troika-three-text';
 import { TEXT } from './palette';
+import { FONT_BLOCK_OPTS, fontColor } from './textStyles';
 
 export interface BreadcrumbOptions {
   onNavigate: (depthIndex: number) => void;
 }
 
+interface CrumbEntry {
+  block: InstanceType<typeof ThreeMeshUI.Block>;
+  label: string;
+}
+
 export class Breadcrumb {
   readonly group = new THREE.Group();
-  private crumbs: { block: InstanceType<typeof ThreeMeshUI.Block>; text: Text; label: string }[] = [];
-  private separators: Text[] = [];
+  private crumbs: CrumbEntry[] = [];
+  private separators: InstanceType<typeof ThreeMeshUI.Block>[] = [];
   private onNavigate: (depthIndex: number) => void;
 
   constructor(opts: BreadcrumbOptions) {
@@ -42,8 +47,10 @@ export class Breadcrumb {
     for (let i = 0; i < labels.length; i++) {
       const isLast = i === labels.length - 1;
       const isRoot = labels.length === 1;
+      const labelColor = isRoot && labels.length === 1 ? TEXT.dim : (isLast ? TEXT.primary : TEXT.muted);
 
       const block = new ThreeMeshUI.Block({
+        ...FONT_BLOCK_OPTS,
         width: crumbW,
         height: crumbH,
         padding: 0.002,
@@ -53,39 +60,41 @@ export class Breadcrumb {
         borderWidth: 0.0012,
         borderColor: new THREE.Color(isLast ? TEXT.primary : TEXT.muted),
         borderOpacity: isLast ? 1.0 : 0.7,
+        justifyContent: 'center',
+        alignItems: 'center',
       });
       block.position.set(x, 0, 0);
       block.userData.isBreadcrumb = true;
       block.userData.crumbIndex = i;
 
-      const text = new Text();
-      text.text = labels[i]!;
-      text.fontSize = 0.011;
-      text.color = isRoot && labels.length === 1 ? TEXT.dim : (isLast ? TEXT.primary : TEXT.muted);
-      text.anchorX = 'center';
-      text.anchorY = 'middle';
-      text.position.set(0, 0, 0.002);
-      text.sync();
-      block.add(text);
+      block.add(new ThreeMeshUI.Text({
+        content: labels[i]!,
+        fontSize: 0.011,
+        fontColor: fontColor(labelColor),
+      }));
 
       this.group.add(block);
-      this.crumbs.push({ block, text, label: labels[i]! });
+      this.crumbs.push({ block, label: labels[i]! });
 
       x += crumbW / 2;
 
-      // Add separator after all but last
+      // Separator (own Block since MSDF text needs one) after all but last.
       if (i < labels.length - 1) {
         x += gap;
-        const sep = new Text();
-        sep.text = '>';
-        sep.fontSize = 0.009;
-        sep.color = TEXT.dim;
-        sep.anchorX = 'center';
-        sep.anchorY = 'middle';
-        sep.position.set(x + sepW / 2, 0, 0.001);
-        sep.sync();
-        this.group.add(sep);
-        this.separators.push(sep);
+        const sepBlock = new ThreeMeshUI.Block({
+          ...FONT_BLOCK_OPTS,
+          width: sepW, height: crumbH,
+          backgroundOpacity: 0, borderOpacity: 0,
+          justifyContent: 'center', alignItems: 'center',
+        });
+        sepBlock.position.set(x + sepW / 2, 0, 0.001);
+        sepBlock.add(new ThreeMeshUI.Text({
+          content: '>',
+          fontSize: 0.009,
+          fontColor: fontColor(TEXT.dim),
+        }));
+        this.group.add(sepBlock);
+        this.separators.push(sepBlock);
         x += sepW + gap;
         x += crumbW / 2;
       }
