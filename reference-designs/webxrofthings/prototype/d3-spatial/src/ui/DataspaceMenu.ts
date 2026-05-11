@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
 import { TEXT } from './palette';
-import { FONT_BLOCK_OPTS, fontColor } from './textStyles';
+import { FONT_BLOCK_OPTS, fontColor, sanitizeText } from './textStyles';
 import type { DataspaceHudItem } from '../manifest/schema';
 
 export interface DataspaceMenuOptions {
@@ -64,8 +64,15 @@ export class DataspaceMenu {
       y -= ITEM_H + ITEM_GAP;
 
       // Icon slot (left, centered) + label slot (left of center) — each a
-      // transparent Block so the MSDF Text inside has a layout context.
+      // transparent Block carrying the font opts explicitly so the MSDF
+      // Text inside doesn't depend on ancestor inheritance.
+      //
+      // Manifest icons are usually emoji (lock / refresh / etc.) which the
+      // bundled Roboto-msdf doesn't cover; sanitizeText drops them silently.
+      // A future polish pass can introduce single-letter "icon glyphs" so
+      // the column still visually differentiates rows.
       const iconSlot = new ThreeMeshUI.Block({
+        ...FONT_BLOCK_OPTS,
         width: 0.018, height: ITEM_H,
         backgroundOpacity: 0, borderOpacity: 0,
         justifyContent: 'center', alignItems: 'center',
@@ -73,12 +80,13 @@ export class DataspaceMenu {
       iconSlot.position.set(-ITEM_W / 2 + 0.014, 0, 0.002);
       block.add(iconSlot);
       iconSlot.add(new ThreeMeshUI.Text({
-        content: item.icon ?? '',
+        content: sanitizeText(item.icon ?? ''),
         fontSize: 0.012,
         fontColor: fontColor(TEXT.body),
       }));
 
       const labelSlot = new ThreeMeshUI.Block({
+        ...FONT_BLOCK_OPTS,
         width: ITEM_W - 0.032, height: ITEM_H,
         backgroundOpacity: 0, borderOpacity: 0,
         justifyContent: 'center', alignItems: 'start',
@@ -87,7 +95,7 @@ export class DataspaceMenu {
       labelSlot.position.set(0.012, 0, 0.002);
       block.add(labelSlot);
       labelSlot.add(new ThreeMeshUI.Text({
-        content: item.label,
+        content: sanitizeText(item.label),
         fontSize: 0.01,
         fontColor: fontColor(TEXT.body),
       }));

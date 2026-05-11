@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
 import { TEXT } from './palette';
-import { FONT_BLOCK_OPTS, fontColor } from './textStyles';
+import { FONT_BLOCK_OPTS, fontColor, sanitizeText } from './textStyles';
 
 export interface InspectorContent {
   title: string;
@@ -12,6 +12,7 @@ export interface InspectorContent {
 /** Invisible Block slot for a single left-anchored text line within the card. */
 function makeLeftSlot(width: number, height: number) {
   return new ThreeMeshUI.Block({
+    ...FONT_BLOCK_OPTS,
     width, height,
     backgroundOpacity: 0,
     borderOpacity: 0,
@@ -74,9 +75,11 @@ export class InspectorCard {
   }
 
   show(content: InspectorContent) {
-    this.titleText.set({ content: content.title });
-    this.subtitleText.set({ content: content.subtitle ?? '' });
-    this.valueText.set({ content: content.value ?? '' });
+    // Sanitize: titles / subtitles / values come from manifests and live data
+    // that we don't own — we can't assume MSDF-clean ASCII.
+    this.titleText.set({ content: sanitizeText(content.title) });
+    this.subtitleText.set({ content: sanitizeText(content.subtitle ?? '') });
+    this.valueText.set({ content: sanitizeText(content.value ?? '') });
     this.block.visible = true;
   }
 

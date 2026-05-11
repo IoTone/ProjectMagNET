@@ -19,7 +19,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
 import { TEXT } from './palette';
-import { FONT_BLOCK_OPTS, fontColor } from './textStyles';
+import { FONT_BLOCK_OPTS, fontColor, sanitizeText, makeSlot } from './textStyles';
 
 export interface PrivacyFacts {
   dataspaceName: string;
@@ -47,17 +47,6 @@ export interface PrivacyBanner {
 
 const ACCEPT_ID = 'privacy-banner:accept';
 
-/** Build an invisible Block wrapper of a fixed size — Text needs a Block parent. */
-function makeTextSlot(width: number, height: number, alignment: 'top' | 'middle' = 'middle') {
-  return new ThreeMeshUI.Block({
-    width, height,
-    backgroundOpacity: 0,
-    borderOpacity: 0,
-    justifyContent: alignment === 'top' ? 'start' : 'center',
-    alignItems: 'center',
-  });
-}
-
 export function createPrivacyBanner(): PrivacyBanner {
   const group = new THREE.Group();
   group.name = 'privacy-banner';
@@ -78,7 +67,7 @@ export function createPrivacyBanner(): PrivacyBanner {
   group.add(card);
 
   // ─── Title slot ─────────────────────────────────────────────────────
-  const titleSlot = makeTextSlot(0.46, 0.030);
+  const titleSlot = makeSlot(0.46, 0.030);
   titleSlot.position.set(0, 0.120, 0.003);
   card.add(titleSlot);
   titleSlot.add(new ThreeMeshUI.Text({
@@ -88,7 +77,7 @@ export function createPrivacyBanner(): PrivacyBanner {
   }));
 
   // ─── Subtitle slot ─────────────────────────────────────────────────
-  const subtitleSlot = makeTextSlot(0.46, 0.020);
+  const subtitleSlot = makeSlot(0.46, 0.020);
   subtitleSlot.position.set(0, 0.090, 0.003);
   card.add(subtitleSlot);
   // `any` cast: ThreeMeshUI.Text's types don't expose `set()` even though
@@ -104,6 +93,7 @@ export function createPrivacyBanner(): PrivacyBanner {
   // Block width controls wrap; height is generous because we don't know
   // how many lines the facts produce until setFacts() runs.
   const bodySlot = new ThreeMeshUI.Block({
+    ...FONT_BLOCK_OPTS,
     width: 0.46, height: 0.16,
     backgroundOpacity: 0,
     borderOpacity: 0,
@@ -145,7 +135,13 @@ export function createPrivacyBanner(): PrivacyBanner {
   }));
 
   function setFacts(facts: PrivacyFacts) {
-    subtitleText.set({ content: `${facts.dataspaceName}  ·  scale: ${facts.scaleTag}` });
+    // sanitizeText scrubs middle dots / em dashes / other glyphs the bundled
+    // Roboto-msdf doesn't carry. Subtitle and body both pull values from the
+    // manifest (and manifest authors aren't obligated to think about font
+    // coverage), so wrapping every Text mutation here is the safe play.
+    subtitleText.set({
+      content: sanitizeText(`${facts.dataspaceName}  -  scale: ${facts.scaleTag}`),
+    });
 
     const lines: string[] = [];
     lines.push(
@@ -159,16 +155,16 @@ export function createPrivacyBanner(): PrivacyBanner {
     }
     if (facts.isLanOnly) {
       lines.push('');
-      lines.push('Data stays on your LAN — no cloud egress unless a remote');
+      lines.push('Data stays on your LAN -- no cloud egress unless a remote');
       lines.push('service is added later.');
     }
     if (facts.tagsOfInterest.length > 0) {
       lines.push('');
-      lines.push(`Flags: ${facts.tagsOfInterest.join('  ·  ')}`);
+      lines.push(`Flags: ${facts.tagsOfInterest.join(' - ')}`);
     }
     lines.push('');
     lines.push('Click "I understand" to enter the dataspace.');
-    bodyText.set({ content: lines.join('\n') });
+    bodyText.set({ content: sanitizeText(lines.join('\n')) });
   }
 
   return {

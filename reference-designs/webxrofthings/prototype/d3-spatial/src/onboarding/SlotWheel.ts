@@ -85,8 +85,11 @@ export function createSlotWheel(): SlotWheelResult {
   } as any);
   upBlock.position.set(0, 0.032, 0.002);
   upBlock.add(new ThreeMeshUI.Text({
-    content: '▲',                  // up triangle
-    fontSize: 0.012,
+    // ASCII fallback — the bundled Roboto-msdf doesn't include geometric
+    // shape glyphs. A richer MSDF font (chars U+25B2/U+25BC) could restore
+    // proper triangles later.
+    content: '^',
+    fontSize: 0.014,
     fontColor: fontColor(TEXT.primary),
   }));
   g.add(upBlock);
@@ -104,8 +107,8 @@ export function createSlotWheel(): SlotWheelResult {
   } as any);
   downBlock.position.set(0, -0.032, 0.002);
   downBlock.add(new ThreeMeshUI.Text({
-    content: '▼',                  // down triangle
-    fontSize: 0.012,
+    content: 'v',                  // ASCII fallback for down triangle — see ^ note above
+    fontSize: 0.014,
     fontColor: fontColor(TEXT.primary),
   }));
   g.add(downBlock);

@@ -15,7 +15,7 @@ import { JoinState, CHAR_SET, SLOT_COUNT } from './types';
 import type { JoinPanelEvents } from './types';
 import { createSlotWheel, SlotWheelResult } from './SlotWheel';
 import { TEXT } from '../ui/palette';
-import { FONT_BLOCK_OPTS, fontColor } from '../ui/textStyles';
+import { FONT_BLOCK_OPTS, fontColor, sanitizeText, makeSlot } from '../ui/textStyles';
 
 export interface JoinPanelResult {
   /** Root group — add to scene. */
@@ -44,15 +44,6 @@ export interface JoinPanelResult {
   visible(): boolean;
   /** Dispose resources. */
   dispose(): void;
-}
-
-/** Invisible Block slot — just a centered layout container for one Text. */
-function makeTextSlot(width: number, height: number) {
-  return new ThreeMeshUI.Block({
-    width, height,
-    backgroundOpacity: 0, borderOpacity: 0,
-    justifyContent: 'center', alignItems: 'center',
-  });
 }
 
 export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
@@ -90,7 +81,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   g.add(rootBlock);
 
   // --- Title ---
-  const titleSlot = makeTextSlot(0.36, 0.030);
+  const titleSlot = makeSlot(0.36, 0.030);
   titleSlot.position.set(0, 0.10, 0.005);
   g.add(titleSlot);
   titleSlot.add(new ThreeMeshUI.Text({
@@ -137,7 +128,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   }
 
   // --- Status text ---
-  const statusSlot = makeTextSlot(0.36, 0.020);
+  const statusSlot = makeSlot(0.36, 0.020);
   statusSlot.position.set(0, -0.015, 0.005);
   g.add(statusSlot);
   const statusText: any = new ThreeMeshUI.Text({
@@ -183,11 +174,12 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   }));
 
   // --- Footer ---
-  const footerSlot = makeTextSlot(0.36, 0.015);
+  const footerSlot = makeSlot(0.36, 0.015);
   footerSlot.position.set(0, -0.10, 0.005);
   g.add(footerSlot);
   footerSlot.add(new ThreeMeshUI.Text({
-    content: '🔒 secure · hlxr.org',
+    // ASCII — emoji + middle dot aren't in the bundled MSDF atlas.
+    content: 'secure - hlxr.org',
     fontSize: 0.010,
     fontColor: fontColor(TEXT.dim),
   }));
@@ -227,7 +219,9 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   }
 
   function updateStatus(text: string, color: number) {
-    statusText.set({ content: text, fontColor: new THREE.Color(color) });
+    // Pass through sanitize so manifest-driven status messages (future) can't
+    // accidentally introduce glyphs outside the bundled MSDF atlas.
+    statusText.set({ content: sanitizeText(text), fontColor: new THREE.Color(color) });
   }
 
   function setState(newState: JoinState) {
@@ -236,7 +230,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
       case JoinState.IDLE:
         // Mention the fixed UC codes alongside the generic prompt so testers
         // can jump directly into a use-case dataspace without a host device.
-        updateStatus('Enter a code  ·  try DEMO01 / DEMO02 / DEMO03 / DEMO04', TEXT.muted);
+        updateStatus('Enter a code  -  try DEMO01 / DEMO02 / DEMO03 / DEMO04', TEXT.muted);
         break;
       case JoinState.ENTERING: {
         const n = filledCount();
@@ -247,7 +241,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
         updateStatus('Joining...', TEXT.warn);
         break;
       case JoinState.ACCEPTED:
-        updateStatus('✓ Connected to demo-dataspace', TEXT.accent);
+        updateStatus('Connected to demo-dataspace', TEXT.accent);
         break;
       case JoinState.REJECTED:
         updateStatus('Code not recognized', TEXT.error);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
 import { TEXT } from './palette';
-import { FONT_BLOCK_OPTS, fontColor } from './textStyles';
+import { FONT_BLOCK_OPTS, fontColor, sanitizeText } from './textStyles';
 
 export interface BreadcrumbOptions {
   onNavigate: (depthIndex: number) => void;
@@ -68,7 +68,7 @@ export class Breadcrumb {
       block.userData.crumbIndex = i;
 
       block.add(new ThreeMeshUI.Text({
-        content: labels[i]!,
+        content: sanitizeText(labels[i]!),
         fontSize: 0.011,
         fontColor: fontColor(labelColor),
       }));

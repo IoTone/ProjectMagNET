@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
 import { TEXT } from './palette';
-import { FONT_BLOCK_OPTS, fontColor } from './textStyles';
+import { FONT_BLOCK_OPTS, fontColor, sanitizeText } from './textStyles';
 
 export interface ToolbarButton {
   id: string;
@@ -54,7 +54,7 @@ export class Toolbar {
       x += btnW + gap;
 
       block.add(new ThreeMeshUI.Text({
-        content: b.label,
+        content: sanitizeText(b.label),
         fontSize: 0.011,
         fontColor: fontColor(b.active ? TEXT.emphasis : TEXT.body),
       }));
