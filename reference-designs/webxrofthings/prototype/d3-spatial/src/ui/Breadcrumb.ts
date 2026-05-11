@@ -89,7 +89,9 @@ export class Breadcrumb {
         });
         sepBlock.position.set(x + sepW / 2, 0, 0.001);
         sepBlock.add(new ThreeMeshUI.Text({
-          content: '>',
+          // The bundled MSDF lacks '>' — use '/' which is in the charset and
+          // reads similarly as a path separator.
+          content: '/',
           fontSize: 0.009,
           fontColor: fontColor(TEXT.dim),
         }));

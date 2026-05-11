@@ -85,10 +85,10 @@ export function createSlotWheel(): SlotWheelResult {
   } as any);
   upBlock.position.set(0, 0.032, 0.002);
   upBlock.add(new ThreeMeshUI.Text({
-    // ASCII fallback — the bundled Roboto-msdf doesn't include geometric
-    // shape glyphs. A richer MSDF font (chars U+25B2/U+25BC) could restore
-    // proper triangles later.
-    content: '^',
+    // The bundled Roboto-msdf lacks both geometric shapes (▲▼) AND the ASCII
+    // caret '^'. Use '+' / '-' — both verified present in the atlas charset.
+    // A richer MSDF font (U+25B2/U+25BC) could restore proper triangles.
+    content: '+',
     fontSize: 0.014,
     fontColor: fontColor(TEXT.primary),
   }));
@@ -107,7 +107,7 @@ export function createSlotWheel(): SlotWheelResult {
   } as any);
   downBlock.position.set(0, -0.032, 0.002);
   downBlock.add(new ThreeMeshUI.Text({
-    content: 'v',                  // ASCII fallback for down triangle — see ^ note above
+    content: '-',                  // paired with '+' on the up button
     fontSize: 0.014,
     fontColor: fontColor(TEXT.primary),
   }));
