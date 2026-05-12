@@ -72,6 +72,14 @@ function disposeGroup(g: THREE.Object3D) {
 const MAX_BACKOFF_MS = 30_000;
 const OFFLINE_AFTER_REFRESH_MULTIPLES = 6;
 const RECOVERY_SUCCESS_COUNT = 2;
+/**
+ * Initial-failure offline threshold. Two failed attempts is enough evidence
+ * that the device isn't reachable when we've never had a success — the
+ * common "device powered off, browser fires polls anyway" case. Was 3 (~45 s
+ * to flip the badge with vite's 15 s proxy timeout); 2 brings that to ~30 s
+ * which feels responsive without being trigger-happy.
+ */
+const INITIAL_OFFLINE_AFTER_ERRORS = 2;
 
 interface PollingHandle {
   stop(): void;
@@ -111,11 +119,11 @@ function startPolling(
       consecutiveSuccesses = 0;
       // Latch the offline flag the moment we cross either threshold so the
       // status reads correctly between ticks. Two distinct entry conditions:
-      //   - never connected (lastSuccessTs null) and 3+ tries failed
+      //   - never connected (lastSuccessTs null) and 2+ tries failed
       //   - had a success previously, but it's now stale beyond the window
       // Important: the time-based check requires lastSuccessTs to exist —
       // otherwise we'd flip offline on the first error before ever connecting.
-      if (lastSuccessTs == null && errs >= 3) {
+      if (lastSuccessTs == null && errs >= INITIAL_OFFLINE_AFTER_ERRORS) {
         stickyOffline = true;
       } else if (lastSuccessTs != null && (Date.now() - lastSuccessTs) > offlineWindowMs) {
         stickyOffline = true;
@@ -134,7 +142,7 @@ function startPolling(
     // where ticks have stopped firing (e.g. backoff is long) but the silence
     // itself should already register as offline.
     const timeOffline = lastSuccessTs != null && lastSuccessAgoMs! > offlineWindowMs;
-    const initialOffline = lastSuccessTs == null && errs >= 3;
+    const initialOffline = lastSuccessTs == null && errs >= INITIAL_OFFLINE_AFTER_ERRORS;
     if (stickyOffline || timeOffline || initialOffline) {
       return { state: 'offline', lastSuccessAgoMs };
     }

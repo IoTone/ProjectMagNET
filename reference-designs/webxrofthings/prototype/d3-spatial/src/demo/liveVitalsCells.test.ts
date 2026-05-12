@@ -186,17 +186,16 @@ describe('LiveCell.getStatus — hysteresis', () => {
     cell.dispose();
   });
 
-  it('flips to `offline` after 3 consecutive errors with no success', async () => {
-    mockRejectOnce(new Error('boom'));
+  it('flips to `offline` after 2 consecutive errors with no success', async () => {
+    // Threshold lowered from 3 to 2 so a never-connected device gets the
+    // OFFLINE badge in ~30 s with vite's 15 s proxy timeout instead of ~45 s.
     mockRejectOnce(new Error('boom'));
     mockRejectOnce(new Error('boom'));
     const cell = buildLiveLineCell({ url: URL, refreshMs: REFRESH });
 
     await vi.advanceTimersByTimeAsync(0);                  // err 1 (initial)
     expect(cell.getStatus().state).toBe('stale');
-    await vi.advanceTimersByTimeAsync(REFRESH);            // err 2 — backoff to 2× refresh
-    expect(cell.getStatus().state).toBe('stale');
-    await vi.advanceTimersByTimeAsync(REFRESH * 2);        // err 3
+    await vi.advanceTimersByTimeAsync(REFRESH);            // err 2 — offline
     expect(cell.getStatus().state).toBe('offline');
     cell.dispose();
   });
@@ -217,34 +216,32 @@ describe('LiveCell.getStatus — hysteresis', () => {
   });
 
   it('does NOT recover from offline after a single success (hysteresis)', async () => {
-    // 3 errs to push us offline, then one success, then we read.
-    for (let i = 0; i < 3; i++) mockRejectOnce(new Error('boom'));
+    // 2 errs to push us offline, then one success, then we read.
+    for (let i = 0; i < 2; i++) mockRejectOnce(new Error('boom'));
     mockResponseOnce({ samples: [{ t: 1, v: 60 }, { t: 2, v: 65 }] });
     const cell = buildLiveLineCell({ url: URL, refreshMs: REFRESH });
 
     await vi.advanceTimersByTimeAsync(0);                  // err 1
-    await vi.advanceTimersByTimeAsync(REFRESH);            // err 2
-    await vi.advanceTimersByTimeAsync(REFRESH * 2);        // err 3 — offline
+    await vi.advanceTimersByTimeAsync(REFRESH);            // err 2 — offline
     expect(cell.getStatus().state).toBe('offline');
 
-    // After the 3rd error, backoff schedules next at refresh × 2^2 = 4× refresh.
-    await vi.advanceTimersByTimeAsync(REFRESH * 4);        // success #1
+    // After the 2nd error, backoff schedules next at refresh × 2^1 = 2× refresh.
+    await vi.advanceTimersByTimeAsync(REFRESH * 2);        // success #1
     expect(cell.getStatus().state).toBe('offline');         // still offline — debounce
     cell.dispose();
   });
 
   it('recovers to `live` after 2 consecutive successes', async () => {
-    for (let i = 0; i < 3; i++) mockRejectOnce(new Error('boom'));
+    for (let i = 0; i < 2; i++) mockRejectOnce(new Error('boom'));
     mockResponseOnce({ samples: [{ t: 1, v: 60 }, { t: 2, v: 65 }] });   // success 1
     mockResponseOnce({ samples: [{ t: 1, v: 70 }, { t: 2, v: 72 }] });   // success 2
     const cell = buildLiveLineCell({ url: URL, refreshMs: REFRESH });
 
     await vi.advanceTimersByTimeAsync(0);                  // err 1
-    await vi.advanceTimersByTimeAsync(REFRESH);            // err 2
-    await vi.advanceTimersByTimeAsync(REFRESH * 2);        // err 3 — offline
+    await vi.advanceTimersByTimeAsync(REFRESH);            // err 2 — offline
     expect(cell.getStatus().state).toBe('offline');
 
-    await vi.advanceTimersByTimeAsync(REFRESH * 4);        // success 1 (backoff 4×)
+    await vi.advanceTimersByTimeAsync(REFRESH * 2);        // success 1 (backoff 2×)
     expect(cell.getStatus().state).toBe('offline');
     await vi.advanceTimersByTimeAsync(REFRESH);            // success 2 (cadence reset)
     expect(cell.getStatus().state).toBe('live');
