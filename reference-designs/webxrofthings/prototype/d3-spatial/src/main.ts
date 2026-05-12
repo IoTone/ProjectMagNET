@@ -33,17 +33,17 @@ import { DataspaceMenu } from './ui/DataspaceMenu';
 import { HandMenu } from './ui/HandMenu';
 
 const renderer = new THREE.WebGLRenderer({
-  // antialias: false → on Quest 3 we rely on the WebXR layer's multisample
-  //   framebuffer (MSAA 4x by default) instead of paying for context-level MSAA
-  //   that the XR composite would discard anyway. Desktop preview falls back to
-  //   ordinary aliased rendering, which the smoke shots still capture cleanly.
+  // antialias: true → required for Snap Spectacles' XR compositor; setting it
+  //   to false at context-create time was producing a blank scene on "Start AR"
+  //   (Quest 3 was happy either way because its XR layer provides MSAA). Cost
+  //   on Quest 3 is one extra MSAA resolve we don't need, which is fine.
   // alpha: true → required for `alpha=0` clear colour during the XR session
   //   (passthrough composition).
   // preserveDrawingBuffer dropped → was the single biggest non-obvious mobile
   //   cost; defeats tile-based deferred renderers' eviction. We only ever read
   //   the framebuffer for screenshots, which the smoke harness does via
   //   Playwright's page.screenshot(), not WebGL readback.
-  antialias: false,
+  antialias: true,
   alpha: true,
   powerPreference: 'high-performance',
 });
@@ -52,7 +52,11 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.shadowMap.enabled = false;          // we don't render shadows
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.xr.setFramebufferScaleFactor(0.9);  // foveation hint; dial 0.7–1.0 per device
+// Framebuffer scale factor intentionally left at the WebXR default (1.0).
+// Setting it to 0.9 as a foveation hint blanked the Spectacles scene on
+// "Start AR" — their runtime appears not to honor non-1.0 values cleanly.
+// If we want the foveation perf win on Quest 3 later, gate the call behind
+// a UA / runtime detect so it only fires on platforms known to handle it.
 renderer.setClearColor(0x0b1220, 1);
 
 renderer.xr.addEventListener('sessionstart', () => {
