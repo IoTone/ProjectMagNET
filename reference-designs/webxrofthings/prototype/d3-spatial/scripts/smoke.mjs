@@ -431,6 +431,31 @@ async function mockDeviceEndpoints(page) {
   // Catch-all for any other vitals endpoint — empty 200.
   await page.route(/\/api\/v1\/vitals\//, route =>
     route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
+
+  // Join server endpoints — added in P1 (fixed DEMO01-04 codes). Without
+  // these the m20-join-accepted shot hits a 500 because vite proxies to
+  // localhost:3001 (mock-join-server) which isn't running in the smoke env.
+  await page.route(/\/api\/v1\/join$/, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      status: 'accepted',
+      token: 'smoke-test-token',
+      manifest_url: '/api/v1/manifest',
+      dataspace: 'smoke-test',
+    })}));
+  await page.route(/\/api\/v1\/manifest$/, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      version: '1',
+      name: 'smoke-test',
+      scaleTag: 'room',
+      owner: 'smoke@test.local',
+      acousticEnvironment: 'indoor',
+      marks: [],
+    })}));
+  await page.route(/\/api\/v1\/sensor\//, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ samples: [] }) }));
+  await page.route(/\/api\/v1\/actuator\//, route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ samples: [] }) }));
+
   // Camera frames — 1×1 transparent PNG keeps the videoPanel placeholder.
   const PIXEL_PNG = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
