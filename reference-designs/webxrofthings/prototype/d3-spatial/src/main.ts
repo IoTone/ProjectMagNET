@@ -4,19 +4,6 @@ import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { XRRig } from './xrRig';
 import { Text } from 'troika-three-text';
-// `configureTextBuilder` is exported by the runtime build but missing from
-// the bundled .d.ts; cast through the module-untyped import. Same dodge
-// pattern this codebase uses elsewhere for ThreeMeshUI.Block.set().
-import * as troikaText from 'troika-three-text';
-
-// Bump troika's global SDF glyph atlas resolution from the 64 default to 256.
-// At our typical chrome fontSize values (0.008-0.028 world units) the 64-pixel
-// atlas aliases visibly on optical passthrough; 256 gives roughly 16× the SDF
-// sample density per glyph and reads as crisp at every viewing distance.
-// MUST run before any Text instance is created — configureTextBuilder is a
-// no-op after the first font request.
-(troikaText as unknown as { configureTextBuilder(c: { sdfGlyphSize?: number }): void })
-  .configureTextBuilder({ sdfGlyphSize: 256 });
 import { buildDemoScene } from './demo/marks';
 import { buildVizGallery } from './demo/vizGallery';
 import { Interact, hoverFeedback } from './interact/Interact';
