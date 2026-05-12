@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "freertos/FreeRTOS.h"        /* tskIDLE_PRIORITY for httpd config */
+#include "freertos/task.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -14,6 +16,18 @@
 static const char *TAG = "http_vitals";
 
 static httpd_handle_t s_server = NULL;
+
+/* Body-size budgets for the chunked-to-one-shot conversion. Sized for the
+ * maximum payload each endpoint can produce, with a small margin:
+ *   HR/BR history : 60 samples × ~30 chars + {"samples":[]} wrapper
+ *   targets       : 3 max × ~60 chars + {"count":N,"targets":[]} wrapper
+ *   phases        : 3 channels × 200 samples × ~9 chars + brackets/commas
+ *                   (heap-allocated because ~5 KB is too large for the
+ *                   httpd task stack).
+ */
+#define HIST_JSON_CAP      2048
+#define TARGETS_JSON_CAP    384
+#define PHASES_JSON_CAP    6144
 
 /* ───── Helpers ─────────────────────────────────────────────────────── */
 
@@ -30,9 +44,15 @@ static esp_err_t send_json(httpd_req_t *req, const char *body, size_t len) {
     return httpd_resp_send(req, body, len);
 }
 
-static esp_err_t send_json_chunk_open(httpd_req_t *req) {
-    cors_headers(req);
-    httpd_resp_set_type(req, "application/json");
+/* Append `frag` to `buf` at offset `*off`, advancing `*off` and bounds-checking
+ * against `cap`. Returns ESP_FAIL if the fragment would overflow (rare given
+ * the conservative caps above, but kept defensive so corruption is impossible).
+ */
+static inline esp_err_t json_append(char *buf, size_t cap, size_t *off,
+                                    const char *frag, size_t frag_len) {
+    if (*off + frag_len >= cap) return ESP_FAIL;
+    memcpy(buf + *off, frag, frag_len);
+    *off += frag_len;
     return ESP_OK;
 }
 
@@ -123,88 +143,127 @@ static esp_err_t h_lux(httpd_req_t *req) {
     return send_json(req, body, (size_t)n);
 }
 
-/* ───── /heart-rate/history, /breathing/history (chunked) ───────────── */
+/* ───── /heart-rate/history, /breathing/history (one-shot) ───────────── */
 
+/* One snprintf chain into a stack buffer, then a single httpd_resp_send.
+ *
+ * Why this is the right shape: chunked encoding made every sample a separate
+ * send() syscall, which saturated LWIP's send queue under back-to-back
+ * requests and triggered the `httpd_sock_err send:11` (EAGAIN) we see in
+ * the proxy logs. A single send() per response keeps the TCP path quiet.
+ *
+ * The buffers used to live in `static` storage and were corrupted if two
+ * clients hit this handler concurrently. Stack-local arrays here size at
+ * ~480 + ~240 = ~720 B per call — well within the 12 KB httpd task stack.
+ */
 static esp_err_t send_history(httpd_req_t *req, const char *kind) {
-    static uint64_t t_ms[CRAW_MR60_HISTORY_LEN];
-    static float    v[CRAW_MR60_HISTORY_LEN];
+    uint64_t t_ms[CRAW_MR60_HISTORY_LEN];
+    float    v[CRAW_MR60_HISTORY_LEN];
     size_t n = (kind[0] == 'h')
         ? craw_mr60_get_hr_history(t_ms, v, CRAW_MR60_HISTORY_LEN)
         : craw_mr60_get_rr_history(t_ms, v, CRAW_MR60_HISTORY_LEN);
 
-    send_json_chunk_open(req);
-    httpd_resp_send_chunk(req, "{\"samples\":[", 12);
-    char item[64];
+    char body[HIST_JSON_CAP];
+    size_t off = 0;
+    json_append(body, sizeof(body), &off, "{\"samples\":[", 12);
     for (size_t i = 0; i < n; i++) {
-        int len = snprintf(item, sizeof(item),
+        int len = snprintf(body + off, sizeof(body) - off,
             "%s{\"t\":%llu,\"v\":%.1f}",
             (i == 0) ? "" : ",",
             (unsigned long long)t_ms[i], v[i]);
-        httpd_resp_send_chunk(req, item, (size_t)len);
+        if (len < 0 || (size_t)len >= sizeof(body) - off) break;
+        off += (size_t)len;
     }
-    httpd_resp_send_chunk(req, "]}", 2);
-    httpd_resp_send_chunk(req, NULL, 0);  /* terminate */
-    return ESP_OK;
+    json_append(body, sizeof(body), &off, "]}", 2);
+
+    cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, off);
 }
 
 static esp_err_t h_hr_hist(httpd_req_t *req) { return send_history(req, "hr"); }
 static esp_err_t h_br_hist(httpd_req_t *req) { return send_history(req, "br"); }
 
-/* ───── /targets ────────────────────────────────────────────────────── */
+/* ───── /targets (one-shot) ─────────────────────────────────────────── */
 
 static esp_err_t h_targets(httpd_req_t *req) {
     craw_mr60_target_t targets[CRAW_MR60_MAX_TARGETS];
     size_t n = craw_mr60_get_targets(targets);
 
-    send_json_chunk_open(req);
-    char hdr[48];
-    int hl = snprintf(hdr, sizeof(hdr), "{\"count\":%u,\"targets\":[", (unsigned)n);
-    httpd_resp_send_chunk(req, hdr, (size_t)hl);
-
-    char item[160];
+    char body[TARGETS_JSON_CAP];
+    int hl = snprintf(body, sizeof(body), "{\"count\":%u,\"targets\":[", (unsigned)n);
+    size_t off = (hl > 0) ? (size_t)hl : 0;
     for (size_t i = 0; i < n; i++) {
-        int len = snprintf(item, sizeof(item),
+        int len = snprintf(body + off, sizeof(body) - off,
             "%s{\"id\":%u,\"x_m\":%.3f,\"y_m\":%.3f,\"dop\":%ld,\"cluster\":%ld}",
             (i == 0) ? "" : ",",
             (unsigned)i, targets[i].x_m, targets[i].y_m,
             (long)targets[i].dop_index, (long)targets[i].cluster_index);
-        httpd_resp_send_chunk(req, item, (size_t)len);
+        if (len < 0 || (size_t)len >= sizeof(body) - off) break;
+        off += (size_t)len;
     }
-    httpd_resp_send_chunk(req, "]}", 2);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
+    json_append(body, sizeof(body), &off, "]}", 2);
+
+    cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, off);
 }
 
-/* ───── /phases — streamgraph distributions[] shape ─────────────────── */
+/* ───── /phases (one-shot, heap-allocated) ──────────────────────────── */
 
-static esp_err_t send_channel(httpd_req_t *req, const float *vals, size_t n) {
-    char buf[24];
-    httpd_resp_send_chunk(req, "[", 1);
+/* Append a single float channel `[v0,v1,...]` to `body`. */
+static esp_err_t append_channel(char *body, size_t cap, size_t *off,
+                                const float *vals, size_t n) {
+    if (json_append(body, cap, off, "[", 1) != ESP_OK) return ESP_FAIL;
     for (size_t i = 0; i < n; i++) {
-        int len = snprintf(buf, sizeof(buf),
+        int len = snprintf(body + *off, cap - *off,
             "%s%.4f", (i == 0) ? "" : ",", vals[i]);
-        httpd_resp_send_chunk(req, buf, (size_t)len);
+        if (len < 0 || (size_t)len >= cap - *off) return ESP_FAIL;
+        *off += (size_t)len;
     }
-    httpd_resp_send_chunk(req, "]", 1);
-    return ESP_OK;
+    return json_append(body, cap, off, "]", 1);
 }
 
 static esp_err_t h_phases(httpd_req_t *req) {
-    static float heart [CRAW_MR60_PHASE_HISTORY_LEN];
-    static float breath[CRAW_MR60_PHASE_HISTORY_LEN];
-    static float total [CRAW_MR60_PHASE_HISTORY_LEN];
+    /* Heap-allocate the phase channels + the JSON body — three 200-sample
+     * float arrays (2.4 KB) plus the ~5 KB output buffer is too much to put
+     * on the httpd task stack alongside snprintf scratch. The prior `static`
+     * arrays were also a concurrency bug — two clients hitting /phases
+     * concurrently would corrupt each other's data. */
+    float *heart  = malloc(CRAW_MR60_PHASE_HISTORY_LEN * sizeof(float));
+    float *breath = malloc(CRAW_MR60_PHASE_HISTORY_LEN * sizeof(float));
+    float *total  = malloc(CRAW_MR60_PHASE_HISTORY_LEN * sizeof(float));
+    char  *body   = malloc(PHASES_JSON_CAP);
+    if (!heart || !breath || !total || !body) {
+        free(heart); free(breath); free(total); free(body);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
     size_t n = craw_mr60_get_phase_history(NULL, heart, breath, total,
                                            CRAW_MR60_PHASE_HISTORY_LEN);
-    send_json_chunk_open(req);
-    httpd_resp_send_chunk(req, "[", 1);
-    send_channel(req, heart,  n);
-    httpd_resp_send_chunk(req, ",", 1);
-    send_channel(req, breath, n);
-    httpd_resp_send_chunk(req, ",", 1);
-    send_channel(req, total,  n);
-    httpd_resp_send_chunk(req, "]", 1);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
+
+    size_t off = 0;
+    esp_err_t e = ESP_OK;
+    if (e == ESP_OK) e = json_append(body, PHASES_JSON_CAP, &off, "[", 1);
+    if (e == ESP_OK) e = append_channel(body, PHASES_JSON_CAP, &off, heart,  n);
+    if (e == ESP_OK) e = json_append(body, PHASES_JSON_CAP, &off, ",", 1);
+    if (e == ESP_OK) e = append_channel(body, PHASES_JSON_CAP, &off, breath, n);
+    if (e == ESP_OK) e = json_append(body, PHASES_JSON_CAP, &off, ",", 1);
+    if (e == ESP_OK) e = append_channel(body, PHASES_JSON_CAP, &off, total,  n);
+    if (e == ESP_OK) e = json_append(body, PHASES_JSON_CAP, &off, "]", 1);
+
+    if (e != ESP_OK) {
+        free(heart); free(breath); free(total); free(body);
+        ESP_LOGW(TAG, "h_phases: body buffer too small, sending 500");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t rc = httpd_resp_send(req, body, off);
+    free(heart); free(breath); free(total); free(body);
+    return rc;
 }
 
 /* ───── OPTIONS preflight (wildcard) ────────────────────────────────── */
@@ -243,7 +302,26 @@ esp_err_t http_vitals_start(void) {
     cfg.uri_match_fn  = httpd_uri_match_wildcard;   // enables "/*" OPTIONS
     cfg.max_uri_handlers = sizeof(s_routes_get) / sizeof(s_routes_get[0]) + 4;
     cfg.lru_purge_enable = true;
-    cfg.stack_size = 8192;
+
+    /* Stability tuning — see commit message for the full reasoning. Brief:
+     *   - max_open_sockets 7 -> 13: the C6 keeps recently-closed sockets in
+     *     TIME_WAIT for a few seconds, and with 4 d3-spatial cells polling
+     *     simultaneously we'd hit the 7-socket ceiling and start dropping.
+     *   - recv/send_wait_timeout: bound how long the server task blocks on
+     *     a wedged peer. Without these, a slow proxy can hold a worker task
+     *     long enough that the task WDT trips and the device reboots.
+     *   - task_priority: nudge one above the IDF default so handler work
+     *     doesn't get preempted endlessly by lower-priority background tasks.
+     *     Still well below WiFi (priority 23) so we don't starve the radio.
+     *   - stack_size 8 -> 12 KB: gives snprintf chains headroom; one-shot
+     *     handlers now build the whole JSON locally and the prior 8 KB was
+     *     tight under -Og.
+     */
+    cfg.max_open_sockets  = 13;
+    cfg.recv_wait_timeout = 5;
+    cfg.send_wait_timeout = 5;
+    cfg.task_priority     = tskIDLE_PRIORITY + 6;
+    cfg.stack_size        = 12288;
 
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {
