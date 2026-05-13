@@ -31,6 +31,7 @@ import type { DataspaceManifest } from './manifest/schema';
 import { DEFAULT_HUD_ITEMS } from './manifest/schema';
 import { DataspaceMenu } from './ui/DataspaceMenu';
 import { HandMenu } from './ui/HandMenu';
+import { isQuest, platformName } from './platform';
 
 const renderer = new THREE.WebGLRenderer({
   // antialias: true → required for Snap Spectacles' XR compositor; setting it
@@ -52,11 +53,19 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.shadowMap.enabled = false;          // we don't render shadows
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-// Framebuffer scale factor intentionally left at the WebXR default (1.0).
-// Setting it to 0.9 as a foveation hint blanked the Spectacles scene on
-// "Start AR" — their runtime appears not to honor non-1.0 values cleanly.
-// If we want the foveation perf win on Quest 3 later, gate the call behind
-// a UA / runtime detect so it only fires on platforms known to handle it.
+// Foveation hint — opt-in for positively-detected Quest only. Default
+// (1.0) for Spectacles, desktop, and any UA we haven't classified, because
+// Spectacles' XR runtime blanks the scene if scale ≠ 1.0 (see memory:
+// project_spectacles_webxr_renderer_quirks.md) and we can't trust an
+// unverified UA detector to differentiate. Quest 3 drops ~19% pixel work
+// at 0.9; desktop doesn't render XR so the missed optimization is moot.
+if (isQuest()) {
+  renderer.xr.setFramebufferScaleFactor(0.9);
+}
+// Boot-time UA dump so we can capture the actual Spectacles / Quest user-
+// agent strings via remote-inspect and tighten src/platform.ts. Remove
+// after one verification pass on each device.
+console.log(`[platform] detected: ${platformName()} · ua=${navigator.userAgent}`);
 renderer.setClearColor(0x0b1220, 1);
 
 renderer.xr.addEventListener('sessionstart', () => {

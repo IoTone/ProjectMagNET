@@ -382,14 +382,16 @@ In gallery view:
 
 Requires a tunnel: `cloudflared tunnel --url http://localhost:5173`.
 
+**Always test on both Quest 3 AND Snap Spectacles** whenever the `WebGLRenderer` constructor args or any `renderer.xr.*` calls change. The two platforms disagree on what those settings tolerate; Quest 3 alone is not sufficient validation. The current renderer block in `src/main.ts` is the known-good baseline for both — read the comments there before changing it.
+
 | Area | Procedure | Pass when |
 |---|---|---|
-| **AR session enters** | tap the AR button on the headset | scene appears against passthrough; LED-amber renderer-clear no longer shows |
+| **AR session enters (Quest 3)** | tap the AR button on the Quest | scene appears against passthrough; LED-amber renderer-clear no longer shows |
+| **AR session enters (Spectacles)** | tap the AR button on Spectacles | scene renders — **not blank**. A blank scene means a renderer/XR setting is Spectacles-incompatible. See `~/.claude/.../memory/project_spectacles_webxr_renderer_quirks.md` for the known offenders (non-1.0 framebuffer scale, `antialias: false`). |
 | **Marks visible** | look around the gallery | every mark renders against passthrough — **not** dark/black (validates the MeshStandardMaterial → MeshBasicMaterial fix on streamgraph + ridgeline) |
 | **Controller select** | trigger on a mark | hover highlight + select fires the same as desktop |
 | **Hand tracking** | pinch-grab a force-graph node | drag works; release returns the node to physics |
 | **Radial gauge / streamgraph readability** | look at the UC3 marks against bright passthrough | warm-only palette is legible; no faint blue text |
-| **Renderer flag side effects** (after CQ-PR-1) | observe FPS overlay | frame time should drop modestly vs the pre-flag build (no `preserveDrawingBuffer`, MSAA off-loaded to XR layer); aliased text edges may be visible — file an issue if intolerable |
 
 There is no automated XR test path. Human screen-cap + notes go into `MagNET_Vitals_E4TH/test-logs/<date>-<short-name>.md` if you want a reproducible record.
 
