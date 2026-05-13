@@ -12,27 +12,35 @@ describe('mock-join-server — code generator', () => {
     s.stopRotationTimer();
   });
 
-  it('uses only ambiguity-stripped characters', () => {
+  it('uses only characters from the full alphanumeric set', () => {
     const s = createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false });
     for (let i = 0; i < 100; i++) s.rotateCode();
     const code = s.getCurrentCode();
     for (const ch of code) {
       expect(CHAR_SET).toContain(ch);
-      expect('OIL01'.includes(ch)).toBe(false);
     }
     s.stopRotationTimer();
   });
 
   it('generates codes sequentially and tracks previousCode after rotation', () => {
     const s = createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false });
-    expect(CHAR_SET.length).toBe(31); // A-Z minus O/I/L = 23 letters + 2-9 = 8 digits
+    expect(CHAR_SET.length).toBe(36); // A-Z (26) + 0-9 (10)
     expect(s.getCurrentCode()).toBe('AAAAAA');
     s.rotateCode();
     // After one rotation, the old AAAAAA becomes previous; the new code is the next sequential
     expect(s.getPreviousCode()).toBe('AAAAAA');
     expect(s.getCurrentCode()).not.toBe('AAAAAA');
-    expect(s.getCurrentCode()).toMatch(/^[A-Z2-9]{6}$/);
+    expect(s.getCurrentCode()).toMatch(/^[A-Z0-9]{6}$/);
     s.stopRotationTimer();
+  });
+
+  it('CHAR_SET includes the characters required to type the fixed DEMO codes', () => {
+    // Regression guard for the P1+P5 era. DEMOXX codes contain O / 0 / 1
+    // which the prior ambiguity-stripped set excluded — they were untypable
+    // in the slot wheel until this change.
+    for (const ch of 'DEMO0123456789') {
+      expect(CHAR_SET).toContain(ch);
+    }
   });
 });
 
@@ -525,6 +533,70 @@ describe('mock-join-server — UC2 actuators (P4b)', () => {
     const s = buildAct();
     const play = await request(s.app).post('/api/v1/actuator/speaker/play').send({});
     expect(play.body.played).toBe('chime');
+    s.stopRotationTimer();
+  });
+});
+
+describe('mock-join-server — UC4 IMU sim (P5a)', () => {
+  function buildImu() {
+    return createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });
+  }
+
+  it('GET /api/v1/sensor/imu returns the expected shape', async () => {
+    const s = buildImu();
+    const res = await request(s.app).get('/api/v1/sensor/imu');
+    expect(res.status).toBe(200);
+    // Orientation in radians, three Euler components.
+    expect(typeof res.body.orientation.roll_rad).toBe('number');
+    expect(typeof res.body.orientation.pitch_rad).toBe('number');
+    expect(typeof res.body.orientation.yaw_rad).toBe('number');
+    // Angular velocity in rad/s.
+    expect(typeof res.body.angular_velocity.x).toBe('number');
+    expect(typeof res.body.angular_velocity.y).toBe('number');
+    expect(typeof res.body.angular_velocity.z).toBe('number');
+    // Linear acceleration in m/s².
+    expect(typeof res.body.acceleration.x).toBe('number');
+    expect(typeof res.body.acceleration.y).toBe('number');
+    expect(typeof res.body.acceleration.z).toBe('number');
+    expect(typeof res.body.timestamp_us).toBe('number');
+    s.stopRotationTimer();
+  });
+
+  it('orientation is within plausible airplane attitude bounds', async () => {
+    const s = buildImu();
+    const res = await request(s.app).get('/api/v1/sensor/imu');
+    // Roll is ±0.4 rad max (banking turn), pitch ±0.15 rad max (gentle
+    // climb/descent), yaw 0..2π (any heading). Allow margins for rounding.
+    expect(Math.abs(res.body.orientation.roll_rad)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(res.body.orientation.pitch_rad)).toBeLessThanOrEqual(0.25);
+    expect(res.body.orientation.yaw_rad).toBeGreaterThanOrEqual(0);
+    expect(res.body.orientation.yaw_rad).toBeLessThan(2 * Math.PI);
+    s.stopRotationTimer();
+  });
+
+  it('acceleration shows gravity on the Y axis', async () => {
+    // Gravity dominates Y (cruise — small ±0.3 m/s² bumps superimposed).
+    // X and Z are small noise (±0.05 m/s² envelope).
+    const s = buildImu();
+    const res = await request(s.app).get('/api/v1/sensor/imu');
+    expect(res.body.acceleration.y).toBeGreaterThan(9.4);
+    expect(res.body.acceleration.y).toBeLessThan(10.2);
+    expect(Math.abs(res.body.acceleration.x)).toBeLessThan(0.1);
+    expect(Math.abs(res.body.acceleration.z)).toBeLessThan(0.1);
+    s.stopRotationTimer();
+  });
+
+  it('is deterministic within the same wall-clock millisecond', async () => {
+    // Two back-to-back requests in <1ms should round to identical samples.
+    const s = buildImu();
+    const a = await request(s.app).get('/api/v1/sensor/imu');
+    const b = await request(s.app).get('/api/v1/sensor/imu');
+    // Yaw is cumulative-time-driven so it strictly advances; the orientation
+    // values are 3-decimal-rounded so within sub-ms calls they coincide
+    // unless the wall-clock crossed a quantisation boundary. Use a tight
+    // numerical tolerance instead of strict equality.
+    expect(Math.abs(a.body.orientation.roll_rad  - b.body.orientation.roll_rad )).toBeLessThan(0.01);
+    expect(Math.abs(a.body.orientation.pitch_rad - b.body.orientation.pitch_rad)).toBeLessThan(0.01);
     s.stopRotationTimer();
   });
 });

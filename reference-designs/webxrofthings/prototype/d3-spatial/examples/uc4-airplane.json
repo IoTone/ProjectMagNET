@@ -8,28 +8,68 @@
   "udm_version": "1.0",
   "udm_doc_version": "0.1.0",
 
-  "_comment": "UC4 placeholder. Real content lands in P5 (IMU sim + HLS player + spatial photo gallery).",
+  "_comment": "UC4 airplane dataspace. P5a wires the IMU sim + airplane viz; P5b adds spatial-audio music; P5c adds HLS streaming video plane; P5d adds the SOG spatial-photo gallery (3 photos).",
 
-  "udm_devices": [],
-  "usm_services": [],
+  "udm_devices": [
+    {
+      "udm_key":   "airplane-imu-001",
+      "udm_uuid":  "urn:device:imu:airplane-001",
+      "_comment":  "Simulated airplane IMU. Backed by mock-join-server for the demo; the real-device swap is a single URL change in the manifest below.",
+      "udm_model_name":   "Airplane IMU (sim)",
+      "udm_vendor":       "MagNET (sim)",
+      "udm_mktg_name":    "Airplane IMU",
+      "udm_type":         "motion-sensor",
+      "udm_class":        ["motion-sensor", "imu", "vehicle"],
+      "udm_capabilities": ["orientation-euler", "angular-velocity", "linear-acceleration", "json-http"],
+      "udm_sensors":      ["accelerometer", "gyroscope"],
+      "udm_services_link": ["imu-snapshot"],
+      "udm_tags":         ["vehicle", "simulated"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.2, "z": -0.6 }
+    }
+  ],
+
+  "usm_services": [
+    {
+      "usm_key": "imu-snapshot",
+      "usm_uuid": "urn:service:imu-snapshot:airplane-001",
+      "usm_service_name": "Airplane IMU snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "motion", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/imu", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 0.2 },
+      "characteristics": [
+        { "usm_characteristic_id": "orientation",      "usm_characteristic_format": "{roll_rad,pitch_rad,yaw_rad}",
+          "usm_characteristic_constraints": { "unit": "radians" } },
+        { "usm_characteristic_id": "angular_velocity", "usm_characteristic_format": "{x,y,z}",
+          "usm_characteristic_constraints": { "unit": "rad/s" } },
+        { "usm_characteristic_id": "acceleration",     "usm_characteristic_format": "{x,y,z}",
+          "usm_characteristic_constraints": { "unit": "m/s^2" } }
+      ],
+      "usm_tags": ["live", "motion", "simulated"]
+    }
+  ],
 
   "marks": [
     {
-      "id": "uc4-placeholder",
-      "type": "scatter",
-      "title": "Airplane dataspace",
-      "subtitle": "Coming in P5: IMU sim · HLS video · spatial photos",
+      "id": "airplane-imu",
+      "type": "imu",
+      "title": "Airplane attitude",
+      "subtitle": "live IMU · simulated",
       "data": {
-        "source": "inline",
-        "points": [
-          { "x": 0, "y": 0, "z": 0, "label": "fuselage" },
-          { "x": -0.4, "y": 0, "z": 0, "label": "left-wing" },
-          { "x": 0.4, "y": 0, "z": 0, "label": "right-wing" },
-          { "x": 0, "y": 0.1, "z": -0.2, "label": "tail" }
-        ]
+        "source": "url",
+        "url": "/api/v1/sensor/imu",
+        "shape": "imu",
+        "refreshInterval": 0.2
       },
-      "config": {},
-      "drillable": false,
+      "config": {
+        "size": 0.12,
+        "color": 16769280,
+        "smooth": true
+      },
+      "deviceRef": "airplane-imu-001",
+      "serviceRef": "imu-snapshot",
       "hoverable": true
     }
   ]

@@ -309,7 +309,7 @@ The mock-join-server resolves `DEMO01–04` to per-use-case manifests. Quick che
 | DEMO01 | UC1 vitals         | `uc1-vitals.json`       | Vitals device + 5 marks (HR/BR/phases/targets/body-temp) — body-temp is simulated; rest needs real device |
 | DEMO02 | UC2 home auto.     | `uc2-room.json`         | Camera + room temp + AQI/baro/pollen sensors + lighting/thermostat/speaker actuators (state mutable via curl; in-XR controls deferred to P4c) |
 | DEMO03 | UC3 poster session | `uc3-poster.json`       | Tree/treemap/sankey marks — pending P2 curated content             |
-| DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Single placeholder scatter — pending P5                            |
+| DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Airplane attitude (IMU sim, P5a) — wireframe airplane orients itself to a deterministic ±0.4 rad roll, ±0.15 rad pitch, continuous yaw drift. P5b/c/d add music, HLS video, spatial photos. |
 
 Run `npm run server` (the join server) in a second terminal, then `npm run dev`. From the join panel, type each code in turn and verify:
 - Code accepted (green checkmark, "Connected to demo-XXX")

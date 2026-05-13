@@ -18,6 +18,7 @@ import { buildRidgeline } from '../viz/ridgeline';
 import { buildSankey } from '../viz/sankey';
 import { buildStreamgraph } from '../viz/streamgraph';
 import { buildVideoPanel } from '../viz/videoPanel';
+import { buildLiveImuCell } from '../demo/liveImuCell';
 import { buildLineMark } from '../chart/marks/line';
 import { buildBarMark } from '../chart/marks/bar';
 import { buildScatterMark } from '../chart/marks/scatter';
@@ -374,5 +375,34 @@ export function registerAllBuilders() {
       muted: (cfg.muted as boolean) ?? true,
     });
     return makeMark(spec, viz.group, viz);
+  });
+
+  // ─── imu mark — UC4 airplane orientation ────────────────────────────
+  //
+  // Spec shape:
+  //   { id, type: 'imu', title, data: { source: 'url', url, shape: 'imu',
+  //     refreshInterval: <seconds> }, config: { size, color, smooth } }
+  //
+  // The cell builds a small wireframe airplane that rotates by the latest
+  // IMU snapshot. Today UC4 points this at the mock server's simulated
+  // feed; swapping for a real device is a manifest URL change only.
+  registerMarkBuilder('imu', (spec) => {
+    if (spec.data.source !== 'url') return null;
+    const url = (spec.data as any).url as string;
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    // refreshInterval is in seconds in the manifest (matches video/line);
+    // convert to ms for the cell. 200 ms (5 Hz) reads as smooth airplane
+    // motion via the cell's onBeforeRender slerp.
+    const refreshMs = typeof (spec.data as any).refreshInterval === 'number'
+      ? Math.max(50, (spec.data as any).refreshInterval * 1000)
+      : 200;
+    const cell = buildLiveImuCell({
+      url,
+      refreshMs,
+      size:   (cfg.size   as number) ?? 0.10,
+      color:  (cfg.color  as number) ?? TEXT.primary,
+      smooth: (cfg.smooth as boolean) ?? true,
+    });
+    return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
   });
 }

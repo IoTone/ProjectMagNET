@@ -16,8 +16,12 @@ import crypto from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Ambiguity-stripped character set: A-Z minus O/I/L, digits 2-9 (no 0/1)
-export const CHAR_SET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+// Full A-Z + 0-9 (36 chars). Originally ambiguity-stripped to A-Z minus
+// O/I/L plus digits 2-9 (no 0/1) for cleaner code handoff, but that made
+// the fixed UC codes (DEMO01-04) untypable in the slot wheel because they
+// contain O, 0, and 1. Reverting to the full alphanumeric set so the demo
+// codes work; rotating-code readability takes a minor hit.
+export const CHAR_SET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const CODE_LENGTH = 6;
 
 /**
@@ -493,6 +497,47 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
     speaker.last_played_id = sound;
     speaker.last_played_at = Date.now();
     res.json({ played: sound, at: speaker.last_played_at });
+  });
+
+  // ─── UC4 IMU simulation (P5a) ──────────────────────────────────────────
+  //
+  // Returns a deterministic noisy "airplane" attitude. Same time-derived
+  // pattern as the body-temp / AQI / barometer feeds so the response is
+  // reproducible for smoke baselines:
+  //   - slow roll oscillation (±0.4 rad bank, 8-s period) — banking turns
+  //   - shallower pitch oscillation (±0.15 rad, 12-s period) — climbing/descending
+  //   - continuous slow yaw (one full turn per 30 s) — heading drift
+  //   - acceleration carries gravity on the Y axis + small bumps on all axes
+  //
+  // This endpoint matches the shape of consumer IMU APIs (Euler radians +
+  // m/s² for accel + rad/s for angular velocity) so the migration to a
+  // real device is just a manifest URL swap — no client-side rewrite.
+  function imuAt(t: number) {
+    const m = t / 1000;                                  // seconds
+    const roll  = 0.4  * Math.sin(m / 8);                 // ±0.4 rad
+    const pitch = 0.15 * Math.sin(m / 12);                // ±0.15 rad
+    const yaw   = (m / 30) % (2 * Math.PI);               // 0..2π
+    return {
+      orientation: {                                       // Euler, radians
+        roll_rad:  Math.round(roll  * 1000) / 1000,
+        pitch_rad: Math.round(pitch * 1000) / 1000,
+        yaw_rad:   Math.round(yaw   * 1000) / 1000,
+      },
+      angular_velocity: {                                  // rad/s — derivative of the above
+        x: Math.round((0.4  / 8)  * Math.cos(m / 8)  * 1000) / 1000,
+        y: Math.round((1    / 30) * 1000) / 1000,
+        z: Math.round((0.15 / 12) * Math.cos(m / 12) * 1000) / 1000,
+      },
+      acceleration: {                                      // m/s² — gravity on Y, small bumps elsewhere
+        x: Math.round((0.05 * Math.sin(m * 1.3)) * 1000) / 1000,
+        y: Math.round((9.81 + 0.3 * Math.sin(m / 4)) * 1000) / 1000,
+        z: Math.round((0.05 * Math.sin(m * 0.7)) * 1000) / 1000,
+      },
+    };
+  }
+  app.get('/api/v1/sensor/imu', (_req, res) => {
+    const now = Date.now();
+    res.json({ ...imuAt(now), timestamp_us: now * 1000 });
   });
 
   return {

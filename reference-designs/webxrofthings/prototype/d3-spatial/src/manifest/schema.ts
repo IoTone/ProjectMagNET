@@ -194,18 +194,18 @@ export type MarkType =
   | 'tree' | 'treemap' | 'sunburst' | 'pack'
   | 'force' | 'ridgeline' | 'sankey' | 'streamgraph'
   | 'parallel' | 'tangled-tree' | 'edge-bundle' | 'hexbin'
-  | 'video';
+  | 'video' | 'imu';
 
 export const MARK_TYPES: readonly MarkType[] = [
   'line', 'bar', 'scatter', 'arc',
   'tree', 'treemap', 'sunburst', 'pack',
   'force', 'ridgeline', 'sankey', 'streamgraph',
   'parallel', 'tangled-tree', 'edge-bundle', 'hexbin',
-  'video',
+  'video', 'imu',
 ];
 
-export const SCALE_TAGS = ['personal', 'room', 'hall', 'net'] as const;
-export const URL_DATA_SHAPES = ['hierarchy', 'graph', 'series', 'distributions', 'flow', 'video'] as const;
+export const SCALE_TAGS = ['personal', 'room', 'hall', 'net', 'vehicle'] as const;
+export const URL_DATA_SHAPES = ['hierarchy', 'graph', 'series', 'distributions', 'flow', 'video', 'imu'] as const;
 
 export type ManifestValidationResult =
   | { valid: true; warnings?: string[] }
