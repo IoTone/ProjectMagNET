@@ -62,10 +62,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 if (isQuest()) {
   renderer.xr.setFramebufferScaleFactor(0.9);
 }
-// Boot-time UA dump so we can capture the actual Spectacles / Quest user-
-// agent strings via remote-inspect and tighten src/platform.ts. Remove
-// after one verification pass on each device.
-console.log(`[platform] detected: ${platformName()} · ua=${navigator.userAgent}`);
+console.log(`[platform] detected: ${platformName()}`);
 renderer.setClearColor(0x0b1220, 1);
 
 renderer.xr.addEventListener('sessionstart', () => {

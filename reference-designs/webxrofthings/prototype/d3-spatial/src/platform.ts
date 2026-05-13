@@ -9,19 +9,32 @@
  * while Quest 3 honors values down to ~0.7 as a foveation hint (see
  * memory `project_spectacles_webxr_renderer_quirks.md`).
  *
- * Detection is UA-based today. That's good enough for the platforms we
- * actively ship to; it's not airtight against future browser-engine
- * changes. If we ever start sniffing the wrong thing, the right next move
- * is feature-detect via `navigator.xr.isSessionSupported(...)` rather than
- * sprinkling more UA-substring checks.
+ * ⚠️ Spectacles masquerades. Its browser reports a generic
+ * `Mozilla ... Linux aarch64 ... KHTML` UA with no "Spectacles" token,
+ * presumably to maximize web compatibility. That means **`isSpectacles()`
+ * returns `false` on real Spectacles devices today** — UA-sniffing simply
+ * can't tell. Until we have a better signal, code that needs to be safe
+ * for Spectacles must use **fail-safe gating** — i.e. opt *in* to perf
+ * tweaks only when a known-good platform is positively detected:
  *
- * Empirical UA tokens (verify on-device and tighten if needed):
- *   - Snap Spectacles : userAgent contains "Spectacles"
+ *     // GOOD — Spectacles falls through to the safe default
+ *     if (isQuest()) renderer.xr.setFramebufferScaleFactor(0.9);
+ *
+ *     // BAD — Spectacles' real UA doesn't match, so this fires anyway
+ *     if (!isSpectacles()) renderer.xr.setFramebufferScaleFactor(0.9);
+ *
+ * **Better detection — future work.** UA-sniffing is wrong; the right
+ * primitives are runtime: after `sessionstart` we can inspect
+ * `session.inputSources`, `session.supportedFrameRates`, available
+ * features (`bounded-floor` differs between the platforms), or render the
+ * first frame and probe the framebuffer dimensions to spot a malformed
+ * XR layer. Open as TODO — see also the memory note for the platform's
+ * blank-on-non-1.0 framebuffer-scale behaviour.
+ *
+ * Empirical UA tokens used by the regex below (kept in case a future
+ * Spectacles build stops masquerading):
+ *   - Snap Spectacles : userAgent contains "Spectacles"  (NOT TRIPPED TODAY)
  *   - Meta Quest 3    : userAgent contains "OculusBrowser" and "Quest"
- *
- * To capture the actual UA from a device, drop a one-time
- * `console.log(navigator.userAgent)` near the renderer setup and read it
- * back via remote-inspect.
  */
 
 /** Test-only override of the UA the detectors below see. `null` = use the
@@ -37,11 +50,16 @@ function ua(): string {
 }
 
 /**
- * `true` when running inside Snap Spectacles' WebXR browser.
+ * `true` when the UA contains "Spectacles".
  *
- * Gate any of these behind `!isSpectacles()` to keep the platform happy:
- *   - `renderer.xr.setFramebufferScaleFactor(scale)` where `scale !== 1.0`
- *   - constructor flag `antialias: false` (suspected; reverted defensively)
+ * **Reliably returns `false` on real Spectacles devices today** because
+ * the browser masquerades — see the file header. Do NOT use this to
+ * fail-permissive-gate perf tweaks; only call sites where a `true`
+ * result is informational (e.g. logging) are safe.
+ *
+ * Kept as a stub for the day a future Spectacles build stops masquerading
+ * and so callers don't need to invent their own UA regex when that
+ * happens.
  */
 export function isSpectacles(): boolean {
   return /Spectacles/i.test(ua());
