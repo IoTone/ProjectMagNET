@@ -537,6 +537,78 @@ describe('mock-join-server — UC2 actuators (P4b)', () => {
   });
 });
 
+describe('mock-join-server — UC2 NeoPixel strip', () => {
+  function buildNeo() {
+    return createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });
+  }
+
+  it('GET returns the default state + available_patterns enum', async () => {
+    const s = buildNeo();
+    const res = await request(s.app).get('/api/v1/actuator/neopixel');
+    expect(res.status).toBe(200);
+    expect(res.body.on).toBe(true);
+    expect(res.body.brightness_pct).toBe(80);
+    expect(res.body.color).toEqual({ r: 0, g: 200, b: 255 });
+    expect(res.body.pattern).toBe('rainbow');
+    expect(res.body.pattern_speed_pct).toBe(50);
+    expect(res.body.led_count).toBe(60);
+    expect(res.body.available_patterns).toEqual(
+      ['solid', 'breathing', 'rainbow', 'chase', 'twinkle'],
+    );
+    s.stopRotationTimer();
+  });
+
+  it('POST mutates pattern + speed and persists across reads', async () => {
+    const s = buildNeo();
+    await request(s.app).post('/api/v1/actuator/neopixel')
+      .send({ pattern: 'chase', pattern_speed_pct: 80 });
+    const res = await request(s.app).get('/api/v1/actuator/neopixel');
+    expect(res.body.pattern).toBe('chase');
+    expect(res.body.pattern_speed_pct).toBe(80);
+    s.stopRotationTimer();
+  });
+
+  it('POST clamps brightness + pattern_speed to [0, 100]', async () => {
+    const s = buildNeo();
+    await request(s.app).post('/api/v1/actuator/neopixel')
+      .send({ brightness_pct: 250, pattern_speed_pct: -10 });
+    const res = await request(s.app).get('/api/v1/actuator/neopixel');
+    expect(res.body.brightness_pct).toBe(100);
+    expect(res.body.pattern_speed_pct).toBe(0);
+    s.stopRotationTimer();
+  });
+
+  it('POST color clamps each RGB channel to [0, 255]', async () => {
+    const s = buildNeo();
+    await request(s.app).post('/api/v1/actuator/neopixel')
+      .send({ color: { r: 300, g: 128, b: -5 } });
+    const res = await request(s.app).get('/api/v1/actuator/neopixel');
+    expect(res.body.color).toEqual({ r: 255, g: 128, b: 0 });
+    s.stopRotationTimer();
+  });
+
+  it('POST ignores unknown pattern values, leaves prior value in place', async () => {
+    const s = buildNeo();
+    await request(s.app).post('/api/v1/actuator/neopixel').send({ pattern: 'rainbow' });
+    await request(s.app).post('/api/v1/actuator/neopixel').send({ pattern: 'disco-inferno' });
+    expect((await request(s.app).get('/api/v1/actuator/neopixel')).body.pattern).toBe('rainbow');
+    s.stopRotationTimer();
+  });
+
+  it('POST on=false turns the strip off without losing color/pattern state', async () => {
+    const s = buildNeo();
+    await request(s.app).post('/api/v1/actuator/neopixel')
+      .send({ on: false, color: { r: 50, g: 60, b: 70 }, pattern: 'breathing' });
+    const res = await request(s.app).get('/api/v1/actuator/neopixel');
+    expect(res.body.on).toBe(false);
+    // The color and pattern should still be retained — turning it back on
+    // shouldn't reset the look.
+    expect(res.body.color).toEqual({ r: 50, g: 60, b: 70 });
+    expect(res.body.pattern).toBe('breathing');
+    s.stopRotationTimer();
+  });
+});
+
 describe('mock-join-server — UC4 IMU sim (P5a)', () => {
   function buildImu() {
     return createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });

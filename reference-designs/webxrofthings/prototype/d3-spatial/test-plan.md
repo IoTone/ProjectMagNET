@@ -344,9 +344,22 @@ curl -s -X POST -H 'Content-Type: application/json' \
 curl -s -X POST -H 'Content-Type: application/json' \
   -d '{"sound_id": "chime"}' \
   http://localhost:3001/api/v1/actuator/speaker/play | jq
+
+# NeoPixel strip — read state, then switch to chase pattern at 80% speed
+curl -s http://localhost:3001/api/v1/actuator/neopixel | jq
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"pattern": "chase", "pattern_speed_pct": 80, "color": {"r": 255, "g": 80, "b": 0}}' \
+  http://localhost:3001/api/v1/actuator/neopixel | jq
+# Patterns: solid / breathing / rainbow / chase / twinkle (see available_patterns
+# in the GET response). Unknown patterns are rejected silently — prior value stays.
+
+# Turn the strip off without losing the look — `on: false` toggles enable,
+# the color/pattern state persists for when it comes back on.
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"on": false}' http://localhost:3001/api/v1/actuator/neopixel | jq
 ```
 
-(Audio playback is server-side state today — actual sound output requires the in-XR audio controller to subscribe, which lands with P4c controls.)
+(Audio playback + NeoPixel animation are server-side state today — the actuators hold the values without driving the animation. Real sound output / LED frames will come when these get wired to firmware; the in-XR colorwheel + pattern picker UX lands with P4c controls.)
 
 ### 6.4 Live cells in the gallery (~5 minutes)
 

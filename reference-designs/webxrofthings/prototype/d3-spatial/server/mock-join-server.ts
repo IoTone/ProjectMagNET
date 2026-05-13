@@ -499,6 +499,75 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
     res.json({ played: sound, at: speaker.last_played_at });
   });
 
+  // ─── UC2 NeoPixel addressable LED strip ────────────────────────────────
+  //
+  // Companion to the smart-bulb actuator above. Where the bulb is a single
+  // light source, this represents an addressable LED strip — same on/off
+  // and color controls, plus an animation pattern selector + speed.
+  //
+  // Future UX (P4c-era): in-XR colorwheel for `color`, dropdown for
+  // `pattern`, slider for `pattern_speed_pct`. The server state holds the
+  // values without driving the animation itself; that's a firmware concern
+  // when this gets wired to a real strip.
+
+  const NEOPIXEL_PATTERNS = ['solid', 'breathing', 'rainbow', 'chase', 'twinkle'] as const;
+  type NeopixelPattern = typeof NEOPIXEL_PATTERNS[number];
+
+  interface NeopixelState {
+    on: boolean;
+    brightness_pct: number;     // 0-100, applies to the whole strip
+    color: { r: number; g: number; b: number };  // base color for solid / breathing / chase
+    pattern: NeopixelPattern;
+    pattern_speed_pct: number;  // 0-100; pattern-specific (e.g. breathing period, rainbow phase rate)
+    led_count: number;          // readonly hint for a future grid/strip viz
+    last_changed_at: number;
+  }
+  const neopixel: NeopixelState = {
+    on: true, brightness_pct: 80,
+    color: { r: 0, g: 200, b: 255 },             // bright cyan default
+    pattern: 'rainbow', pattern_speed_pct: 50,
+    led_count: 60,
+    last_changed_at: Date.now(),
+  };
+
+  app.get('/api/v1/actuator/neopixel', (_req, res) => {
+    res.json({
+      ...neopixel,
+      available_patterns: NEOPIXEL_PATTERNS,
+      timestamp_us: Date.now() * 1000,
+    });
+  });
+  app.post('/api/v1/actuator/neopixel', (req, res) => {
+    const body = req.body as Partial<NeopixelState>;
+    if (typeof body.on === 'boolean') neopixel.on = body.on;
+    if (typeof body.brightness_pct === 'number') {
+      neopixel.brightness_pct = Math.max(0, Math.min(100, body.brightness_pct));
+    }
+    if (body.color && typeof body.color === 'object') {
+      const { r, g, b } = body.color;
+      if ([r, g, b].every(c => typeof c === 'number')) {
+        neopixel.color = {
+          r: Math.max(0, Math.min(255, r)),
+          g: Math.max(0, Math.min(255, g)),
+          b: Math.max(0, Math.min(255, b)),
+        };
+      }
+    }
+    if (typeof body.pattern === 'string'
+        && (NEOPIXEL_PATTERNS as readonly string[]).includes(body.pattern)) {
+      neopixel.pattern = body.pattern as NeopixelPattern;
+    }
+    if (typeof body.pattern_speed_pct === 'number') {
+      neopixel.pattern_speed_pct = Math.max(0, Math.min(100, body.pattern_speed_pct));
+    }
+    neopixel.last_changed_at = Date.now();
+    res.json({
+      ...neopixel,
+      available_patterns: NEOPIXEL_PATTERNS,
+      timestamp_us: Date.now() * 1000,
+    });
+  });
+
   // ─── UC4 IMU simulation (P5a) ──────────────────────────────────────────
   //
   // Returns a deterministic noisy "airplane" attitude. Same time-derived

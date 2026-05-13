@@ -87,6 +87,20 @@
       "udm_spatial_anchor_x": { "x": 1.2, "y": 1.0, "z": -0.4 }
     },
     {
+      "udm_key": "neopixel-strip-001",
+      "udm_uuid": "urn:device:neopixel-strip:001",
+      "_comment": "Simulated 60-LED NeoPixel-style addressable RGB strip. Mutable via POST /api/v1/actuator/neopixel. Real hardware would be a WS2812B/SK6812 strip driven by an ESP32 over a single GPIO; the on/off + brightness + color + pattern shape matches that firmware's typical control surface.",
+      "udm_model_name": "NeoPixel Strip (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Accent lighting · shelf-back strip",
+      "udm_type": "actuator",
+      "udm_class": ["actuator", "lighting", "addressable-led", "iot"],
+      "udm_capabilities": ["on-off", "brightness", "color-rgb", "pattern", "addressable"],
+      "udm_services_link": ["neopixel-state"],
+      "udm_tags": ["room", "actuator", "simulated", "neopixel"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 2.0, "z": -1.4 }
+    },
+    {
       "udm_key": "envhub-001",
       "udm_uuid": "urn:device:env-sensor-hub:001",
       "_comment": "Simulated environmental sensor hub. Backed by mock-join-server for the demo; real hardware would be a multi-sensor I2C board (e.g. BME680 + AQI + pollen counter).",
@@ -333,6 +347,34 @@
         { "usm_characteristic_id": "available_sounds",   "usm_characteristic_format": "array<string>" }
       ],
       "usm_tags": ["actuator", "trigger", "simulated"]
+    },
+    {
+      "usm_key": "neopixel-state",
+      "usm_uuid": "urn:service:neopixel-state:001",
+      "usm_service_name": "NeoPixel strip state",
+      "usm_type": "actuator",
+      "usm_class": ["actuator", "lighting", "addressable-led", "mutable"],
+      "usm_service_endpoint": {
+        "GET":  { "url": "/api/v1/actuator/neopixel", "content-type": "application/json" },
+        "POST": { "url": "/api/v1/actuator/neopixel", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 5 },
+      "characteristics": [
+        { "usm_characteristic_id": "on",                 "usm_characteristic_format": "boolean" },
+        { "usm_characteristic_id": "brightness_pct",     "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 100 } },
+        { "usm_characteristic_id": "color",              "usm_characteristic_format": "{r,g,b}",
+          "usm_characteristic_constraints": { "channel_min": 0, "channel_max": 255 } },
+        { "usm_characteristic_id": "pattern",            "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["solid", "breathing", "rainbow", "chase", "twinkle"] } },
+        { "usm_characteristic_id": "pattern_speed_pct",  "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 100 } },
+        { "usm_characteristic_id": "led_count",          "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "readonly": true } },
+        { "usm_characteristic_id": "available_patterns", "usm_characteristic_format": "array<string>",
+          "usm_characteristic_constraints": { "readonly": true } }
+      ],
+      "usm_tags": ["actuator", "mutable", "simulated", "neopixel"]
     }
   ],
 
