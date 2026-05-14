@@ -2,49 +2,54 @@
  * Live splat gallery cell — UC4 spatial-photo viewer.
  *
  * Renders one Gaussian-splat photo from a list, with next/prev navigation
- * to cycle through. Uses `@sparkjsdev/spark@^0.1.10` for SOG/PLY/SPZ
- * loading; the SplatMesh integrates into a regular three.js scene without
- * needing a separate SparkRenderer in basic usage (per spark's README).
+ * to cycle through. Uses `@mkkellogg/gaussian-splats-3d`'s `DropInViewer`
+ * (a `THREE.Group` subclass that owns its own render path) so the
+ * manifest pipeline can add it like any other mark with no renderer
+ * surgery.
+ *
+ * Asset note: the file paths in `photos[*].url` must be **compressed PLY**
+ * (`.compressed.ply`). The source files in `public/spatial/` are
+ * `.sog` (ml-sharp's native output); `npm run convert:spatial` runs them
+ * through `@playcanvas/splat-transform` to produce the .ply variants the
+ * loader consumes. mkkellogg/gaussian-splats-3d does not load .sog
+ * natively, hence the conversion step.
  *
  * UX shape:
  *   - One active splat shown at a time
- *   - Slow auto-rotation around Y so the volumetric reading is obvious
  *   - Counter text below ("Photo 2 of 3 · DSC 1624")
- *   - Auto-advance every `autoAdvanceMs` (default 15 s), pauses when paused
+ *   - Auto-advance every `autoAdvanceMs` (default 15 s)
  *   - Keyboard left/right for manual navigation (window-level listener)
  *
  * Future polish (deferred):
  *   - Click-to-advance arrows in 3D space (requires onSelect wiring in
  *     renderManifest, which currently only handles hover for manifest-built
- *     marks; that's the same blocker the boombox transport controls hit)
- *   - Thumbnail strip rendered from the .webp companion files
- *   - Cross-fade between splats instead of swap-on-load
+ *     marks).
+ *   - Cross-fade between splats instead of swap-on-load.
+ *   - In-XR thumbnail strip rendered from the `.webp` companions in
+ *     `public/spatial/`.
  */
 import * as THREE from 'three';
 import { Text } from 'troika-three-text';
 import { TEXT } from '../ui/palette';
 
-// `@sparkjsdev/spark` is lazy-loaded the first time a splat mesh is needed.
-// Reasons:
-//   - Spark imports a vrButton helper at module-load that touches `navigator`,
-//     which crashes node-env unit tests when this module is imported via the
-//     manifest builder chain.
-//   - It's a sizable library (~MB-ish). Loading on-demand means non-UC4
-//     dataspaces don't pay for it.
-// The dynamic import returns a typed singleton so subsequent loads reuse it.
-type SparkModule = typeof import('@sparkjsdev/spark');
-type SparkSplatMeshCtor = SparkModule['SplatMesh'];
-let sparkPromise: Promise<SparkSplatMeshCtor> | null = null;
-function loadSparkSplatMesh(): Promise<SparkSplatMeshCtor> {
-  if (!sparkPromise) {
-    sparkPromise = import('@sparkjsdev/spark').then(m => m.SplatMesh);
+// `@mkkellogg/gaussian-splats-3d` is lazy-loaded the first time a splat
+// is needed. Reasons:
+//   - The library is sizable; non-UC4 dataspaces shouldn't pay for it.
+//   - Module load instantiates worker code that's irrelevant to the
+//     manifest builder chain in node tests.
+type SplatModule = typeof import('@mkkellogg/gaussian-splats-3d');
+type DropInViewerCtor = SplatModule['DropInViewer'];
+let splatPromise: Promise<DropInViewerCtor> | null = null;
+function loadDropInViewer(): Promise<DropInViewerCtor> {
+  if (!splatPromise) {
+    splatPromise = import('@mkkellogg/gaussian-splats-3d').then(m => m.DropInViewer);
   }
-  return sparkPromise;
+  return splatPromise;
 }
-type SparkSplatMesh = InstanceType<SparkSplatMeshCtor>;
+type DropInViewer = InstanceType<DropInViewerCtor>;
 
 export interface SplatPhoto {
-  /** URL the SplatMesh loader will fetch. Typically `/spatial/foo.sog`. */
+  /** Compressed-PLY URL the loader will fetch. Typically `/spatial/foo.compressed.ply`. */
   url: string;
   /** Display label shown under the splat. */
   title: string;
@@ -54,12 +59,17 @@ export interface LiveSplatGalleryOpts {
   photos: SplatPhoto[];
   /** Auto-advance interval in ms. 0 disables. Default 15000. */
   autoAdvanceMs?: number;
-  /** Continuous Y rotation rate (rad/sec). 0 disables. Default 0.15. */
-  rotateRadPerSec?: number;
   /** Y position of the splat group relative to the cell origin. Default 0. */
   splatY?: number;
   /** Hookup of keyboard left/right for manual navigation. Default true. */
   bindKeyboard?: boolean;
+  /**
+   * Splat-alpha removal threshold passed through to mkkellogg's loader.
+   * Higher = drop more low-alpha splats = smaller GPU footprint at the
+   * cost of some haloing on translucent boundaries. Default 5 (their
+   * recommended starting point).
+   */
+  splatAlphaRemovalThreshold?: number;
 }
 
 export interface LiveSplatGalleryCell {
@@ -76,9 +86,9 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
   const {
     photos,
     autoAdvanceMs = 15_000,
-    rotateRadPerSec = 0.15,
     splatY = 0,
     bindKeyboard = true,
+    splatAlphaRemovalThreshold = 5,
   } = opts;
 
   if (photos.length === 0) {
@@ -88,8 +98,9 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
   const group = new THREE.Group();
   group.name = 'live-splat-gallery';
 
-  // The splat hangs off this inner group so we can rotate it without
-  // affecting the label position below.
+  // Holder for the splat viewer + label. The viewer itself is added once
+  // (it's expensive to construct) and we swap which splat scene it shows
+  // via removeSplatScene / addSplatScene calls.
   const splatHolder = new THREE.Group();
   splatHolder.name = 'splat-holder';
   splatHolder.position.y = splatY;
@@ -105,8 +116,9 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
   group.add(label);
 
   let currentIdx = 0;
-  let currentMesh: SparkSplatMesh | null = null;
-  let lastTickTime = 0;
+  let viewer: DropInViewer | null = null;
+  let viewerSceneIndex = -1;   // mkkellogg index of the currently-loaded scene, -1 if none
+  let loading = false;
   let disposed = false;
 
   function updateLabel() {
@@ -115,54 +127,75 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
     label.sync();
   }
 
-  function disposeMesh(mesh: SparkSplatMesh | null) {
-    if (!mesh) return;
-    splatHolder.remove(mesh);
-    // SplatMesh holds a PackedSplats / textures internally. Spark exposes
-    // a `dispose()` method via SplatGenerator; call defensively in case the
-    // typings are missing it on a future version.
-    const m = mesh as unknown as { dispose?: () => void };
-    m.dispose?.();
-  }
-
-  /** Async — the first call lazy-loads `@sparkjsdev/spark`. Each call swaps
-   *  the visible splat for the photo at `currentIdx`. Concurrent calls
-   *  (e.g. user spamming next()) are guarded by re-checking that we're
-   *  still the current target after the load resolves. */
+  /** Replace the visible splat with the photo at currentIdx. Re-entrant-safe:
+   *  if another navigation request arrives while one is in flight, the later
+   *  call wins (the in-flight call notices currentIdx changed and yields). */
   async function loadCurrent() {
-    const photo = photos[currentIdx]!;
+    if (loading) return;
+    loading = true;
     const targetIdx = currentIdx;
-    const prev = currentMesh;
     updateLabel();
-    let SplatMeshCtor: SparkSplatMeshCtor;
+
+    let DropInViewerCtor: DropInViewerCtor;
     try {
-      SplatMeshCtor = await loadSparkSplatMesh();
+      DropInViewerCtor = await loadDropInViewer();
     } catch (err) {
-      console.error('[splat-gallery] failed to load @sparkjsdev/spark', err);
+      console.error('[splat-gallery] failed to load mkkellogg/gaussian-splats-3d', err);
+      loading = false;
       return;
     }
-    if (disposed || currentIdx !== targetIdx) return;
-    const next = new SplatMeshCtor({ url: photo.url });
-    currentMesh = next;
-    splatHolder.add(next);
-    // Free the previous splat once the new one's data is in flight so we
-    // never have two large splat textures resident simultaneously. Spark's
-    // SplatMesh exposes an `initialized` promise that resolves once the
-    // file is fetched + parsed.
-    next.initialized
-      .then(() => { if (prev && prev !== currentMesh) disposeMesh(prev); })
-      .catch((err: unknown) => {
-        console.error('[splat-gallery] failed to load', photo.url, err);
-        if (prev && prev !== currentMesh) disposeMesh(prev);
+    if (disposed) { loading = false; return; }
+
+    // First-call viewer construction. The viewer is a THREE.Group so we
+    // can just add it to our scene-graph anchor.
+    if (!viewer) {
+      viewer = new DropInViewerCtor({
+        // Run mkkellogg's update loop ourselves via the onBeforeRender
+        // path it sets up internally — DropInViewer takes care of this
+        // when added to a scene that's being rendered.
+        sharedMemoryForWorkers: false,   // safer for non-COOP/COEP dev servers
       });
+      splatHolder.add(viewer);
+    }
+
+    // Remove the currently-loaded scene (if any), then add the new one.
+    // mkkellogg's API: indices are sequential, removeSplatScene compacts
+    // the list. After remove we always add at the front (index 0).
+    if (viewerSceneIndex >= 0) {
+      try {
+        await (viewer as unknown as { removeSplatScene(i: number, showUI?: boolean): Promise<void> })
+          .removeSplatScene(viewerSceneIndex, false);
+      } catch (err) {
+        console.warn('[splat-gallery] removeSplatScene failed', err);
+      }
+      viewerSceneIndex = -1;
+      if (disposed || currentIdx !== targetIdx) { loading = false; return; }
+    }
+
+    const photo = photos[targetIdx]!;
+    try {
+      await (viewer as unknown as {
+        addSplatScene(path: string, opts: Record<string, unknown>): Promise<void>;
+      }).addSplatScene(photo.url, {
+        splatAlphaRemovalThreshold,
+        showLoadingUI: false,
+      });
+      viewerSceneIndex = 0;
+    } catch (err) {
+      console.error('[splat-gallery] failed to load', photo.url, err);
+    }
+    loading = false;
+
+    // If the user navigated during load, queue the next load.
+    if (!disposed && currentIdx !== targetIdx) void loadCurrent();
   }
 
   function goTo(index: number) {
     if (disposed) return;
     const wrapped = ((index % photos.length) + photos.length) % photos.length;
-    if (wrapped === currentIdx && currentMesh !== null) return;
+    if (wrapped === currentIdx && viewerSceneIndex >= 0) return;
     currentIdx = wrapped;
-    void loadCurrent();   // fire-and-forget; reentry guarded by currentIdx check
+    void loadCurrent();
     resetAutoAdvance();
   }
 
@@ -188,44 +221,31 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
   }
 
   // Kick off — load first photo + start the auto-advance. Label updates
-  // synchronously inside loadCurrent before the async splat-mesh load
-  // begins, so the user sees the title immediately.
+  // synchronously inside loadCurrent before the async splat load begins,
+  // so the user sees the title immediately even on a cold cache.
   void loadCurrent();
   resetAutoAdvance();
-
-  // Self-driving rotation via onBeforeRender. Three.js calls this on every
-  // frame the object is rendered, so the splat spins even when consumed
-  // through the manifest pipeline (which doesn't drive per-frame ticks).
-  // Attached to splatHolder (not the cell `group`) so the label stays put
-  // while the splat rotates.
-  let lastFrameMs = performance.now();
-  splatHolder.onBeforeRender = () => {
-    const now = performance.now();
-    const dt = (now - lastFrameMs) / 1000;
-    lastFrameMs = now;
-    if (rotateRadPerSec > 0 && dt > 0 && dt < 1) {
-      splatHolder.rotation.y += rotateRadPerSec * dt;
-    }
-  };
 
   return {
     group,
     next, prev, goTo,
     currentIndex: () => currentIdx,
-    // Public tick() is a no-op — rotation is self-driven via onBeforeRender.
-    // Kept on the interface for parity with other LiveCell-shaped modules.
-    tick: (_time: number) => {
-      lastTickTime = _time;   // suppress unused warning
-    },
+    // Public tick() is a no-op — mkkellogg's DropInViewer self-updates
+    // via three's render path. Kept on the interface for parity with
+    // other LiveCell-shaped modules.
+    tick: (_time: number) => {},
     dispose: () => {
       disposed = true;
       if (autoTimer) clearInterval(autoTimer);
       if (bindKeyboard && typeof window !== 'undefined') {
         window.removeEventListener('keydown', onKey);
       }
-      splatHolder.onBeforeRender = () => {};
-      disposeMesh(currentMesh);
-      currentMesh = null;
+      if (viewer) {
+        const v = viewer as unknown as { dispose?: () => void };
+        v.dispose?.();
+        splatHolder.remove(viewer);
+        viewer = null;
+      }
       label.dispose();
     },
   };

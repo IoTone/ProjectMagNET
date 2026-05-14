@@ -119,12 +119,12 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
 
   function tryPlayDeferred() {
     if (!positional || !pendingGesture) return;
-    positional.play();
-    playing = true;
     pendingGesture = false;
-    ledMat.color.setHex(accentColor);
     window.removeEventListener('pointerdown', tryPlayDeferred);
     window.removeEventListener('keydown', tryPlayDeferred);
+    // Now that we have a gesture, retry the play path — this resumes the
+    // AudioContext if needed and starts the source.
+    void play();
   }
 
   if (listener) {
@@ -134,33 +134,49 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
     positional.setDistanceModel('inverse');
     positional.setLoop(true);
     positional.setVolume(gain);
-    // Resume the AudioContext if it's currently suspended (browsers do this
-    // by default until first user gesture). resume() returns a promise; we
-    // tolerate rejection (then setBuffer + play handles the rest).
-    const ctx = listener.context;
-    if (ctx.state === 'suspended') void ctx.resume();
-    positional.setBuffer(makeMusicLoopBuffer(ctx));
+    positional.setBuffer(makeMusicLoopBuffer(listener.context));
     body.add(positional);
   }
 
-  function play(): Promise<void> {
-    if (!positional) return Promise.resolve();
-    try {
-      positional.play();
-      playing = true;
-      ledMat.color.setHex(accentColor);
-      return Promise.resolve();
-    } catch (e) {
-      // Autoplay blocked — wait for any user gesture and retry. Native
-      // PositionalAudio.play() is synchronous; the error surface is the
-      // underlying AudioBufferSourceNode.start() call.
-      pendingGesture = true;
-      if (typeof window !== 'undefined') {
+  /**
+   * Start playing. Web Audio's autoplay policy blocks playback until the
+   * page has received a user gesture; calling `PositionalAudio.play()`
+   * while the context is suspended does not throw (the browser just logs
+   * a console warning), so we have to check `ctx.state` ourselves rather
+   * than relying on try/catch.
+   *
+   * If the context is suspended we register one-shot pointer/key listeners
+   * — the first input gesture invokes `tryPlayDeferred`, which retries
+   * play(). At that point `ctx.resume()` will succeed because we're in
+   * a gesture-handler context.
+   */
+  async function play(): Promise<void> {
+    if (!positional || !listener) return;
+    const ctx = listener.context;
+
+    // Try to bring the context out of suspended state. This only succeeds
+    // when we're running inside a user-gesture event handler — outside one
+    // the promise resolves but the state stays 'suspended'.
+    if (ctx.state === 'suspended') {
+      try { await ctx.resume(); } catch { /* defer below */ }
+    }
+
+    if (ctx.state !== 'running') {
+      // Still suspended — register the one-shot gesture listener so the
+      // next click/keypress resumes us. Idempotent across repeat play()
+      // attempts because we guard with `pendingGesture`.
+      if (!pendingGesture && typeof window !== 'undefined') {
+        pendingGesture = true;
         window.addEventListener('pointerdown', tryPlayDeferred, { once: true });
         window.addEventListener('keydown', tryPlayDeferred, { once: true });
       }
-      return Promise.reject(e);
+      return;
     }
+
+    if (playing) return;
+    positional.play();
+    playing = true;
+    ledMat.color.setHex(accentColor);
   }
 
   function pause() {

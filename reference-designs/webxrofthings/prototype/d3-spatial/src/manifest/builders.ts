@@ -453,10 +453,11 @@ export function registerAllBuilders() {
     }
     const cell = buildLiveSplatGalleryCell({
       photos,
-      autoAdvanceMs:   (cfg.autoAdvanceMs   as number) ?? 15_000,
-      rotateRadPerSec: (cfg.rotateRadPerSec as number) ?? 0.15,
-      splatY:          (cfg.splatY          as number) ?? 0,
-      bindKeyboard:    (cfg.bindKeyboard    as boolean) ?? true,
+      autoAdvanceMs: (cfg.autoAdvanceMs as number) ?? 15_000,
+      splatY:        (cfg.splatY        as number) ?? 0,
+      bindKeyboard:  (cfg.bindKeyboard  as boolean) ?? true,
+      splatAlphaRemovalThreshold:
+        (cfg.splatAlphaRemovalThreshold as number) ?? 5,
     });
     return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
   });

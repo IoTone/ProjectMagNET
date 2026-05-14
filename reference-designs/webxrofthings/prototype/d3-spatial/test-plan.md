@@ -309,7 +309,7 @@ The mock-join-server resolves `DEMO01–04` to per-use-case manifests. Quick che
 | DEMO01 | UC1 vitals         | `uc1-vitals.json`       | Vitals device + 5 marks (HR/BR/phases/targets/body-temp) — body-temp is simulated; rest needs real device |
 | DEMO02 | UC2 home auto.     | `uc2-room.json`         | Camera + room temp + AQI/baro/pollen sensors + lighting/thermostat/speaker actuators (state mutable via curl; in-XR controls deferred to P4c) |
 | DEMO03 | UC3 poster session | `uc3-poster.json`       | Tree/treemap/sankey marks — pending P2 curated content             |
-| DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Airplane attitude (P5a IMU sim) + cabin boombox (P5b procedural-music PositionalAudio) + cabin display (P5c HLS video, Big Buck Bunny test stream from Mux) + spatial-photo gallery (P5d, 3× SOG splats from `public/spatial/`, ArrowL/R navigation, 15-s auto-advance). |
+| DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Airplane attitude (P5a IMU sim) + cabin boombox (P5b procedural-music PositionalAudio) + cabin display (P5c HLS video, Big Buck Bunny test stream from Mux) + spatial-photo gallery (P5d, 3× Gaussian-splat photos under `public/spatial/*.compressed.ply` — converted from `.sog` via `npm run convert:spatial`; ArrowL/R navigation, 15-s auto-advance). |
 
 Run `npm run server` (the join server) in a second terminal, then `npm run dev`. From the join panel, type each code in turn and verify:
 - Code accepted (green checkmark, "Connected to demo-XXX")
@@ -319,17 +319,24 @@ Run `npm run server` (the join server) in a second terminal, then `npm run dev`.
 
 ### 6.3.1.1 UC4 splat-gallery asset setup (one-time)
 
-The three .sog Gaussian-splat photo files are not bundled in git (large binaries, ~30 MB total). Copy them once into `public/spatial/` before DEMO04 will show photos:
+UC4's spatial-photo gallery uses Gaussian splats. `ml-sharp` produces them as `.sog` (a compressed format from PlayCanvas/SuperSplat), but the runtime loader (`@mkkellogg/gaussian-splats-3d`) doesn't read `.sog` — it wants compressed PLY. Conversion is offline.
 
 ```bash
+# 1. Copy the .sog source files into public/spatial/  (gitignored, ~30 MB)
 mkdir -p public/spatial
 cp ../../../ml-sharp/samples/_DSC1624.sog \
    ../../../ml-sharp/samples/_DSC8994.sog \
    ../../../ml-sharp/samples/medaka_20260112_221836000_iOS.sog \
    public/spatial/
+
+# 2. Convert each .sog → .compressed.ply via @playcanvas/splat-transform
+npm run convert:spatial
+# Idempotent — re-runs only when a .sog is newer than its .compressed.ply.
 ```
 
-Without these files, DEMO04 still loads — the gallery cell just logs a `failed to load /spatial/*.sog` in the console for each missing photo and renders blank between the title and the auto-advance counter.
+After step 2 you'll have three `<name>.compressed.ply` files alongside the `.sog` sources (~18 MB each). The manifest points at the `.ply` URLs; the `.sog` files can be deleted afterwards if you want to save disk, but keeping them lets `convert:spatial` skip the slow path on re-runs.
+
+Without these files, DEMO04 still loads — the gallery cell logs a `failed to load /spatial/*.ply` and renders blank between the title and the auto-advance counter; the rest of UC4 keeps working.
 
 ### 6.3.2 UC2 actuator control via curl (~5 minutes, hardware-free)
 

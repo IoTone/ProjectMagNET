@@ -176,13 +176,13 @@
       "data": { "source": "inline" },
       "config": {
         "photos": [
-          { "url": "/spatial/medaka_20260112_221836000_iOS.sog", "title": "Medaka" },
-          { "url": "/spatial/_DSC1624.sog",                     "title": "DSC 1624" },
-          { "url": "/spatial/_DSC8994.sog",                     "title": "DSC 8994" }
+          { "url": "/spatial/medaka_20260112_221836000_iOS.compressed.ply", "title": "Medaka" },
+          { "url": "/spatial/_DSC1624.compressed.ply",                     "title": "DSC 1624" },
+          { "url": "/spatial/_DSC8994.compressed.ply",                     "title": "DSC 8994" }
         ],
         "autoAdvanceMs": 15000,
-        "rotateRadPerSec": 0.15,
-        "splatY": 0
+        "splatY": 0,
+        "splatAlphaRemovalThreshold": 5
       },
       "deviceRef": "cabin-spatial-gallery-001",
       "hoverable": true

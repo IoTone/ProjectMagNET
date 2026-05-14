@@ -10,21 +10,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as THREE from 'three';
 
-// Mock @sparkjsdev/spark BEFORE the cell imports it. SplatMesh extends a
-// SplatGenerator (Object3D-derived) in real life; for tests a vanilla Group
-// with a resolved `initialized` promise is enough.
-vi.mock('@sparkjsdev/spark', () => {
-  class StubSplatMesh extends THREE.Group {
-    initialized: Promise<this>;
+// Mock @mkkellogg/gaussian-splats-3d BEFORE the cell imports it.
+// DropInViewer is a THREE.Group subclass in real life; for tests a stub
+// with the addSplatScene / removeSplatScene API shape is enough.
+vi.mock('@mkkellogg/gaussian-splats-3d', () => {
+  class StubDropInViewer extends THREE.Group {
+    sceneCount = 0;
+    loadedUrls: string[] = [];
     disposed = false;
-    constructor(_opts: { url: string }) {
-      super();
-      this.name = `stub-splat:${_opts.url}`;
-      this.initialized = Promise.resolve(this);
+    constructor(_opts: Record<string, unknown> = {}) { super(); }
+    addSplatScene(path: string, _opts: Record<string, unknown> = {}): Promise<void> {
+      this.loadedUrls.push(path);
+      this.sceneCount++;
+      return Promise.resolve();
+    }
+    removeSplatScene(_index: number, _showUI?: boolean): Promise<void> {
+      this.sceneCount = Math.max(0, this.sceneCount - 1);
+      return Promise.resolve();
     }
     dispose() { this.disposed = true; }
   }
-  return { SplatMesh: StubSplatMesh };
+  return { DropInViewer: StubDropInViewer };
 });
 
 // Mock troika-three-text — it expects browser `self`/`Worker` globals that
