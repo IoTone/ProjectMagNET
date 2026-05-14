@@ -309,13 +309,27 @@ The mock-join-server resolves `DEMO01–04` to per-use-case manifests. Quick che
 | DEMO01 | UC1 vitals         | `uc1-vitals.json`       | Vitals device + 5 marks (HR/BR/phases/targets/body-temp) — body-temp is simulated; rest needs real device |
 | DEMO02 | UC2 home auto.     | `uc2-room.json`         | Camera + room temp + AQI/baro/pollen sensors + lighting/thermostat/speaker actuators (state mutable via curl; in-XR controls deferred to P4c) |
 | DEMO03 | UC3 poster session | `uc3-poster.json`       | Tree/treemap/sankey marks — pending P2 curated content             |
-| DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Airplane attitude (IMU sim, P5a) — wireframe airplane orients itself to a deterministic ±0.4 rad roll, ±0.15 rad pitch, continuous yaw drift. P5b/c/d add music, HLS video, spatial photos. |
+| DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Airplane attitude (P5a IMU sim) + cabin boombox (P5b procedural-music PositionalAudio) + cabin display (P5c HLS video, Big Buck Bunny test stream from Mux) + spatial-photo gallery (P5d, 3× SOG splats from `public/spatial/`, ArrowL/R navigation, 15-s auto-advance). |
 
 Run `npm run server` (the join server) in a second terminal, then `npm run dev`. From the join panel, type each code in turn and verify:
 - Code accepted (green checkmark, "Connected to demo-XXX")
 - Manifest renders something visible (even if minimal for UC2/UC4)
 - Leave-dataspace returns to the join panel cleanly
 - Rotating dev code (printed in the server console) still resolves to the default `room-dataspace.json` for backward compatibility
+
+### 6.3.1.1 UC4 splat-gallery asset setup (one-time)
+
+The three .sog Gaussian-splat photo files are not bundled in git (large binaries, ~30 MB total). Copy them once into `public/spatial/` before DEMO04 will show photos:
+
+```bash
+mkdir -p public/spatial
+cp ../../../ml-sharp/samples/_DSC1624.sog \
+   ../../../ml-sharp/samples/_DSC8994.sog \
+   ../../../ml-sharp/samples/medaka_20260112_221836000_iOS.sog \
+   public/spatial/
+```
+
+Without these files, DEMO04 still loads — the gallery cell just logs a `failed to load /spatial/*.sog` in the console for each missing photo and renders blank between the title and the auto-advance counter.
 
 ### 6.3.2 UC2 actuator control via curl (~5 minutes, hardware-free)
 

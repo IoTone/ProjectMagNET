@@ -25,6 +25,48 @@
       "udm_services_link": ["imu-snapshot"],
       "udm_tags":         ["vehicle", "simulated"],
       "udm_spatial_anchor_x": { "x": 0.0, "y": 1.2, "z": -0.6 }
+    },
+    {
+      "udm_key":   "cabin-boombox-001",
+      "udm_uuid":  "urn:device:spatial-audio:boombox-001",
+      "_comment":  "Procedural music boombox. P5b stub — plays an 8-second I-V-vi-IV loop generated in code (no audio asset to ship). Spatialised via THREE.PositionalAudio on the camera's AudioListener.",
+      "udm_model_name":   "Cabin boombox (procedural)",
+      "udm_vendor":       "MagNET (sim)",
+      "udm_mktg_name":    "In-cabin music player",
+      "udm_type":         "actuator",
+      "udm_class":        ["actuator", "audio", "spatial"],
+      "udm_capabilities": ["procedural-music", "positional-audio", "loop"],
+      "udm_services_link": [],
+      "udm_tags":         ["vehicle", "audio", "simulated"],
+      "udm_spatial_anchor_x": { "x": -0.45, "y": 0.95, "z": -0.4 }
+    },
+    {
+      "udm_key":   "cabin-display-001",
+      "udm_uuid":  "urn:device:hls-display:cabin-001",
+      "_comment":  "In-cabin HLS streaming display. P5c stub: plays the Mux test stream (Big Buck Bunny). Treat the stream URL as an external resource — replace with a real cabin-IFE backend later by editing the manifest's serviceRef URL.",
+      "udm_model_name":   "Cabin Display (HLS)",
+      "udm_vendor":       "MagNET (sim)",
+      "udm_mktg_name":    "Cabin Display",
+      "udm_type":         "display",
+      "udm_class":        ["display", "video", "streaming"],
+      "udm_capabilities": ["hls", "h264", "multi-bitrate"],
+      "udm_services_link": ["cabin-stream"],
+      "udm_tags":         ["vehicle", "video", "external-url"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.4, "z": -1.2 }
+    },
+    {
+      "udm_key":   "cabin-spatial-gallery-001",
+      "udm_uuid":  "urn:device:spatial-photo-gallery:cabin-001",
+      "_comment":  "Spatial-photo gallery: a Gaussian-splat viewer that cycles through three .sog scenes (sourced from ../../ml-sharp/samples and copied into public/spatial/). Treat as a 'frame' device: the manifest configures which photos it cycles through.",
+      "udm_model_name":   "Spatial Photo Frame (3D Gaussian)",
+      "udm_vendor":       "MagNET (sim)",
+      "udm_mktg_name":    "Cabin Spatial Gallery",
+      "udm_type":         "display",
+      "udm_class":        ["display", "gaussian-splat", "spatial-photo"],
+      "udm_capabilities": ["sog-format", "ply-format", "auto-advance", "manual-navigation"],
+      "udm_services_link": [],
+      "udm_tags":         ["vehicle", "photo", "spatial"],
+      "udm_spatial_anchor_x": { "x": 0.7, "y": 1.2, "z": -0.8 }
     }
   ],
 
@@ -48,6 +90,24 @@
           "usm_characteristic_constraints": { "unit": "m/s^2" } }
       ],
       "usm_tags": ["live", "motion", "simulated"]
+    },
+    {
+      "usm_key": "cabin-stream",
+      "usm_uuid": "urn:service:hls-stream:cabin-001",
+      "usm_service_name": "Cabin display HLS stream",
+      "usm_type": "video",
+      "usm_class": ["video", "hls", "external"],
+      "usm_service_endpoint": {
+        "GET": {
+          "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+          "content-type": "application/vnd.apple.mpegurl"
+        }
+      },
+      "usm_capabilities": { "resolutions": ["960x540", "1280x720"], "framerate_hz": [24] },
+      "characteristics": [
+        { "usm_characteristic_id": "playlist", "usm_characteristic_format": "m3u8" }
+      ],
+      "usm_tags": ["live", "external-url", "demo-stream"]
     }
   ],
 
@@ -70,6 +130,61 @@
       },
       "deviceRef": "airplane-imu-001",
       "serviceRef": "imu-snapshot",
+      "hoverable": true
+    },
+    {
+      "id": "cabin-boombox",
+      "type": "spatial-audio",
+      "title": "Cabin boombox",
+      "subtitle": "procedural music · spatialised",
+      "data": { "source": "inline" },
+      "config": {
+        "size": 0.08,
+        "refDistance": 0.6,
+        "gain": 0.6,
+        "autoplay": true
+      },
+      "deviceRef": "cabin-boombox-001",
+      "hoverable": true
+    },
+    {
+      "id": "cabin-display",
+      "type": "video",
+      "title": "Cabin display",
+      "subtitle": "HLS stream · 16:9",
+      "data": {
+        "source": "url",
+        "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+        "shape": "video"
+      },
+      "config": {
+        "type": "hls",
+        "width": 0.6,
+        "aspectRatio": 1.7777,
+        "autoplay": true,
+        "muted": true
+      },
+      "deviceRef": "cabin-display-001",
+      "serviceRef": "cabin-stream",
+      "hoverable": true
+    },
+    {
+      "id": "cabin-spatial-gallery",
+      "type": "splat-gallery",
+      "title": "Spatial photo gallery",
+      "subtitle": "3D Gaussian splats · ArrowL / ArrowR to navigate",
+      "data": { "source": "inline" },
+      "config": {
+        "photos": [
+          { "url": "/spatial/medaka_20260112_221836000_iOS.sog", "title": "Medaka" },
+          { "url": "/spatial/_DSC1624.sog",                     "title": "DSC 1624" },
+          { "url": "/spatial/_DSC8994.sog",                     "title": "DSC 8994" }
+        ],
+        "autoAdvanceMs": 15000,
+        "rotateRadPerSec": 0.15,
+        "splatY": 0
+      },
+      "deviceRef": "cabin-spatial-gallery-001",
       "hoverable": true
     }
   ]

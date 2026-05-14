@@ -194,14 +194,14 @@ export type MarkType =
   | 'tree' | 'treemap' | 'sunburst' | 'pack'
   | 'force' | 'ridgeline' | 'sankey' | 'streamgraph'
   | 'parallel' | 'tangled-tree' | 'edge-bundle' | 'hexbin'
-  | 'video' | 'imu';
+  | 'video' | 'imu' | 'spatial-audio' | 'splat-gallery';
 
 export const MARK_TYPES: readonly MarkType[] = [
   'line', 'bar', 'scatter', 'arc',
   'tree', 'treemap', 'sunburst', 'pack',
   'force', 'ridgeline', 'sankey', 'streamgraph',
   'parallel', 'tangled-tree', 'edge-bundle', 'hexbin',
-  'video', 'imu',
+  'video', 'imu', 'spatial-audio', 'splat-gallery',
 ];
 
 export const SCALE_TAGS = ['personal', 'room', 'hall', 'net', 'vehicle'] as const;

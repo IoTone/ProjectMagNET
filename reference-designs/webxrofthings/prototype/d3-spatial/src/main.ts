@@ -959,6 +959,10 @@ function summarizeBrush(id: string, count: number): { title: string; subtitle: s
   scene,
   renderer,
   uiAnchor,
+  // Shared AudioListener attached to the camera. Manifest-built cells that
+  // need to spatialise audio (UC4 boombox, future ambient sources) consume
+  // this rather than allocate a second listener per source.
+  audioListener: audio.listener,
   marks: demoMarks.map(m => m.id),
   setCameraPose(pos: [number, number, number], look: [number, number, number]) {
     camera.position.set(pos[0], pos[1], pos[2]);

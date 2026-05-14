@@ -19,6 +19,8 @@ import { buildSankey } from '../viz/sankey';
 import { buildStreamgraph } from '../viz/streamgraph';
 import { buildVideoPanel } from '../viz/videoPanel';
 import { buildLiveImuCell } from '../demo/liveImuCell';
+import { buildLiveSpatialAudioCell } from '../demo/liveSpatialAudioCell';
+import { buildLiveSplatGalleryCell, type SplatPhoto } from '../demo/liveSplatGalleryCell';
 import { buildLineMark } from '../chart/marks/line';
 import { buildBarMark } from '../chart/marks/bar';
 import { buildScatterMark } from '../chart/marks/scatter';
@@ -402,6 +404,59 @@ export function registerAllBuilders() {
       size:   (cfg.size   as number) ?? 0.10,
       color:  (cfg.color  as number) ?? TEXT.primary,
       smooth: (cfg.smooth as boolean) ?? true,
+    });
+    return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
+  });
+
+  // ─── spatial-audio mark — UC4 boombox ────────────────────────────────
+  //
+  // Spec shape (data is inline-only since the audio is procedural):
+  //   { id, type: 'spatial-audio', title, data: { source: 'inline' },
+  //     config: { size, bodyColor, accentColor, refDistance, gain, autoplay } }
+  //
+  // The cell finds the scene's AudioListener via `window.__demo.audioListener`
+  // (main.ts exposes it there). If missing — headless tests, early-construction
+  // ordering — the visual mesh still renders but no audio plays.
+  registerMarkBuilder('spatial-audio', (spec) => {
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const cell = buildLiveSpatialAudioCell({
+      size:        (cfg.size        as number)  ?? 0.08,
+      bodyColor:   (cfg.bodyColor   as number)  ?? TEXT.muted,
+      accentColor: (cfg.accentColor as number)  ?? TEXT.primary,
+      refDistance: (cfg.refDistance as number)  ?? 0.6,
+      gain:        (cfg.gain        as number)  ?? 0.7,
+      autoplay:    (cfg.autoplay    as boolean) ?? true,
+    });
+    return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
+  });
+
+  // ─── splat-gallery — UC4 spatial-photo viewer ───────────────────────
+  //
+  // Spec shape (inline data; photos list lives under config):
+  //   { id, type: 'splat-gallery', title,
+  //     data: { source: 'inline' },
+  //     config: {
+  //       photos: [{url, title}, ...],   // 1+ entries, paths served from public/
+  //       autoAdvanceMs?: number,        // 0 disables; default 15000
+  //       rotateRadPerSec?: number       // 0 disables; default 0.15
+  //     }
+  //   }
+  //
+  // Returns null (skipping the mark) if the photo list is empty or missing
+  // so a manifest with no asset files doesn't crash the dataspace load.
+  registerMarkBuilder('splat-gallery', (spec) => {
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const photos = (cfg.photos as SplatPhoto[] | undefined) ?? [];
+    if (!Array.isArray(photos) || photos.length === 0) {
+      console.warn(`[splat-gallery] '${spec.id}' has no photos in config; skipping`);
+      return null;
+    }
+    const cell = buildLiveSplatGalleryCell({
+      photos,
+      autoAdvanceMs:   (cfg.autoAdvanceMs   as number) ?? 15_000,
+      rotateRadPerSec: (cfg.rotateRadPerSec as number) ?? 0.15,
+      splatY:          (cfg.splatY          as number) ?? 0,
+      bindKeyboard:    (cfg.bindKeyboard    as boolean) ?? true,
     });
     return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
   });

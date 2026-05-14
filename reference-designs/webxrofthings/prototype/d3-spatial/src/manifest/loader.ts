@@ -88,8 +88,21 @@ export async function loadManifest(manifest: DataspaceManifest, token?: string):
       }
 
       urlSpec = { url, shape: urlData.shape, refreshInterval: urlData.refreshInterval ?? 0 };
-      const ok = await fetchInto(spec, url, urlData.shape);
-      if (!ok) continue;
+
+      // Builders that own their own URL fetch (binary streams, opaque
+      // formats — hls.js for video, spark for splat-gallery) need the URL
+      // passed through `spec.data.url` unchanged, NOT pre-fetched and
+      // parsed as JSON. Skipping the pre-fetch here keeps those builders
+      // wired to the manifest's URL while still recording urlSpec so the
+      // refresh-interval scheduler below remains correct for any future
+      // builder that wants it.
+      const SELF_FETCHING_SHAPES = new Set(['video', 'imu']);
+      if (SELF_FETCHING_SHAPES.has(urlData.shape)) {
+        // Skip the pre-fetch — the builder will consume the URL directly.
+      } else {
+        const ok = await fetchInto(spec, url, urlData.shape);
+        if (!ok) continue;
+      }
     }
 
     const builder = builders.get(spec.type);

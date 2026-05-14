@@ -71,6 +71,18 @@ const vitalsAgent = new http.Agent({
 });
 
 export default defineConfig({
+  // Skip dep pre-bundling for @sparkjsdev/spark. It ships its WASM payload
+  // as an inline base64 `data:` URL inside the JS bundle; esbuild (Vite's
+  // dep optimizer) rewrites the URL into a server-served path that becomes
+  // a multi-KB filename, which the dev server then rejects with
+  // 431 Request Header Fields Too Large. Letting Vite serve spark.module.js
+  // as-is keeps the data URL intact and lets the browser load the WASM
+  // directly. Trade-off: cold start of UC4 is a beat slower because the
+  // browser parses spark on demand, but that's already the case (the cell
+  // dynamic-imports spark on first photo).
+  optimizeDeps: {
+    exclude: ['@sparkjsdev/spark'],
+  },
   server: {
     host: true,
     https: false,

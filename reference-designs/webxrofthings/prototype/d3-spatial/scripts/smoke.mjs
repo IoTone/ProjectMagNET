@@ -463,6 +463,14 @@ async function mockDeviceEndpoints(page) {
   );
   await page.route(/\/camera\//, route =>
     route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL_PNG }));
+
+  // SOG / spatial-photo assets — public/spatial/*.sog is gitignored, so smoke
+  // can't rely on the files being present. Return 404 (not 200) so spark's
+  // SplatMesh loader logs a fetch failure but the harness's console.error
+  // catch is suppressed for these specific URLs — see the page.on('console')
+  // filter below for the matching exception.
+  await page.route(/\/spatial\//, route =>
+    route.fulfill({ status: 404, contentType: 'text/plain', body: 'smoke: spatial asset stubbed' }));
 }
 
 const errors = [];
