@@ -159,14 +159,14 @@
       "type": "video",
       "title": "Cabin display",
       "subtitle": "in-flight feature · 16:9",
-      "_comment_video": "Switched from the Mux HLS .m3u8 to a progressive .mp4. Spectacles' browser decodes HLS audio but won't upload an MSE-fed <video> to a WebGL texture (black panel + audio only). A direct .mp4 uses the native decoder and textures on every platform. Big Buck Bunny MP4 from Google's public gtv-videos bucket — stable, CORS-open, H.264.",
+      "_comment_video": "Back to HLS. The progressive-MP4 detour was a wrong turn: hls.js DOES work on Spectacles (240/480/720 renditions verified against the hls.js demo). The real problem was rendition height — the decoder chokes on 1080p+. videoPanel's initHLS now caps the ABR ladder at 720p (HLS_MAX_HEIGHT), which keeps Spectacles inside what it can decode while desktop/Quest still look sharp. The Mux x36xhzz stream is the hls.js demo's own default multi-bitrate Big Buck Bunny ladder.",
       "data": {
         "source": "url",
-        "url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+        "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
         "shape": "video"
       },
       "config": {
-        "type": "mp4",
+        "type": "hls",
         "width": 0.6,
         "aspectRatio": 1.7777,
         "autoplay": false,
