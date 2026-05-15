@@ -339,7 +339,23 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
     // `Uint8Array<ArrayBufferLike>` that the bare `new Uint8Array(n)`
     // returns (DOM lib disallows SharedArrayBuffer in this slot).
     freqData = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
-    positional.setFilter(analyser);
+
+    // Tame the "tinny/metallic" character (reported on Spectacles, whose
+    // small speaker exaggerates upper harmonics). The procedural synth
+    // uses tanh saturation + broadband noise bursts (hats/snares); both
+    // dump energy into the harsh 4–12 kHz band that reads as metallic.
+    // A gentle 12 dB/oct lowpass at 3.2 kHz rolls that off while leaving
+    // the pads/chords/kick (all well below 3 kHz) musical and warm.
+    //
+    // three.js Audio.setFilters chains source → filters[0] → filters[1]
+    // → output, so [lowpass, analyser] means the analyser still sees the
+    // signal (kick energy is sub-200 Hz, unaffected by the lowpass) and
+    // beat detection keeps working.
+    const lowpass = listener.context.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = 3200;
+    lowpass.Q.value = 0.5;            // gentle, no resonant peak
+    positional.setFilters([lowpass, analyser]);
   }
 
   async function play(): Promise<void> {

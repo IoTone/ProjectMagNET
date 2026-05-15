@@ -4,7 +4,12 @@ import { TEXT, EDGE } from '../ui/palette';
 
 export interface VideoPanelOptions {
   url: string;
-  type?: 'hls' | 'mjpeg' | 'frames';
+  // 'mp4' = a plain progressive file played by the browser's native
+  // <video> decoder (no MSE). Required for Snap Spectacles, whose
+  // browser decodes HLS *audio* but won't upload an MSE-fed <video> to
+  // a WebGL texture (black panel, audio only). A direct .mp4 textures
+  // fine there. 'hls' stays the default for desktop/Quest.
+  type?: 'hls' | 'mjpeg' | 'frames' | 'mp4';
   width?: number;
   aspectRatio?: number;
   title?: string;
@@ -73,6 +78,19 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
   // Initialize based on type
   if (type === 'hls') {
     initHLS(video, url).then(() => { if (autoplay) doPlay(); });
+  } else if (type === 'mp4') {
+    // Native progressive playback — no hls.js, no MSE. The browser's
+    // built-in decoder feeds the <video>, which THREE.VideoTexture can
+    // upload to GL on every platform including Spectacles.
+    video.src = url;
+    video.load();
+    video.addEventListener('loadeddata', () => {
+      updateStatus('▶ playing', TEXT.accent);
+    }, { once: true });
+    video.addEventListener('error', () => {
+      updateStatus('video error', TEXT.error);
+    }, { once: true });
+    if (autoplay) doPlay();
   } else if (type === 'mjpeg' || type === 'frames') {
     mjpegImg = document.createElement('img');
     mjpegImg.crossOrigin = 'anonymous';

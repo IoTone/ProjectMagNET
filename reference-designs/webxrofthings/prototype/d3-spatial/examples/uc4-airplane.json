@@ -158,14 +158,15 @@
       "id": "cabin-display",
       "type": "video",
       "title": "Cabin display",
-      "subtitle": "HLS stream · 16:9",
+      "subtitle": "in-flight feature · 16:9",
+      "_comment_video": "Switched from the Mux HLS .m3u8 to a progressive .mp4. Spectacles' browser decodes HLS audio but won't upload an MSE-fed <video> to a WebGL texture (black panel + audio only). A direct .mp4 uses the native decoder and textures on every platform. Big Buck Bunny MP4 from Google's public gtv-videos bucket — stable, CORS-open, H.264.",
       "data": {
         "source": "url",
-        "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+        "url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
         "shape": "video"
       },
       "config": {
-        "type": "hls",
+        "type": "mp4",
         "width": 0.6,
         "aspectRatio": 1.7777,
         "autoplay": false,
@@ -186,18 +187,21 @@
         "photos": [
           {
             "url": "/spatial/_DSC1624.compressed.ply",
+            "imageUrl": "/spatial/_DSC1624.webp",
             "title": "DSC 1624",
             "location": "Kyoto, Japan",
             "description": "Walking through a moss-covered temple garden in late autumn. The stone path winds between cedar trunks centuries older than the shrine itself, with a small koi pond just out of frame to the right. Captured with a hand-held photogrammetry sweep at golden hour."
           },
           {
             "url": "/spatial/_DSC8994.compressed.ply",
+            "imageUrl": "/spatial/_DSC8994.webp",
             "title": "DSC 8994",
             "location": "Banff National Park, Canada",
             "description": "A glacial-fed lake at first light, the surface a perfect mirror of the limestone ridge above. A pair of canoes are pulled up on the gravel shore. The mountain reflection makes the splat feel taller than it is — the algorithm captured both above and below the waterline."
           },
           {
             "url": "/spatial/_DSC2913.compressed.ply",
+            "imageUrl": "/spatial/_DSC2913.jpg",
             "title": "DSC 2913",
             "location": "Marrakech, Morocco",
             "description": "Late-afternoon souk light filters through woven palm-frond awnings onto stacks of spice cones — saffron yellow, paprika red, dried-rose pink. The narrow passage and overhead awning make the splat reconstruction read almost like a tunnel, with the spice colours saturating warmly along both walls."

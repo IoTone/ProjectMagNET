@@ -31,6 +31,25 @@
 import * as THREE from 'three';
 import { Text } from 'troika-three-text';
 import { TEXT } from '../ui/palette';
+import { isQuest } from '../platform';
+
+/**
+ * Spectacles-class detection. Spectacles' browser UA masquerades (it
+ * can't be sniffed directly — see platform.ts), and it can't render
+ * mkkellogg Gaussian splats. The fail-safe signal is "an XR session is
+ * live AND it isn't Quest" → treat as Spectacles-class and use the
+ * flat-image carousel instead of the splat path. Desktop / smoke
+ * (no XR session) and Quest are unaffected and keep the splats. Read
+ * lazily at activation time (the user is in XR by the time they open
+ * the Photos mode) via the `window.__demo.renderer` bridge main.ts
+ * exposes.
+ */
+function isSpectaclesClass(): boolean {
+  if (typeof window === 'undefined') return false;
+  const r = (window as unknown as { __demo?: { renderer?: { xr?: { isPresenting?: boolean } } } })
+    .__demo?.renderer;
+  return !!r?.xr?.isPresenting && !isQuest();
+}
 
 // `@mkkellogg/gaussian-splats-3d` is lazy-loaded the first time a splat
 // is needed. Reasons:
@@ -55,6 +74,13 @@ type DropInViewer = InstanceType<DropInViewerCtor>;
 export interface SplatPhoto {
   /** Compressed-PLY URL the loader will fetch. Typically `/spatial/foo.compressed.ply`. */
   url: string;
+  /**
+   * Flat 2D image (jpg/webp) used by the Spectacles photo-carousel
+   * fallback. Spectacles' browser can't render mkkellogg Gaussian
+   * splats, so on that device the gallery becomes a curved ring of
+   * these images instead. Quest/desktop ignore this and use `url`.
+   */
+  imageUrl?: string;
   /** Display label shown under the splat. */
   title: string;
   /** Optional location-style subtitle ("Kyoto, Japan"). Rendered in muted
@@ -212,6 +238,113 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
     descriptionLabel.sync();
   }
 
+  // ─── Spectacles photo-carousel fallback ────────────────────────────
+  //
+  // On Spectacles-class devices the mkkellogg splat path renders nothing
+  // (no float-texture / sort support). Instead we build a curved ring of
+  // flat photo panels around the cell — the technique from the
+  // carousel-threejs POC: per-photo `CylinderGeometry` arc segments at a
+  // fixed radius, each textured with that photo. Pure unlit textured
+  // geometry → ~one draw call per photo, no MSE, no splat workers — it
+  // renders fine on Spectacles. Quest/desktop never enter this path
+  // (isSpectaclesClass() is false) and keep the real 3D splats.
+  type CarouselHandle = {
+    group: THREE.Group;
+    focus(index: number): void;
+    dispose(): void;
+  };
+  let carousel: CarouselHandle | null = null;
+  /** Decided once on first activation: 'splat' (Quest/desktop) or
+   *  'carousel' (Spectacles-class). Null until then. */
+  let renderMode: 'splat' | 'carousel' | null = null;
+
+  function buildCarousel(): CarouselHandle {
+    const cg = new THREE.Group();
+    cg.name = 'photo-carousel';
+    const N = photos.length;
+    const RADIUS = 1.35;                 // ring radius (m) — wraps the user
+    const PANEL_H = 1.0;                  // panel height (m)
+    const step = (Math.PI * 2) / N;      // angular spacing per photo
+    const arc = step * 0.86;             // leave a small gap between panels
+
+    const loader = new THREE.TextureLoader();
+    const geos: THREE.BufferGeometry[] = [];
+    const mats: THREE.Material[] = [];
+    const texes: THREE.Texture[] = [];
+
+    photos.forEach((p, k) => {
+      // Centre photo k at angle k*step. CylinderGeometry sweeps thetaLength
+      // from thetaStart around +Y; offset thetaStart so the arc straddles
+      // the photo's centre angle.
+      const centre = k * step;
+      const geo = new THREE.CylinderGeometry(
+        RADIUS, RADIUS, PANEL_H, 24, 1, true,
+        centre - arc / 2, arc,
+      );
+      const mat = new THREE.MeshBasicMaterial({
+        side: THREE.DoubleSide,
+        transparent: true,
+        color: 0x223040,                 // visible tint until the texture lands
+      });
+      const src = p.imageUrl ?? p.url;   // imageUrl required for this path
+      loader.load(
+        src,
+        (tex) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          mat.map = tex;
+          mat.color.set(0xffffff);
+          mat.needsUpdate = true;
+        },
+        undefined,
+        () => console.warn(`[splat-gallery #${cellId}] carousel image failed: ${src}`),
+      );
+      const mesh = new THREE.Mesh(geo, mat);
+      if (k === 0) mesh.name = 'carousel-spinner';   // hosts the ease hook
+      cg.add(mesh);
+      geos.push(geo); mats.push(mat); texes.push();
+    });
+
+    group.add(cg);
+
+    // Smooth-spin the ring so the focused photo faces the user (the
+    // cell's -Z, toward whoever it's placed in front of). Self-driven
+    // via the first panel's onBeforeRender so it works in the manifest
+    // pipeline (which has no per-frame tick) — same pattern the IMU /
+    // boombox / globe cells use.
+    let targetRotY = Math.PI;            // photo 0 facing the user at start
+    cg.rotation.y = Math.PI;
+    const spinner = cg.children[0] as THREE.Mesh;
+    spinner.onBeforeRender = () => {
+      cg.rotation.y += (targetRotY - cg.rotation.y) * 0.12;
+    };
+
+    return {
+      group: cg,
+      focus(index: number) {
+        // Bring photo `index` to the front. Rotating the ring by
+        // -index*step puts photo index at angle 0; +π faces it toward
+        // the user side (-Z). Take the shortest angular path.
+        const desired = -index * step + Math.PI;
+        const twoPi = Math.PI * 2;
+        let delta = (desired - targetRotY) % twoPi;
+        if (delta > Math.PI) delta -= twoPi;
+        if (delta < -Math.PI) delta += twoPi;
+        targetRotY += delta;
+      },
+      dispose() {
+        spinner.onBeforeRender = () => {};
+        for (const g of geos) g.dispose();
+        for (const m of mats) {
+          const mm = m as THREE.MeshBasicMaterial;
+          mm.map?.dispose();
+          mm.dispose();
+        }
+        void texes;
+        group.remove(cg);
+      },
+    };
+  }
+
   /** Replace the visible splat with the photo at currentIdx. Re-entrant-safe:
    *  if another navigation request arrives while one is in flight, the later
    *  call wins (the in-flight call notices currentIdx changed and yields). */
@@ -334,6 +467,16 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
   function goTo(index: number) {
     if (disposed) return;
     const wrapped = ((index % photos.length) + photos.length) % photos.length;
+
+    if (renderMode === 'carousel') {
+      if (wrapped === currentIdx) return;
+      currentIdx = wrapped;
+      updateLabel();
+      carousel?.focus(currentIdx);
+      resetAutoAdvance();
+      return;
+    }
+
     if (wrapped === currentIdx && viewerSceneIndex >= 0) return;
     currentIdx = wrapped;
     void loadCurrent();
@@ -364,8 +507,27 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
     active = next;
     console.info(`[splat-gallery #${cellId}] setActive(${active})`);
     if (active) {
-      // First activation pulls in the first photo. Subsequent reactivations
-      // skip the load because viewerSceneIndex is still ≥ 0 from last time.
+      // Decide the render path once, the first time the cell goes
+      // active (the user is in an XR session by then, so the
+      // Spectacles-class check is meaningful).
+      if (renderMode === null) {
+        renderMode = isSpectaclesClass() ? 'carousel' : 'splat';
+        console.info(`[splat-gallery #${cellId}] renderMode=${renderMode}`);
+      }
+
+      if (renderMode === 'carousel') {
+        if (!carousel) {
+          carousel = buildCarousel();
+          updateLabel();
+          carousel.focus(currentIdx);
+        }
+        resetAutoAdvance();
+        return;
+      }
+
+      // splat path (Quest/desktop): first activation pulls in the first
+      // photo. Subsequent reactivations skip the load because
+      // viewerSceneIndex is still ≥ 0 from last time.
       if (viewerSceneIndex < 0 && !loading) {
         void loadCurrent();
       }
@@ -414,6 +576,10 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
         v.dispose?.();
         splatHolder.remove(viewer);
         viewer = null;
+      }
+      if (carousel) {
+        carousel.dispose();
+        carousel = null;
       }
       label.dispose();
       locationLabel.dispose();

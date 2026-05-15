@@ -28,6 +28,9 @@ export interface JoinPanelResult {
     onHoverIn?: () => void;
     onHoverOut?: () => void;
   }>;
+  /** Re-arm for a fresh join (resets state out of ACCEPTED, restores
+   *  the DEMO01 default). Call every time the panel is (re)shown. */
+  reset(): void;
   /** Current state. */
   state(): JoinState;
   /** Set a character in a specific slot (0-5). */
@@ -446,6 +449,46 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   // --- Keyboard input ---
   let keyboardSlotCursor = 0;
 
+  /**
+   * Re-arm the panel for a fresh join. THE load-bearing line is
+   * `setState(JoinState.ENTERING)`: after a successful join the state
+   * is ACCEPTED, and `submit()` early-returns while state is ACCEPTED.
+   * Leaving a dataspace re-showed the panel but never reset that state,
+   * so every rejoin attempt was a silent no-op (the Spectacles
+   * "can't rejoin after leave" bug). Also restores the DEMO01 default
+   * so one-click rejoin still works.
+   */
+  function reset() {
+    deactivateSlot();
+    keyboardSlotCursor = 0;
+    for (let i = 0; i < SLOT_COUNT; i++) slotValues[i] = DEFAULT_CODE[i] ?? '';
+    updateSlotVisuals();
+    setState(JoinState.ENTERING);
+  }
+
+  // ── Submit / Clear button visual feedback ──────────────────────────
+  //
+  // These were nearly inert (a faint opacity nudge from the generic
+  // registrar). Give them the same bright-cyan hover + near-white press
+  // flash the keypad keys use so a select reads clearly in-headset.
+  const BTN_HOVER_BG = new THREE.Color(0x2e5a78);
+  const BTN_FLASH_BG = new THREE.Color(0x9fe4ff);
+  function setButtonHover(block: any, baseHex: number, on: boolean) {
+    block.set({
+      backgroundColor: on ? BTN_HOVER_BG : new THREE.Color(baseHex),
+      backgroundOpacity: on ? 1.0 : 0.9,
+    });
+  }
+  function flashButton(block: any, baseHex: number) {
+    block.set({ backgroundColor: BTN_FLASH_BG, backgroundOpacity: 1.0 });
+    setTimeout(
+      () => block.set({ backgroundColor: new THREE.Color(baseHex), backgroundOpacity: 0.9 }),
+      130,
+    );
+  }
+  const SUBMIT_BG = 0x3a5a3a;
+  const CLEAR_BG = 0x3a3530;
+
   function handleKeydown(e: KeyboardEvent) {
     if (!g.visible) return;
     if (currentState === JoinState.SUBMITTING || currentState === JoinState.ACCEPTED) return;
@@ -562,18 +605,22 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
       });
     }
 
-    // Submit button
+    // Submit button — bright hover + press flash + click sound.
     result.push({
       id: 'join:submit',
       block: submitBlock,
-      onSelect: () => { playClick(); submit(); },
+      onHoverIn: () => setButtonHover(submitBlock, SUBMIT_BG, true),
+      onHoverOut: () => setButtonHover(submitBlock, SUBMIT_BG, false),
+      onSelect: () => { flashButton(submitBlock, SUBMIT_BG); playClick(); submit(); },
     });
 
-    // Clear button
+    // Clear button — same treatment.
     result.push({
       id: 'join:clear',
       block: clearBlock,
-      onSelect: () => { playClick(); clearSlots(); },
+      onHoverIn: () => setButtonHover(clearBlock, CLEAR_BG, true),
+      onHoverOut: () => setButtonHover(clearBlock, CLEAR_BG, false),
+      onSelect: () => { flashButton(clearBlock, CLEAR_BG); playClick(); clearSlots(); },
     });
 
     return result;
@@ -593,6 +640,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
     activateSlot,
     deactivateSlot,
     submit,
+    reset,
     clear: clearSlots,
     show: () => { g.visible = true; },
     hide: () => {

@@ -373,7 +373,12 @@ export function registerAllBuilders() {
       type: (cfg.type as any) ?? 'hls',
       width: (cfg.width as number) ?? 0.4,
       aspectRatio: (cfg.aspectRatio as number) ?? 16 / 9,
-      title: spec.title,
+      // NOTE: no `title` here on purpose. renderManifest already paints
+      // the mark's title above every cell; passing it to buildVideoPanel
+      // too produced the doubled "Cabin display" label (one from the
+      // panel, one from the manifest cell wrapper) on both devices. The
+      // demo-gallery videoPanel still sets its own title — only the
+      // manifest path drops it.
       autoplay: (cfg.autoplay as boolean) ?? true,
       muted: (cfg.muted as boolean) ?? true,
     });

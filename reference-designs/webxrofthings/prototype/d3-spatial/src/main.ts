@@ -1505,6 +1505,11 @@ function showJoinPanel() {
 
   placeJoinPanelInFrontOfUser();
 
+  // Re-arm before showing. Without this, returning to the join panel
+  // after a successful join + leave-dataspace left the panel in the
+  // ACCEPTED state, and submit()'s ACCEPTED guard made every rejoin a
+  // silent no-op (the Spectacles "can't rejoin after leave" bug).
+  joinPanel.reset();
   joinPanel.show();
   if (toolbar) toolbar.setActive('join');
 }
