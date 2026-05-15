@@ -21,6 +21,7 @@ import { buildVideoPanel } from '../viz/videoPanel';
 import { buildLiveImuCell } from '../demo/liveImuCell';
 import { buildLiveSpatialAudioCell } from '../demo/liveSpatialAudioCell';
 import { buildLiveSplatGalleryCell, type SplatPhoto } from '../demo/liveSplatGalleryCell';
+import { buildLiveActuatorPanelCell } from '../demo/liveActuatorPanelCell';
 import { buildLineMark } from '../chart/marks/line';
 import { buildBarMark } from '../chart/marks/bar';
 import { buildScatterMark } from '../chart/marks/scatter';
@@ -468,6 +469,20 @@ export function registerAllBuilders() {
       sceneRotation: cfg.sceneRotation as [number, number, number, number] | undefined,
       sceneScale:    cfg.sceneScale    as [number, number, number] | undefined,
     });
+    return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
+  });
+
+  // ─── actuator-panel — UC2 in-XR home controls ───────────────────────
+  //
+  // Spec shape (no data source — it talks to the actuator API directly):
+  //   { id, type: 'actuator-panel', title, config: { } }
+  //
+  // Renders a panel of pressable buttons that POST to /api/v1/actuator/*
+  // (light / thermostat / speaker / neopixel) and reflect returned state.
+  // The cell exposes getInteractables(); renderManifest registers each
+  // button with Interact (rich hover + cherry-click via uiSounds).
+  registerMarkBuilder('actuator-panel', (spec) => {
+    const cell = buildLiveActuatorPanelCell({ title: spec.title });
     return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
   });
 }

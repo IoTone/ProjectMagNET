@@ -480,6 +480,16 @@
       "hoverable": true
     },
     {
+      "id": "room-controls",
+      "type": "actuator-panel",
+      "title": "Room controls",
+      "subtitle": "tap to actuate · light · thermostat · strip · speaker",
+      "data": { "source": "inline" },
+      "config": {},
+      "deviceRef": "smart-light-001",
+      "hoverable": true
+    },
+    {
       "id": "room-devices",
       "type": "tree",
       "title": "Room devices",

@@ -211,14 +211,14 @@ export type MarkType =
   | 'tree' | 'treemap' | 'sunburst' | 'pack'
   | 'force' | 'ridgeline' | 'sankey' | 'streamgraph'
   | 'parallel' | 'tangled-tree' | 'edge-bundle' | 'hexbin'
-  | 'video' | 'imu' | 'spatial-audio' | 'splat-gallery';
+  | 'video' | 'imu' | 'spatial-audio' | 'splat-gallery' | 'actuator-panel';
 
 export const MARK_TYPES: readonly MarkType[] = [
   'line', 'bar', 'scatter', 'arc',
   'tree', 'treemap', 'sunburst', 'pack',
   'force', 'ridgeline', 'sankey', 'streamgraph',
   'parallel', 'tangled-tree', 'edge-bundle', 'hexbin',
-  'video', 'imu', 'spatial-audio', 'splat-gallery',
+  'video', 'imu', 'spatial-audio', 'splat-gallery', 'actuator-panel',
 ];
 
 export const SCALE_TAGS = ['personal', 'room', 'hall', 'net', 'vehicle'] as const;

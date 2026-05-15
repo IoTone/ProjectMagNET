@@ -147,6 +147,30 @@ export function renderManifestToScene(
         });
       }
 
+      // Multi-control cells (the UC2 actuator panel) expose
+      // getInteractables() — the same shape the join panel uses: one
+      // entry per pressable block, with optional rich hover hooks.
+      // Register each with Interact, namespacing the id by mark so two
+      // panels can't collide. Falls back to a plain opacity bump for
+      // entries that don't supply their own hover feedback.
+      if (typeof viz.getInteractables === 'function') {
+        for (const e of viz.getInteractables() as Array<{
+          id: string;
+          object: THREE.Object3D;
+          onSelect: () => void;
+          onHoverIn?: () => void;
+          onHoverOut?: () => void;
+        }>) {
+          interact.add({
+            id: `manifest:${mark.id}:${e.id}`,
+            object: e.object,
+            onHoverIn: e.onHoverIn ?? (() => { (e.object as any).set?.({ backgroundOpacity: 1.0 }); }),
+            onHoverOut: e.onHoverOut ?? (() => { (e.object as any).set?.({ backgroundOpacity: 0.9 }); }),
+            onSelect: () => e.onSelect(),
+          });
+        }
+      }
+
       // Hierarchy marks with group-level hover (sunburst, pack)
       if (viz.group && viz.getSegmentWorldPosition) {
         interact.add({
