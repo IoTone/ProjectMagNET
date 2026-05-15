@@ -14,13 +14,20 @@ import { Text } from 'troika-three-text';
 import { JoinState, CHAR_SET, SLOT_COUNT } from './types';
 import type { JoinPanelEvents } from './types';
 import { createKeypad, type KeypadResult } from './Keypad';
+import { playFocus, playClick } from '../audio/uiSounds';
 import { TEXT } from '../ui/palette';
 
 export interface JoinPanelResult {
   /** Root group — add to scene. */
   group: THREE.Group;
   /** All hoverable/selectable blocks for Interact registration. */
-  getInteractables(): Array<{ id: string; block: any; onSelect: () => void }>;
+  getInteractables(): Array<{
+    id: string;
+    block: any;
+    onSelect: () => void;
+    onHoverIn?: () => void;
+    onHoverOut?: () => void;
+  }>;
   /** Current state. */
   state(): JoinState;
   /** Set a character in a specific slot (0-5). */
@@ -201,7 +208,12 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   // panel and appears modally when a slot is active. Keys cycle the
   // active slot forward automatically; six taps fills the whole code.
   const keypad: KeypadResult = createKeypad();
-  keypad.group.position.set(0, -0.235, 0);   // below the panel's lower edge
+  // +10% over the base design for easier XR hit-targeting (user feedback).
+  // Scaling the group keeps the internal layout/text crisp (troika SDF is
+  // resolution-independent). Position nudged slightly lower so the 10%-
+  // taller tray keeps its clearance below the join panel's bottom edge.
+  keypad.group.scale.setScalar(1.1);
+  keypad.group.position.set(0, -0.25, 0);
   g.add(keypad.group);
 
   // --- Helper functions ---
@@ -495,8 +507,23 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   window.addEventListener('keydown', handleKeydown);
 
   // --- Build interactables list ---
-  function getInteractables(): Array<{ id: string; block: any; onSelect: () => void }> {
-    const result: Array<{ id: string; block: any; onSelect: () => void }> = [];
+  // Entries may carry optional onHoverIn/onHoverOut; when present the
+  // registrar (main.ts) uses them instead of its default opacity bump.
+  // The keypad keys use this for the rich highlight + focus/click sounds.
+  function getInteractables(): Array<{
+    id: string;
+    block: any;
+    onSelect: () => void;
+    onHoverIn?: () => void;
+    onHoverOut?: () => void;
+  }> {
+    const result: Array<{
+      id: string;
+      block: any;
+      onSelect: () => void;
+      onHoverIn?: () => void;
+      onHoverOut?: () => void;
+    }> = [];
 
     // Code slots — tap to activate the keypad on that slot. A second tap
     // on the same slot toggles the keypad closed (handy on Quest where
@@ -517,13 +544,17 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
 
     // Keypad keys (A-Z, 0-9, Backspace, Done). Each registers as its own
     // interact target so a single hand-tracking pinch hits exactly the
-    // intended key. JoinPanel routes each press into typeChar/backspace/
-    // deactivateSlot based on the key's `kind`.
+    // intended key. Rich feedback: bright cyan hover highlight + soft
+    // focus blip on hover-in; near-white flash + cherry-click on select.
     for (const key of keypad.getKeys()) {
       result.push({
         id: `join:key:${key.char}`,
         block: key.block,
+        onHoverIn: () => { keypad.setHover(key.block, true); playFocus(); },
+        onHoverOut: () => { keypad.setHover(key.block, false); },
         onSelect: () => {
+          keypad.pressFlash(key.block);
+          playClick();
           if (key.kind === 'char') typeChar(key.char);
           else if (key.kind === 'backspace') backspace();
           else if (key.kind === 'done') deactivateSlot();
@@ -535,14 +566,14 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
     result.push({
       id: 'join:submit',
       block: submitBlock,
-      onSelect: () => submit(),
+      onSelect: () => { playClick(); submit(); },
     });
 
     // Clear button
     result.push({
       id: 'join:clear',
       block: clearBlock,
-      onSelect: () => clearSlots(),
+      onSelect: () => { playClick(); clearSlots(); },
     });
 
     return result;

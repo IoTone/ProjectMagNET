@@ -1044,18 +1044,27 @@ function repositionDataspaceMenu() {
   fwd.y = 0;
   if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
   fwd.normalize();
+  // right = camera forward × up → the user's right; negate for left.
+  const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
   if (menuPos === 'side') {
-    const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
     dataspaceMenuAnchor.position.set(
       camPos.x - right.x * 0.5 + fwd.x * 0.9,
       camPos.y - 0.15,
       camPos.z - right.z * 0.5 + fwd.z * 0.9,
     );
   } else {
+    // Default ('bottom'): was dead-centre in front of the user, which on
+    // Spectacles' narrow FOV landed right on top of the join keypad
+    // ("Reset/Recenter/Leave panel hanging around"). Shift it LEFT by
+    // ~0.30 m at 0.9 m forward ≈ 18° off the forward axis, raised a
+    // touch (-0.22 vs -0.30). Kept facing the user (lookAt below) so
+    // it's still readable head-on with a glance left, but it's out of
+    // the central interaction path / keypad.
+    const LEFT = 0.30;
     dataspaceMenuAnchor.position.set(
-      camPos.x + fwd.x * 0.9,
-      camPos.y - 0.3,
-      camPos.z + fwd.z * 0.9,
+      camPos.x - right.x * LEFT + fwd.x * 0.9,
+      camPos.y - 0.22,
+      camPos.z - right.z * LEFT + fwd.z * 0.9,
     );
   }
   dataspaceMenuAnchor.lookAt(camPos.x, dataspaceMenuAnchor.position.y, camPos.z);
@@ -1445,16 +1454,15 @@ _joinPanelRef = joinPanel;
 
 // Register join panel interactables with Interact
 function registerJoinInteractables() {
-  for (const { id, block, onSelect } of joinPanel.getInteractables()) {
+  for (const { id, block, onSelect, onHoverIn, onHoverOut } of joinPanel.getInteractables()) {
     interact.add({
       id,
       object: block,
-      onHoverIn: () => {
-        (block as any).set({ backgroundOpacity: 1.0 });
-      },
-      onHoverOut: () => {
-        (block as any).set({ backgroundOpacity: 0.88 });
-      },
+      // Prefer the interactable's own hover hooks (keypad keys provide a
+      // rich highlight + focus sound). Fall back to the plain opacity
+      // bump for slots / Submit / Clear that don't supply their own.
+      onHoverIn: onHoverIn ?? (() => { (block as any).set({ backgroundOpacity: 1.0 }); }),
+      onHoverOut: onHoverOut ?? (() => { (block as any).set({ backgroundOpacity: 0.88 }); }),
       onSelect: () => onSelect(),
     });
   }

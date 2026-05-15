@@ -43,6 +43,13 @@ export interface KeypadKey {
 export interface KeypadResult {
   group: THREE.Group;
   getKeys(): KeypadKey[];
+  /** Toggle the hover highlight on a key block (call from Interact's
+   *  onHoverIn/onHoverOut). Bright cyan fill + border so the focused key
+   *  is unmistakable on a low-contrast XR display. */
+  setHover(block: any, on: boolean): void;
+  /** Brief brighter flash on select, then revert to hover-or-default.
+   *  Pairs with the click sound for tactile-feeling feedback. */
+  pressFlash(block: any): void;
   show(): void;
   hide(): void;
   visible(): boolean;
@@ -71,6 +78,39 @@ export function createKeypad(): KeypadResult {
   const keys: KeypadKey[] = [];
   /** Labels we own — disposed in `dispose()` to free troika atlas slots. */
   const labels: Text[] = [];
+
+  // Highlight palette. Hover = bright cyan (matches the boombox /
+  // globe accent so the whole app's "focused/active" colour is
+  // consistent); flash = near-white pop on select that decays back.
+  const HOVER_BG = new THREE.Color(0x2e5a78);
+  const HOVER_BORDER = new THREE.Color(0x7fd1ff);
+  const FLASH_BG = new THREE.Color(0x9fe4ff);
+  let hoveredBlock: any = null;
+
+  /** Stash a block's resting style on its userData so setHover can revert
+   *  exactly (char keys and the two action keys have different palettes). */
+  function rememberStyle(block: any, bg: number, border: number, borderOp: number, bgOp: number) {
+    block.userData.defBg = new THREE.Color(bg);
+    block.userData.defBorder = new THREE.Color(border);
+    block.userData.defBorderOp = borderOp;
+    block.userData.defBgOp = bgOp;
+  }
+  function applyDefault(block: any) {
+    block.set({
+      backgroundColor: block.userData.defBg,
+      borderColor: block.userData.defBorder,
+      borderOpacity: block.userData.defBorderOp,
+      backgroundOpacity: block.userData.defBgOp,
+    });
+  }
+  function applyHover(block: any) {
+    block.set({
+      backgroundColor: HOVER_BG,
+      borderColor: HOVER_BORDER,
+      borderOpacity: 1.0,
+      backgroundOpacity: 1.0,
+    });
+  }
 
   // ─── Background panel ──────────────────────────────────────────────
   //
@@ -113,6 +153,7 @@ export function createKeypad(): KeypadResult {
         alignItems: 'center',
       } as any);
       block.position.set(x, y, 0.001);
+      rememberStyle(block, 0x3a3530, TEXT.muted, 0.55, 0.92);
       g.add(block);
 
       const label = new Text();
@@ -162,6 +203,7 @@ export function createKeypad(): KeypadResult {
       alignItems: 'center',
     } as any);
     block.position.set(opts.x, actionY, 0.001);
+    rememberStyle(block, opts.bg, opts.color, 0.6, 0.94);
     g.add(block);
 
     const text = new Text();
@@ -206,8 +248,32 @@ export function createKeypad(): KeypadResult {
   return {
     group: g,
     getKeys: () => keys,
+    setHover: (block: any, on: boolean) => {
+      if (on) { hoveredBlock = block; applyHover(block); }
+      else { if (hoveredBlock === block) hoveredBlock = null; applyDefault(block); }
+    },
+    pressFlash: (block: any) => {
+      block.set({
+        backgroundColor: FLASH_BG,
+        borderColor: FLASH_BG,
+        borderOpacity: 1.0,
+        backgroundOpacity: 1.0,
+      });
+      // Revert after a short beat. If the pointer is still on this key,
+      // settle back to the hover style rather than fully default so the
+      // focus state stays coherent.
+      setTimeout(() => {
+        if (hoveredBlock === block) applyHover(block);
+        else applyDefault(block);
+      }, 130);
+    },
     show: () => { g.visible = true; },
-    hide: () => { g.visible = false; },
+    hide: () => {
+      g.visible = false;
+      // Clear any lingering hover style so the keypad doesn't reappear
+      // with a stale highlighted key next time it's shown.
+      if (hoveredBlock) { applyDefault(hoveredBlock); hoveredBlock = null; }
+    },
     visible: () => g.visible,
     dispose: () => {
       for (const lbl of labels) lbl.dispose();
