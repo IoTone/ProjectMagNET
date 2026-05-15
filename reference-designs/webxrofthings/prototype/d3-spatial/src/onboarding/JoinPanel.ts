@@ -13,7 +13,7 @@ import ThreeMeshUI from 'three-mesh-ui';
 import { Text } from 'troika-three-text';
 import { JoinState, CHAR_SET, SLOT_COUNT } from './types';
 import type { JoinPanelEvents } from './types';
-import { createSlotWheel, SlotWheelResult } from './SlotWheel';
+import { createKeypad, type KeypadResult } from './Keypad';
 import { TEXT } from '../ui/palette';
 
 export interface JoinPanelResult {
@@ -53,8 +53,12 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   let currentState: JoinState = JoinState.ENTERING;
   let activeSlotIndex = -1;
 
-  // Slot values (empty string = unfilled)
-  const DEFAULT_CODE = 'AAAAAA';
+  // Slot values (empty string = unfilled). Default pre-fills the first
+  // demo dataspace (DEMO01) so a one-click Submit pulls up UC1 without
+  // any wheel scrolling — speeds up demo runs and proves the panel's
+  // wiring end-to-end before the user touches the keyboard. Other valid
+  // codes today: DEMO02, DEMO03, DEMO04.
+  const DEFAULT_CODE = 'DEMO01';
   const slotValues: string[] = DEFAULT_CODE.split('');
 
   // --- Root panel block ---
@@ -126,7 +130,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
 
   // --- Status text ---
   const statusText = new Text();
-  statusText.text = 'Press Submit to join with code AAAAAA';
+  statusText.text = 'Press Submit to join with code DEMO01';
   statusText.fontSize = 0.014;
   statusText.color = TEXT.muted;
   statusText.anchorX = 'center';
@@ -191,9 +195,14 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   footerText.sync();
   g.add(footerText);
 
-  // --- Slot wheel ---
-  const slotWheel: SlotWheelResult = createSlotWheel();
-  g.add(slotWheel.group);
+  // --- Keypad popup (stacked A-Z + 0-9) ---
+  //
+  // Replaces the per-slot up/down SlotWheel. Sits just below the join
+  // panel and appears modally when a slot is active. Keys cycle the
+  // active slot forward automatically; six taps fills the whole code.
+  const keypad: KeypadResult = createKeypad();
+  keypad.group.position.set(0, -0.235, 0);   // below the panel's lower edge
+  g.add(keypad.group);
 
   // --- Helper functions ---
 
@@ -260,23 +269,48 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   function activateSlot(index: number) {
     if (index < 0 || index >= SLOT_COUNT) return;
     activeSlotIndex = index;
-
-    // Position the wheel above the active slot
-    const slotX = startX + index * (slotWidth + slotGap);
-    slotWheel.show(new THREE.Vector3(slotX, 0.035, 0.01));
-
-    // If the slot has a char, set the wheel to it
-    if (slotValues[index]!.length > 0) {
-      slotWheel.setChar(slotValues[index]!);
-    }
-
+    // Show the keypad. Stays open across slot-fills so the user can rip
+    // through all six chars without re-tapping the panel between them.
+    keypad.show();
     updateSlotVisuals();
   }
 
   function deactivateSlot() {
     activeSlotIndex = -1;
-    slotWheel.hide();
+    keypad.hide();
     updateSlotVisuals();
+  }
+
+  /** Fill the active slot with `char`, advance the active cursor to the
+   *  next slot. If we just filled the last slot, drop the cursor but
+   *  keep the keypad open one extra moment so the user sees what they
+   *  typed before the popup vanishes. */
+  function typeChar(char: string) {
+    if (activeSlotIndex < 0) return;
+    setSlotChar(activeSlotIndex, char);
+    if (activeSlotIndex < SLOT_COUNT - 1) {
+      activateSlot(activeSlotIndex + 1);
+    } else {
+      // Filled the last slot — close the keypad so the user can see
+      // their complete code and Submit it.
+      deactivateSlot();
+    }
+  }
+
+  /** Backspace: clear the current slot if it has a char, otherwise step
+   *  the cursor back to the previous slot (which itself may have a char
+   *  to clear on the next press). Mirrors phone-keyboard behaviour. */
+  function backspace() {
+    if (activeSlotIndex < 0) return;
+    if (slotValues[activeSlotIndex]!.length > 0) {
+      slotValues[activeSlotIndex] = '';
+      updateSlotVisuals();
+      const n = filledCount();
+      if (n === 0) setState(JoinState.IDLE);
+      else updateStatus(`${n} of ${SLOT_COUNT} characters`, TEXT.body);
+    } else if (activeSlotIndex > 0) {
+      activateSlot(activeSlotIndex - 1);
+    }
   }
 
   function setSlotChar(slotIndex: number, char: string) {
@@ -295,19 +329,6 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
     }
   }
 
-  function wheelCommit() {
-    if (activeSlotIndex < 0) return;
-    const ch = slotWheel.currentChar();
-    setSlotChar(activeSlotIndex, ch);
-
-    // Auto-advance to next empty slot
-    const nextEmpty = slotValues.findIndex((v, i) => i > activeSlotIndex && v.length === 0);
-    if (nextEmpty >= 0) {
-      activateSlot(nextEmpty);
-    } else {
-      deactivateSlot();
-    }
-  }
 
   function submit() {
     if (currentState === JoinState.SUBMITTING || currentState === JoinState.ACCEPTED) return;
@@ -452,15 +473,16 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   function getInteractables(): Array<{ id: string; block: any; onSelect: () => void }> {
     const result: Array<{ id: string; block: any; onSelect: () => void }> = [];
 
-    // Code slots
+    // Code slots — tap to activate the keypad on that slot. A second tap
+    // on the same slot toggles the keypad closed (handy on Quest where
+    // dismissing a popup is otherwise awkward).
     for (let i = 0; i < SLOT_COUNT; i++) {
       result.push({
         id: `join:slot:${i}`,
         block: slotBlocks[i],
         onSelect: () => {
-          if (activeSlotIndex === i) {
-            // Already active — commit the wheel char
-            wheelCommit();
+          if (activeSlotIndex === i && keypad.visible()) {
+            deactivateSlot();
           } else {
             activateSlot(i);
           }
@@ -468,27 +490,21 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
       });
     }
 
-    // Wheel arrows
-    result.push({
-      id: 'join:wheel:up',
-      block: slotWheel.upBlock,
-      onSelect: () => {
-        slotWheel.prev();
-        if (activeSlotIndex >= 0) {
-          setSlotChar(activeSlotIndex, slotWheel.currentChar());
-        }
-      },
-    });
-    result.push({
-      id: 'join:wheel:down',
-      block: slotWheel.downBlock,
-      onSelect: () => {
-        slotWheel.next();
-        if (activeSlotIndex >= 0) {
-          setSlotChar(activeSlotIndex, slotWheel.currentChar());
-        }
-      },
-    });
+    // Keypad keys (A-Z, 0-9, Backspace, Done). Each registers as its own
+    // interact target so a single hand-tracking pinch hits exactly the
+    // intended key. JoinPanel routes each press into typeChar/backspace/
+    // deactivateSlot based on the key's `kind`.
+    for (const key of keypad.getKeys()) {
+      result.push({
+        id: `join:key:${key.char}`,
+        block: key.block,
+        onSelect: () => {
+          if (key.kind === 'char') typeChar(key.char);
+          else if (key.kind === 'backspace') backspace();
+          else if (key.kind === 'done') deactivateSlot();
+        },
+      });
+    }
 
     // Submit button
     result.push({
@@ -530,6 +546,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
     visible: () => g.visible,
     dispose: () => {
       window.removeEventListener('keydown', handleKeydown);
+      keypad.dispose();
       titleText.dispose();
       statusText.dispose();
       footerText.dispose();
