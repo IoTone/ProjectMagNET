@@ -191,8 +191,20 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
     },
     play() { doPlay(); },
     pause() {
-      if (type === 'mjpeg' && mjpegImg) { mjpegImg.src = ''; playing = false; }
-      else { video.pause(); playing = false; }
+      // The 'frames' branch needs to clear its own polling timer — without
+      // this, hiding the demo gallery (e.g. on UC4 entry via `?manifest=`)
+      // leaves the cell quietly hammering `/camera/capture?t=…` once per
+      // second and spamming the console with 500s when no ESP32-CAM is
+      // on the LAN. mjpeg streams stop themselves when src is cleared.
+      if (type === 'frames') {
+        if (framesTimer !== null) { clearInterval(framesTimer); framesTimer = null; }
+        if (mjpegImg) mjpegImg.src = '';
+        playing = false;
+      } else if (type === 'mjpeg' && mjpegImg) {
+        mjpegImg.src = ''; playing = false;
+      } else {
+        video.pause(); playing = false;
+      }
       updateStatus('⏸ paused', TEXT.muted);
     },
     isPlaying() { return playing; },

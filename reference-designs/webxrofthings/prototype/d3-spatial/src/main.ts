@@ -1678,6 +1678,11 @@ if (isManifestMode && urlManifest) {
   // controller. On success it shows the dataspace HUD; on failure the
   // controller's onError callback re-shows the gallery.
   galleryRoot.visible = false;
+  // Stop the gallery's video panel from polling /camera/capture in the
+  // background — it doesn't know it's been hidden, and a missing camera
+  // produces a steady stream of 500-level errors in the console. Calling
+  // pause() clears its framesTimer + image src cleanly.
+  videoPanelViz.pause();
   manifestController.loadFromUrl(urlManifest).then(() => {
     if (manifestController.hasActive()) {
       vizAnchor.visible = true;

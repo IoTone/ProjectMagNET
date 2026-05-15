@@ -39,7 +39,7 @@ import { TEXT } from '../ui/palette';
  * fires when the constant is false, so the entire ~475 KB globeWidget
  * chunk stays unloaded while the gate is set.
  */
-const GLOBE_DISABLED_PENDING_PERF_DEBUG = true;
+const GLOBE_DISABLED_PENDING_PERF_DEBUG = false;
 
 /** Shape of the JSON the IMU endpoint returns. Both `/api/v1/sensor/imu`
  *  in the mock server and any future real device must match this. */
@@ -135,7 +135,10 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
   airplane.name = 'airplane-mesh';
   panel.add(airplane);
 
-  const mat = new THREE.MeshBasicMaterial({ color, wireframe: false });
+  // Wireframe rendering so the airplane reads as a synthwave HUD prop rather
+  // than a solid plane — matches the boombox + globe atmosphere and lets the
+  // globe behind it stay visible through the fuselage.
+  const mat = new THREE.MeshBasicMaterial({ color, wireframe: true });
   // Fuselage — long thin box along Z.
   const fuselage = new THREE.Mesh(
     new THREE.BoxGeometry(size * 0.16, size * 0.16, size * 1.4),

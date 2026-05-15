@@ -128,7 +128,8 @@
       },
       "config": {
         "size": 0.12,
-        "color": 16769280,
+        "_comment_color": "0x4ec5ff — bright cyan-blue, matches boombox accentColor + globe atmosphereColor. Pairs with wireframe:true in liveImuCell.ts.",
+        "color": 5161471,
         "smooth": true
       },
       "deviceRef": "airplane-imu-001",

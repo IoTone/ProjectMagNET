@@ -29,6 +29,10 @@ import {
 } from '../audio/proceduralMusic';
 import { TEXT } from '../ui/palette';
 
+/** Ordered list of themes so a "next" click cycles deterministically through
+ *  Ambient → Downtempo → Chillout → Lo-Fi → back to Ambient. */
+const THEME_CYCLE: readonly MusicTheme[] = ['ambient', 'downtempo', 'chillout', 'lofi'] as const;
+
 export interface LiveSpatialAudioOpts {
   /** Half-length of the boombox body in world units. Default 0.10. */
   size?: number;
@@ -52,6 +56,22 @@ export interface LiveSpatialAudioCell {
   isPlaying(): boolean;
   setGain(g: number): void;
   tick(time: number): void;
+  /** Advance to the next theme in the cycle (ambient → downtempo → chillout
+   *  → lofi → ambient …), rebuild the audio buffer, and resume playback if
+   *  it was playing. Used by the renderManifest click handler when the user
+   *  taps the boombox. */
+  nextTheme(): void;
+  /** Currently-selected theme — exposed so an external HUD could display it.
+   *  The cell already shows it via its on-mesh themeLabel. */
+  getTheme(): MusicTheme;
+  /** Object that should receive click/hover events. renderManifest wires
+   *  this into the Interact system so the user can tap the boombox to
+   *  change tracks. Mesh, not the wireframe lines, because raycasting
+   *  against LineSegments needs a per-platform threshold tweak. */
+  clickTarget: THREE.Object3D;
+  /** Called by renderManifest when the click target is tapped. The cell
+   *  decides what "tap" means — currently advances to the next theme. */
+  onSelect(): void;
   dispose(): void;
 }
 
@@ -87,6 +107,18 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
   const bodyGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(size * 2.4, size * 1.3, size * 0.9));
   const body = new THREE.LineSegments(bodyGeo, lineMat);
   group.add(body);
+
+  // Invisible solid-mesh hit-box for click/hover raycasting. Wraps the
+  // whole boombox volume (body + speakers + handle) so the user can tap
+  // anywhere on the unit to cycle tracks. Material is `visible:false`
+  // (excluded from rendering but still raycastable) — using a fully
+  // transparent material instead would create a Z-fighting alpha plane.
+  const hitBoxGeo = new THREE.BoxGeometry(size * 2.6, size * 1.7, size * 0.95);
+  const hitBoxMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  const hitBox = new THREE.Mesh(hitBoxGeo, hitBoxMat);
+  hitBox.position.set(0, size * 0.1, 0);   // centre on body + handle midpoint
+  hitBox.name = 'boombox-hit';
+  group.add(hitBox);
 
   // Two speaker rings on the front face. CircleGeometry → EdgesGeometry is
   // a circular fan; wrap with LineLoop to get just the perimeter circle.
@@ -211,16 +243,49 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
   // each particle drifts up + side-to-side; when it passes the top of the
   // column it wraps to the bottom. Self-driven so it works in manifest
   // mode (no per-frame tick from the loader).
+  //
+  // Beat-driven energy: when the cell has an AnalyserNode spliced into the
+  // audio path (set up below in the audio-source block), the rise rate is
+  // multiplied by an `energy` factor that spikes on low-frequency
+  // (~bass/kick) amplitude peaks and decays smoothly back to 1.0. Result:
+  // particles surge upward on each kick. For Ambient (no kick) bass stays
+  // flat, energy hovers at ~1.0, particles just drift at the baseline rate.
   let lastFrameMs = performance.now();
+  let analyser: AnalyserNode | null = null;
+  // Type-pinned to Uint8Array<ArrayBuffer> (not the looser ArrayBufferLike
+  // that bare `new Uint8Array(n)` returns) because DOM lib's
+  // getByteFrequencyData signature disallows the SharedArrayBuffer-capable
+  // variant — strict-typed environments treat them as incompatible.
+  let freqData: Uint8Array<ArrayBuffer> | null = null;
+  let energy = 1.0;
+  let lastBeatMs = 0;
   particleGroup.onBeforeRender = () => {
     const now = performance.now();
     const dt = (now - lastFrameMs) / 1000;
     lastFrameMs = now;
     if (dt <= 0 || dt > 1) return;
+
+    // Beat detection. fftSize 64 → 32 bins covering 0..nyquist; the bottom
+    // 3 bins capture the kick/sub-bass range at typical 48 kHz sample rate.
+    // A bass amplitude above ~150/255 with at least 180 ms since the last
+    // beat triggers a burst (180 ms guard prevents double-counts at fast
+    // tempos and accommodates the 30 ms FFT window).
+    if (analyser && freqData) {
+      analyser.getByteFrequencyData(freqData);
+      const bass = (freqData[0]! + freqData[1]! + freqData[2]!) / 3;
+      if (bass > 150 && (now - lastBeatMs) > 180) {
+        energy = 4.5;     // surge
+        lastBeatMs = now;
+      }
+    }
+    // Exponential-ish decay back to baseline. 4.0/sec means a surge from
+    // 4.5 reaches ~1.0 in roughly a beat at 90 BPM.
+    energy = Math.max(1.0, energy - dt * 4.0);
+
     const verticalSpan = size * (0.7 + PARTICLES_PER_SIDE * 0.07);
     for (const p of particles) {
-      // Rise rate scales with size so timing reads similarly on any boombox.
-      p.mesh.position.y += dt * size * 0.6;
+      // Rise rate scales with size + current beat energy.
+      p.mesh.position.y += dt * size * 0.6 * energy;
       if (p.mesh.position.y > size * 0.7 + verticalSpan) {
         p.mesh.position.y = size * 0.7;
       }
@@ -239,6 +304,8 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
   let positional: THREE.PositionalAudio | null = null;
   let playing = false;
   let pendingGesture = false;
+  let currentTheme: MusicTheme = theme;
+  let currentThemeIdx = Math.max(0, THEME_CYCLE.indexOf(theme));
 
   function tryPlayDeferred() {
     if (!positional || !pendingGesture) return;
@@ -255,8 +322,24 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
     positional.setDistanceModel('inverse');
     positional.setLoop(true);
     positional.setVolume(gain);
-    positional.setBuffer(makeMusicLoopBuffer(listener.context, { theme }));
+    positional.setBuffer(makeMusicLoopBuffer(listener.context, { theme: currentTheme }));
     body.add(positional);
+
+    // Splice an AnalyserNode into the audio chain for beat detection.
+    // three.js's Audio.setFilter routes source → filter → output, so the
+    // analyser sits passively in the signal path and observes amplitude
+    // without modifying it. fftSize 64 keeps the analysis cheap; we only
+    // need a handful of low-frequency bins.
+    analyser = listener.context.createAnalyser();
+    analyser.fftSize = 64;
+    analyser.smoothingTimeConstant = 0.4;
+    // Construct the Uint8Array from an explicit ArrayBuffer so its type
+    // matches DOM-lib's `getByteFrequencyData` signature, which requires
+    // `Uint8Array<ArrayBuffer>` rather than the more permissive
+    // `Uint8Array<ArrayBufferLike>` that the bare `new Uint8Array(n)`
+    // returns (DOM lib disallows SharedArrayBuffer in this slot).
+    freqData = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
+    positional.setFilter(analyser);
   }
 
   async function play(): Promise<void> {
@@ -297,6 +380,31 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
     play().catch(() => {});
   }
 
+  /** Cycle through the four themes; rebuild the audio buffer, refresh the
+   *  on-mesh label, and resume playback if it was running. Called by the
+   *  click handler renderManifest wires up to `clickTarget`. */
+  function nextTheme() {
+    if (!positional || !listener) return;
+    currentThemeIdx = (currentThemeIdx + 1) % THEME_CYCLE.length;
+    currentTheme = THEME_CYCLE[currentThemeIdx]!;
+    const wasPlaying = playing;
+    if (wasPlaying) {
+      positional.stop();
+      playing = false;
+    }
+    positional.setBuffer(makeMusicLoopBuffer(listener.context, { theme: currentTheme }));
+    themeLabel.text = MUSIC_THEME_LABELS[currentTheme];
+    themeLabel.sync();
+    console.info(`[spatial-audio] cycled to "${MUSIC_THEME_LABELS[currentTheme]}"`);
+    if (wasPlaying) {
+      // The play() function is async because of the autoplay gesture
+      // dance, but inside an actual user gesture (the click that got us
+      // here) the audio context is already running, so this resolves
+      // synchronously without registering deferral listeners.
+      void play();
+    }
+  }
+
   return {
     group,
     play,
@@ -304,6 +412,10 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
     isPlaying: () => playing,
     setGain,
     tick: (_time: number) => { /* particles animate via onBeforeRender */ },
+    nextTheme,
+    getTheme: () => currentTheme,
+    clickTarget: hitBox,
+    onSelect: nextTheme,
     dispose: () => {
       if (positional) {
         if (playing) positional.stop();
@@ -315,6 +427,8 @@ export function buildLiveSpatialAudioCell(opts: LiveSpatialAudioOpts = {}): Live
       }
       particleGroup.onBeforeRender = () => {};
       bodyGeo.dispose();
+      hitBoxGeo.dispose();
+      hitBoxMat.dispose();
       handleGeo.dispose();
       lineMat.dispose();
       playGeo.dispose();

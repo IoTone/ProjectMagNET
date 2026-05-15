@@ -129,6 +129,24 @@ export function renderManifestToScene(
         });
       }
 
+      // Generic click handler for marks that expose a `clickTarget` Object3D
+      // and an `onSelect()` method. Used by the spatial-audio cell to let
+      // the user tap the boombox to cycle music themes; any future cell
+      // that wants the same affordance just needs to expose the same two
+      // members. Registered before the segment-hover path so clicks on
+      // clickable cells don't fall through to a stray hover handler. The
+      // hover callbacks are no-ops — the Hoverable interface requires
+      // them but this cell doesn't currently surface hover feedback.
+      if (viz.clickTarget && typeof viz.onSelect === 'function') {
+        interact.add({
+          id: `manifest:${mark.id}:select`,
+          object: viz.clickTarget,
+          onHoverIn:  () => {},
+          onHoverOut: () => {},
+          onSelect:   () => viz.onSelect(),
+        });
+      }
+
       // Hierarchy marks with group-level hover (sunburst, pack)
       if (viz.group && viz.getSegmentWorldPosition) {
         interact.add({
