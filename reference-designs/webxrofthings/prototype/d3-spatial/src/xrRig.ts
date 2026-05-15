@@ -184,7 +184,17 @@ export class XRRig {
         this.raycaster.ray.origin.copy(origin);
         this.raycaster.ray.direction.copy(direction);
         const hits = this.raycaster.intersectObjects(this.scene.children, true);
-        const hit = hits.find(h => !h.object.userData?.noHover && !(h.object as any).isLine);
+        const hit = hits.find(h => {
+          if (h.object.userData?.noHover || (h.object as any).isLine) return false;
+          // Skip invisible subtrees — THREE.Raycaster doesn't honour
+          // `.visible`, so the reticle would otherwise snap onto hidden
+          // panels (e.g. the join keypad before it's shown), stopping
+          // short of what the user is actually aiming at.
+          for (let p: THREE.Object3D | null = h.object; p; p = p.parent) {
+            if (p.visible === false) return false;
+          }
+          return true;
+        });
 
         if (hit) {
           reticle.position.copy(hit.point);

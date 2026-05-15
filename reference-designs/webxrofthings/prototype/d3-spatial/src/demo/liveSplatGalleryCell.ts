@@ -221,9 +221,20 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
     const targetIdx = currentIdx;
     updateLabel();
 
+    // ── Breadcrumbs ──────────────────────────────────────────────────
+    // Each await below is a candidate Spectacles failure point (dynamic
+    // import eval, WebGL-feature-gated DropInViewer ctor, GPU upload in
+    // addSplatScene). These console.info lines pass through to the
+    // in-headset DebugConsole (only [perf] is filtered there), so the
+    // LAST breadcrumb printed before a freeze/throw localizes the crash.
+    const bc = (m: string) => console.info(`[splat-gallery #${cellId}] ${m}`);
+    bc(`loadCurrent idx=${targetIdx} url=${photos[targetIdx]!.url}`);
+
     let DropInViewerCtor: DropInViewerCtor;
     try {
+      bc('importing @mkkellogg/gaussian-splats-3d …');
       DropInViewerCtor = await loadDropInViewer();
+      bc('mkkellogg module loaded');
     } catch (err) {
       console.error('[splat-gallery] failed to load mkkellogg/gaussian-splats-3d', err);
       loading = false;
@@ -234,6 +245,7 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
     // First-call viewer construction. The viewer is a THREE.Group so we
     // can just add it to our scene-graph anchor.
     if (!viewer) {
+      bc('constructing DropInViewer (WebGL ctx + workers) …');
       viewer = new DropInViewerCtor({
         // Run mkkellogg's update loop ourselves via the onBeforeRender
         // path it sets up internally — DropInViewer takes care of this
@@ -278,12 +290,14 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
         // default `false` until the upstream library fixes the option.
       });
       splatHolder.add(viewer);
+      bc('DropInViewer constructed + added to scene');
     }
 
     // Remove the currently-loaded scene (if any), then add the new one.
     // mkkellogg's API: indices are sequential, removeSplatScene compacts
     // the list. After remove we always add at the front (index 0).
     if (viewerSceneIndex >= 0) {
+      bc(`removeSplatScene(${viewerSceneIndex}) …`);
       try {
         await (viewer as unknown as { removeSplatScene(i: number, showUI?: boolean): Promise<void> })
           .removeSplatScene(viewerSceneIndex, false);
@@ -296,6 +310,7 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
 
     const photo = photos[targetIdx]!;
     try {
+      bc(`addSplatScene fetch+upload ${photo.url} …`);
       await (viewer as unknown as {
         addSplatScene(path: string, opts: Record<string, unknown>): Promise<void>;
       }).addSplatScene(photo.url, {
@@ -306,6 +321,7 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
         scale:    sceneScale,
       });
       viewerSceneIndex = 0;
+      bc('addSplatScene complete ✓ — splat visible');
     } catch (err) {
       console.error('[splat-gallery] failed to load', photo.url, err);
     }

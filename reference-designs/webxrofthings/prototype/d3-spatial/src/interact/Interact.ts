@@ -332,6 +332,16 @@ export class Interact {
       const o = h.object;
       if (o.userData?.isBrushPlane || o.userData?.isHoverOutline) return false;
       if ((o as any).isLine || (o as any).isLineSegments) return false;
+      // Invisible subtrees must never be hit. THREE.Raycaster ignores the
+      // `.visible` flag entirely — it only gates *rendering*, not
+      // raycasting — so a hidden panel still intercepts rays. This is
+      // exactly the join-keypad bug: the keypad is created hidden
+      // (g.visible=false) but its ~38 blocks were still ray targets,
+      // blocking the sign-in slots behind/around them. Walk ancestors;
+      // reject the hit if any node up the chain is invisible.
+      for (let p: THREE.Object3D | null = o; p; p = p.parent) {
+        if (p.visible === false) return false;
+      }
       return true;
     });
   }

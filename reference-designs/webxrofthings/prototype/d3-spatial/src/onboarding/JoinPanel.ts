@@ -357,14 +357,31 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
       return;
     }
 
-    // Real fetch to /api/v1/join
+    // Real fetch to /api/v1/join.
+    //
+    // Hard 6 s timeout via AbortController. Symptom that motivated this:
+    // on Snap Spectacles the join screen "stayed up" forever after
+    // pressing Submit. A plain fetch() with no timeout will hang
+    // indefinitely if the network stack never resolves OR rejects the
+    // request (seen on Spectacles' WebView-less browser when the proxy
+    // host is unreachable but the socket neither connects nor RSTs).
+    // Without a timeout, neither .then nor .catch fires and the panel is
+    // wedged in SUBMITTING forever. The timeout aborts → .catch runs →
+    // we fall back to mock-accept so the demo still proceeds.
     setState(JoinState.SUBMITTING);
+    console.info(`[join] submitting code "${code}" …`);
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.warn('[join] /api/v1/join timed out after 6s — aborting');
+      ctrl.abort();
+    }, 6000);
     fetch('/api/v1/join', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
+      signal: ctrl.signal,
     })
-      .then(resp => resp.json())
+      .then(resp => { clearTimeout(timeoutId); return resp.json(); })
       .then((data: { status: string; token?: string; manifest_url?: string; dataspace?: string; reason?: string }) => {
         if (data.status === 'accepted') {
           setState(JoinState.ACCEPTED);
@@ -389,9 +406,17 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
           }, 2000);
         }
       })
-      .catch(() => {
-        // Server not running — fall back to mock validation (accept any complete code)
-        console.warn('[join] Server not reachable, using mock validation');
+      .catch((err) => {
+        clearTimeout(timeoutId);
+        // Server unreachable OR the 6 s abort fired. Either way, fall
+        // back to mock validation so the demo still proceeds — the join
+        // screen must never get stuck. `code` is logged so a wrong-code
+        // mock-accept is debuggable from the in-headset console.
+        const aborted = err?.name === 'AbortError';
+        console.warn(
+          `[join] ${aborted ? 'request aborted (timeout)' : 'server not reachable'} — `
+            + `mock-accepting code "${code}"`,
+        );
         setState(JoinState.ACCEPTED);
         events.onAccepted?.(code);
       });

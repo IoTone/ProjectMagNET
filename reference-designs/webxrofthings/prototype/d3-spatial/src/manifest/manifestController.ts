@@ -58,13 +58,22 @@ export function createManifestController(opts: ManifestControllerOptions): Manif
   }
 
   async function ingest(manifest: DataspaceManifest, token: string | undefined, source: 'url' | 'object') {
+    // Breadcrumbs flow to the in-headset DebugConsole — on Spectacles
+    // (no chrome://inspect) the last one printed before a freeze tells
+    // us whether the failure is in manifest parse, mark building, scene
+    // render, or the onLoaded HUD wiring.
     try {
+      console.info(`[manifest] ingest "${manifest.name}" (${source}) — disposing previous`);
       dispose();
+      console.info(`[manifest] loadManifest: building ${manifest.marks.length} marks …`);
       const result = await loadManifest(manifest, token);
       current = result;
+      console.info(`[manifest] built ${result.marks.length} marks — rendering to scene …`);
       render(result, manifest);
+      console.info('[manifest] render done — wiring HUD (onLoaded) …');
       onLoaded?.(manifest, result);
       privacyBanner.attach(manifest, /* autoShow */ true);
+      console.info(`[manifest] ingest complete ✓ "${manifest.name}"`);
     } catch (e) {
       console.error('[manifestController] load failed:', e);
       onError?.(e, source);

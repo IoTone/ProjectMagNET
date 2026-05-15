@@ -3,6 +3,7 @@ import ThreeMeshUI from 'three-mesh-ui';
 import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import Stats from 'three/examples/jsm/libs/stats.module.js';
+import { createDebugConsole, type DebugConsole } from './ui/DebugConsole';
 import { XRRig } from './xrRig';
 import { Text } from 'troika-three-text';
 import { buildDemoScene } from './demo/marks';
@@ -66,8 +67,17 @@ if (isQuest()) {
 console.log(`[platform] detected: ${platformName()}`);
 renderer.setClearColor(0x0b1220, 1);
 
+// Re-place the active UI when the XR session starts. The XR camera pose
+// isn't valid on the exact sessionstart tick, so just raise a flag and
+// let the animation loop do the re-placement on the first XR frame (when
+// `renderer.xr.getCamera()` returns a real head pose). Without this, any
+// UI placed against the pre-session desktop camera stays stranded at the
+// wrong height/distance on headsets whose XR reference space differs
+// from the desktop camera origin (Spectacles especially).
+let pendingXrReplace = false;
 renderer.xr.addEventListener('sessionstart', () => {
   renderer.setClearColor(0x000000, 0);
+  pendingXrReplace = true;
 });
 renderer.xr.addEventListener('sessionend', () => {
   renderer.setClearColor(0x0b1220, 1);
@@ -96,9 +106,31 @@ if (perfEnabled) {
 }
 
 const scene = new THREE.Scene();
+
+// In-headset debug console — camera-locked log panel that captures
+// console.* + uncaught errors. On by default so Spectacles (no
+// chrome://inspect) gets diagnostics; `?debug=0` disables for clean
+// demo runs. Added to the scene directly so it survives gallery /
+// manifest mode swaps and renders even if world content fails.
+const debugEnabled = new URLSearchParams(window.location.search).get('debug') !== '0';
+let debugConsole: DebugConsole | null = null;
+if (debugEnabled) {
+  debugConsole = createDebugConsole();
+  scene.add(debugConsole.group);
+  console.log('[debug] in-scene console enabled (`?debug=0` to disable)');
+  // Note: initial place() happens just after the camera is constructed
+  // below (the panel is placed relative to a camera, and `camera` is
+  // declared after this block). Re-placed on XR sessionstart.
+}
+
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 100);
 camera.position.set(0, 1.4, 1.2);
 camera.lookAt(0, 1.2, 0);
+
+// Initial debug-console placement (desktop camera). Re-placed against the
+// real XR camera on sessionstart via the pendingXrReplace path below.
+camera.updateMatrixWorld(true);
+debugConsole?.place(camera);
 
 // Desktop preview navigation: OrbitControls.
 //   LEFT button is intentionally disabled — it's reserved for the select
@@ -953,6 +985,54 @@ function placeAnchorInFrontOfUser() {
   repositionDataspaceMenu();
 }
 
+/**
+ * Place a freshly-loaded dataspace (vizAnchor content + the floating
+ * title) at eye level directly in front of the user, regardless of XR
+ * reference space.
+ *
+ * Why this exists separately from placeAnchorInFrontOfUser: the manifest
+ * render path used to hard-set `vizAnchor.position = (0, 1.3, 0)` and the
+ * title sat at a fixed world `y = 2.10`. On Quest's floor-relative space
+ * (camera y ≈ 1.6) that lands roughly at eye height. On Spectacles'
+ * head-relative space (camera y ≈ 0) the same world Y is 1.3–2.1 m
+ * ABOVE the user's head — "everything's 4-5 feet up, I have to look up
+ * to see it." Anchoring to the live camera (XR when presenting, desktop
+ * otherwise — the proven pattern from placeJoinPanelInFrontOfUser) puts
+ * it in front of the face on every platform. Content sits slightly below
+ * the eye line (natural downward gaze); the title rides just above it,
+ * still inside Spectacles' narrow vertical FOV.
+ */
+function placeDataspaceInFrontOfUser() {
+  const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  const pos = new THREE.Vector3();
+  xrCam.getWorldPosition(pos);
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.quaternion);
+  fwd.y = 0;
+  if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
+  fwd.normalize();
+
+  vizAnchor.position.set(
+    pos.x + fwd.x * 1.4,
+    pos.y - 0.20,                       // a touch below eye — comfortable gaze
+    pos.z + fwd.z * 1.4,
+  );
+  vizAnchor.lookAt(pos.x, vizAnchor.position.y, pos.z);
+
+  // Title rides just above the content, same heading, a hair closer so it
+  // doesn't clip the content's top edge. +0.20 above eye ≈ 8° up at 1.35 m
+  // — inside Spectacles' ~13° half-vertical FOV.
+  dataspaceTitle.position.set(
+    pos.x + fwd.x * 1.35,
+    pos.y + 0.20,
+    pos.z + fwd.z * 1.35,
+  );
+  dataspaceTitle.lookAt(pos.x, dataspaceTitle.position.y, pos.z);
+
+  anchorPlaced = true;
+  console.info(`[dataspace] placed in front of user (cam y=${pos.y.toFixed(2)})`);
+  repositionDataspaceMenu();
+}
+
 function repositionDataspaceMenu() {
   if (!dataspaceMenu || !dataspaceMenuAnchor) return;
   const menuPos = dataspaceMenu.getPosition?.() ?? 'bottom';
@@ -1343,11 +1423,16 @@ const joinPanel = createJoinPanel({
       // Real server flow: fetch manifest with token, then render via the controller.
       await manifestController.loadFromUrl(manifestUrl, token);
     }
-    // Wait 1s, then hide panel and show the viz
+    // Wait 1s, then hide panel and reveal the viz. Re-place at reveal
+    // time (not just on load) so the dataspace lands where the user is
+    // actually looking now — they may have turned during the 1 s, and
+    // on the mock-accept path no manifest loaded so onLoaded never ran.
     setTimeout(() => {
       hideJoinPanel();
-      vizAnchor.visible = true;
+      galleryRoot.visible = false;
       uiAnchor.visible = false;
+      vizAnchor.visible = true;
+      placeDataspaceInFrontOfUser();
       showDataspaceMenu();
     }, 1000);
   },
@@ -1376,13 +1461,18 @@ function registerJoinInteractables() {
 }
 registerJoinInteractables();
 
-function showJoinPanel() {
-  // Hide gallery and charts
-  vizAnchor.visible = false;
-  uiAnchor.visible = false;
-  stopMorphMode();
-
-  // Position the panel in front of the user
+/**
+ * Anchor the join panel ~1.2 m in front of, and ~5 cm below, the active
+ * camera's eye line. Split out of showJoinPanel so the XR-session-start
+ * handler can re-run it: on startup (no XR session yet) this uses the
+ * desktop camera at (0,1.4,1.2); when the user then enters XR on a
+ * headset whose reference space origin differs from the desktop
+ * camera's (Snap Spectacles uses a head-relative `local` space, not
+ * Quest's floor-relative `local-floor`), the panel would otherwise be
+ * left floating at the wrong height — the "sign-in panel way above my
+ * head" symptom. Re-placing against the live XR camera fixes it.
+ */
+function placeJoinPanelInFrontOfUser() {
   const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
   const pos = new THREE.Vector3();
   xrCam.getWorldPosition(pos);
@@ -1396,6 +1486,16 @@ function showJoinPanel() {
     pos.z + fwd.z * 1.2,
   );
   joinPanelAnchor.lookAt(pos.x, joinPanelAnchor.position.y, pos.z);
+  console.info(`[join] panel placed at y=${joinPanelAnchor.position.y.toFixed(2)} (cam y=${pos.y.toFixed(2)})`);
+}
+
+function showJoinPanel() {
+  // Hide gallery and charts
+  vizAnchor.visible = false;
+  uiAnchor.visible = false;
+  stopMorphMode();
+
+  placeJoinPanelInFrontOfUser();
 
   joinPanel.show();
   if (toolbar) toolbar.setActive('join');
@@ -1446,13 +1546,25 @@ const manifestController: ManifestController = createManifestController({
   privacyBanner,
   render: (result) => {
     renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
-    vizAnchor.position.set(0, 1.3, 0);
+    // Position is set in onLoaded via placeDataspaceInFrontOfUser() so it
+    // anchors to the live camera rather than a fixed world Y (which
+    // floated content above the user's head on Spectacles).
   },
   onLoaded: (manifest, result) => {
     console.log(`[manifest] Loaded ${result.marks.length} marks from "${result.name}"`);
     currentLoadedMarks = result.marks;
     setDataspaceTitle(manifest.displayTitle ?? formatFallbackTitle(manifest.name));
     createDataspaceMenu(manifest.hud?.items, manifest.hud?.position);
+
+    // A loaded dataspace owns the view: hide the demo gallery + demo
+    // marks so they don't render behind/around UC4 (the "demo gallery
+    // shouldn't show when I sign in to UC4" report). Position the
+    // dataspace at eye level in front of the user — not the old fixed
+    // (0,1.3,0) which sat overhead on Spectacles' head-relative space.
+    galleryRoot.visible = false;
+    uiAnchor.visible = false;
+    vizAnchor.visible = true;
+    placeDataspaceInFrontOfUser();
 
     // Initial activation. Cells now construct in the inactive state
     // (no polling, no auto-advance, no SOG fetch) and rely on this loop
@@ -1780,6 +1892,27 @@ renderer.setAnimationLoop((time, frame) => {
   for (const fx of nodeHoverFxs) fx.tick();
   ThreeMeshUI.update();
   updateDebugHud(dt);
+  // FPS accounting + throttled repaint only — the panel is world-fixed,
+  // not camera-tracked, so there's no per-frame repositioning.
+  debugConsole?.tick(dt);
+
+  // First valid XR frame after session start: re-anchor whatever UI the
+  // user is looking at to the live XR camera. Runs once per session.
+  if (pendingXrReplace && renderer.xr.isPresenting) {
+    pendingXrReplace = false;
+    const xrCam = renderer.xr.getCamera();
+    if (_joinPanelRef?.visible()) {
+      placeJoinPanelInFrontOfUser();
+    } else {
+      placeAnchorInFrontOfUser();
+    }
+    // Re-place the debug panel low + forward of the real XR head pose
+    // (Spectacles' reference space differs from the desktop camera it
+    // was first placed against).
+    debugConsole?.place(xrCam);
+    console.info('[xr] session started — re-placed active UI to XR camera');
+  }
+
   if (!anchorPlaced && !renderer.xr.isPresenting) {
     uiAnchor.position.set(0, 1.3, 0);
     uiAnchor.rotation.set(0, 0, 0);
