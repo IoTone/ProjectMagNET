@@ -19,7 +19,11 @@ interface MenuItemEntry {
 
 const BG_DEFAULT = 0x2a2520;
 const BG_HOVER = 0x3a3228;
-const ITEM_W = 0.12;
+// Width nudged from 0.12 → 0.16 so labels of 6–8 chars don't run into the
+// row edge (the prior layout made "Music" look squeezed compared to the
+// longer-labeled rows around it — the *box* was the same width, but the
+// label-anchor offset gave the visual impression of a narrower row).
+const ITEM_W = 0.16;
 const ITEM_H = 0.025;
 const ITEM_GAP = 0.004;
 
@@ -47,10 +51,17 @@ export class DataspaceMenu {
     let y = totalH / 2 - ITEM_H / 2;
 
     for (const item of items) {
+      // `contentDirection: 'row'` + 0-padding sidesteps three-mesh-ui's
+      // default auto-height behaviour — without these the Block was
+      // pinching its own height when the icon/label text was sparse,
+      // producing a noticeably shorter "Music" row.
       const block = new ThreeMeshUI.Block({
         width: ITEM_W,
         height: ITEM_H,
-        padding: 0.003,
+        padding: 0,
+        contentDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
         borderRadius: 0.005,
         backgroundColor: new THREE.Color(BG_DEFAULT),
         backgroundOpacity: 0.92,

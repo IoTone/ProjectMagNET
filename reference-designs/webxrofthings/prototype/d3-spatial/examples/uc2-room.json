@@ -1,6 +1,7 @@
 {
   "version": "1",
   "name": "kords-livingroom",
+  "displayTitle": "WebXR of Things  -  UC2  Home",
   "scaleTag": "room",
   "owner": "dkords@gmail.com",
   "acousticEnvironment": "indoor",

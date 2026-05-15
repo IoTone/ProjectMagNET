@@ -1,6 +1,7 @@
 {
   "version": "1",
   "name": "kords-personal-health",
+  "displayTitle": "WebXR of Things  -  UC1  Vitals",
   "scaleTag": "personal",
   "owner": "dkords@gmail.com",
   "acousticEnvironment": "indoor",

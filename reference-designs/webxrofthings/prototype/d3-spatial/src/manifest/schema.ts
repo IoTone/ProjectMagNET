@@ -19,6 +19,12 @@ export interface DataspaceManifest {
   /** Human-readable name of the dataspace. */
   name: string;
 
+  /**
+   * Title shown in the floating "WebXR of Things — UC# Name" banner above
+   * the scene. Falls back to a formatted version of `name` if omitted.
+   */
+  displayTitle?: string;
+
   /** Scale tag drives default placement radius from the reader. */
   scaleTag: 'personal' | 'room' | 'hall' | 'net';
 
@@ -180,6 +186,17 @@ export interface MarkSpec {
 
   /** Whether nodes support drag interaction (force graph). */
   draggable?: boolean;
+
+  /**
+   * Whether the mark is visible on first render. Default `true`.
+   *
+   * Set to `false` to author dataspaces where the user picks one of
+   * several available views via HUD actions (`show-only:<markId>`) — used
+   * by UC4 to switch between IMU / music / video / spatial photos
+   * without rendering all four at once. The mark's underlying cell still
+   * loads its data; only the THREE.Group visibility flag flips.
+   */
+  defaultVisible?: boolean;
 
   /** Optional reference to a USM service (matches `usm_services[].usm_key`). */
   serviceRef?: string;

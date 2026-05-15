@@ -33,8 +33,18 @@ export function renderManifestToScene(
     return { root, marks };
   }
 
-  const cols = Math.min(4, marks.length);
-  const rows = Math.ceil(marks.length / cols);
+  // "Stage mode" — when any mark is authored as defaultVisible:false the
+  // manifest is using show-only HUD switching (UC4-style: mutually
+  // exclusive content modes). In that case the horizontal-grid layout
+  // makes no sense — only one cell is ever visible, and the user wants
+  // it centred on the viewer's gaze. Stack every cell at the origin so
+  // whichever one is currently visible appears in the middle of the
+  // dataspace. Gallery-style manifests (all marks visible at once)
+  // keep the grid layout.
+  const stageMode = marks.some(m => m.defaultVisible === false);
+
+  const cols = stageMode ? 1 : Math.min(4, marks.length);
+  const rows = stageMode ? 1 : Math.ceil(marks.length / cols);
   const cellW = 0.38;
   const cellH = 0.30;
   const rowGap = 0.10;
@@ -42,13 +52,19 @@ export function renderManifestToScene(
   marks.forEach((mark, i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
-    const x = (col - (cols - 1) / 2) * cellW;
-    const y = ((rows - 1) / 2 - row) * (cellH + rowGap);
+    const x = stageMode ? 0 : (col - (cols - 1) / 2) * cellW;
+    const y = stageMode ? 0 : ((rows - 1) / 2 - row) * (cellH + rowGap);
 
     const cell = new THREE.Group();
     cell.name = `cell-${mark.id}`;
     cell.position.set(x, y, 0);
     cell.add(mark.group);
+
+    // Manifest can author marks that start hidden — used by UC4 to switch
+    // between mutually-exclusive content modes via `show-only:<id>` HUD
+    // actions. The cell stays in the scene graph so the HUD handler can
+    // flip visibility back on without reloading data.
+    if (mark.defaultVisible === false) cell.visible = false;
 
     // Title label
     const title = new Text();

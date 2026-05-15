@@ -1,6 +1,7 @@
 {
   "version": "1",
   "name": "uc3-poster-session",
+  "displayTitle": "WebXR of Things  -  UC3  Poster",
   "scaleTag": "room",
   "owner": "dkords@gmail.com",
   "acousticEnvironment": "indoor",

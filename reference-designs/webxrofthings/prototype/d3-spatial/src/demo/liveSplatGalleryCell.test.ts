@@ -117,6 +117,10 @@ describe('auto-advance timer', () => {
     const cell = buildLiveSplatGalleryCell({
       photos: PHOTOS, autoAdvanceMs: 1000, bindKeyboard: false,
     });
+    // Cells are now lazy — they don't kick off the auto-advance timer
+    // until something flips them on (applyShowOnly / initial-activation
+    // on manifest load). The test simulates that by calling setActive.
+    cell.setActive(true);
     expect(cell.currentIndex()).toBe(0);
     await vi.advanceTimersByTimeAsync(1000); expect(cell.currentIndex()).toBe(1);
     await vi.advanceTimersByTimeAsync(1000); expect(cell.currentIndex()).toBe(2);
@@ -137,6 +141,7 @@ describe('auto-advance timer', () => {
     const cell = buildLiveSplatGalleryCell({
       photos: PHOTOS, autoAdvanceMs: 1000, bindKeyboard: false,
     });
+    cell.setActive(true);
     // Half-way through the interval, manually advance — the timer should
     // restart from zero rather than fire 500ms later.
     await vi.advanceTimersByTimeAsync(500);
@@ -146,6 +151,32 @@ describe('auto-advance timer', () => {
     expect(cell.currentIndex()).toBe(1);   // hasn't ticked yet
     await vi.advanceTimersByTimeAsync(500);
     expect(cell.currentIndex()).toBe(2);   // now it has
+    cell.dispose();
+  });
+
+  it('inactive cell does not auto-advance even with autoAdvanceMs > 0', async () => {
+    // The new lazy lifecycle: a cell that was never setActive(true) must
+    // not touch its auto-advance timer. This is the load-bearing guarantee
+    // for "no SOG cycling while user is on a different mode" — without it,
+    // the Flight Info / Music / Video views were paying the GPU cost of
+    // a photo swap every 15 s in the background.
+    const cell = buildLiveSplatGalleryCell({
+      photos: PHOTOS, autoAdvanceMs: 1000, bindKeyboard: false,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(cell.currentIndex()).toBe(0);
+    cell.dispose();
+  });
+
+  it('setActive(false) halts auto-advance without disposing', async () => {
+    const cell = buildLiveSplatGalleryCell({
+      photos: PHOTOS, autoAdvanceMs: 1000, bindKeyboard: false,
+    });
+    cell.setActive(true);
+    await vi.advanceTimersByTimeAsync(1000); expect(cell.currentIndex()).toBe(1);
+    cell.setActive(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(cell.currentIndex()).toBe(1);   // frozen at the moment of deactivation
     cell.dispose();
   });
 });

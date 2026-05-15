@@ -1,6 +1,7 @@
 {
   "version": "1",
   "name": "uc4-airplane",
+  "displayTitle": "WebXR of Things  -  UC4  Airplane",
   "scaleTag": "vehicle",
   "owner": "dkords@gmail.com",
   "acousticEnvironment": "vehicle",
@@ -8,7 +9,7 @@
   "udm_version": "1.0",
   "udm_doc_version": "0.1.0",
 
-  "_comment": "UC4 airplane dataspace. P5a wires the IMU sim + airplane viz; P5b adds spatial-audio music; P5c adds HLS streaming video plane; P5d adds the SOG spatial-photo gallery (3 photos).",
+  "_comment": "UC4 airplane dataspace — simulated in-flight experience. Four mutually-exclusive content modes selectable from the dataspace HUD: IMU attitude / music / video / spatial photos. Only one renders at a time; the others stay loaded in the scene graph but hidden + paused.",
 
   "udm_devices": [
     {
@@ -38,7 +39,7 @@
       "udm_capabilities": ["procedural-music", "positional-audio", "loop"],
       "udm_services_link": [],
       "udm_tags":         ["vehicle", "audio", "simulated"],
-      "udm_spatial_anchor_x": { "x": -0.45, "y": 0.95, "z": -0.4 }
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.0, "z": -0.8 }
     },
     {
       "udm_key":   "cabin-display-001",
@@ -57,16 +58,16 @@
     {
       "udm_key":   "cabin-spatial-gallery-001",
       "udm_uuid":  "urn:device:spatial-photo-gallery:cabin-001",
-      "_comment":  "Spatial-photo gallery: a Gaussian-splat viewer that cycles through three .sog scenes (sourced from ../../ml-sharp/samples and copied into public/spatial/). Treat as a 'frame' device: the manifest configures which photos it cycles through.",
+      "_comment":  "Spatial-photo gallery: Gaussian-splat viewer cycling through .compressed.ply files (converted from source .sog via `npm run convert:spatial`). Sourced from ../../ml-sharp/samples and copied into public/spatial/. Treat as a 'frame' device: the manifest configures which photos it cycles through.",
       "udm_model_name":   "Spatial Photo Frame (3D Gaussian)",
       "udm_vendor":       "MagNET (sim)",
       "udm_mktg_name":    "Cabin Spatial Gallery",
       "udm_type":         "display",
       "udm_class":        ["display", "gaussian-splat", "spatial-photo"],
-      "udm_capabilities": ["sog-format", "ply-format", "auto-advance", "manual-navigation"],
+      "udm_capabilities": ["compressed-ply-format", "auto-advance", "manual-navigation"],
       "udm_services_link": [],
       "udm_tags":         ["vehicle", "photo", "spatial"],
-      "udm_spatial_anchor_x": { "x": 0.7, "y": 1.2, "z": -0.8 }
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.2, "z": -1.0 }
     }
   ],
 
@@ -111,6 +112,8 @@
     }
   ],
 
+  "_marks_note": "All four marks load but only one renders at a time — the dataspace HUD below switches via `show-only:<id>` actions. IMU is the default visible mode on entry; the others start hidden + (where applicable) paused.",
+
   "marks": [
     {
       "id": "airplane-imu",
@@ -130,7 +133,8 @@
       },
       "deviceRef": "airplane-imu-001",
       "serviceRef": "imu-snapshot",
-      "hoverable": true
+      "hoverable": true,
+      "defaultVisible": true
     },
     {
       "id": "cabin-boombox",
@@ -139,13 +143,15 @@
       "subtitle": "procedural music · spatialised",
       "data": { "source": "inline" },
       "config": {
-        "size": 0.08,
+        "_comment_size": "0.115 = 15% larger than the earlier 0.10 default — user feedback was the boombox felt too small on the centered stage.",
+        "size": 0.115,
         "refDistance": 0.6,
         "gain": 0.6,
-        "autoplay": true
+        "autoplay": false
       },
       "deviceRef": "cabin-boombox-001",
-      "hoverable": true
+      "hoverable": true,
+      "defaultVisible": false
     },
     {
       "id": "cabin-display",
@@ -161,31 +167,65 @@
         "type": "hls",
         "width": 0.6,
         "aspectRatio": 1.7777,
-        "autoplay": true,
-        "muted": true
+        "autoplay": false,
+        "muted": false
       },
       "deviceRef": "cabin-display-001",
       "serviceRef": "cabin-stream",
-      "hoverable": true
+      "hoverable": true,
+      "defaultVisible": false
     },
     {
       "id": "cabin-spatial-gallery",
       "type": "splat-gallery",
-      "title": "Spatial photo gallery",
-      "subtitle": "3D Gaussian splats · ArrowL / ArrowR to navigate",
+      "title": "Travel Destinations",
+      "subtitle": "3D Gaussian splats  -  ArrowL / ArrowR to navigate",
       "data": { "source": "inline" },
       "config": {
         "photos": [
-          { "url": "/spatial/medaka_20260112_221836000_iOS.compressed.ply", "title": "Medaka" },
-          { "url": "/spatial/_DSC1624.compressed.ply",                     "title": "DSC 1624" },
-          { "url": "/spatial/_DSC8994.compressed.ply",                     "title": "DSC 8994" }
+          {
+            "url": "/spatial/_DSC1624.compressed.ply",
+            "title": "DSC 1624",
+            "location": "Kyoto, Japan",
+            "description": "Walking through a moss-covered temple garden in late autumn. The stone path winds between cedar trunks centuries older than the shrine itself, with a small koi pond just out of frame to the right. Captured with a hand-held photogrammetry sweep at golden hour."
+          },
+          {
+            "url": "/spatial/_DSC8994.compressed.ply",
+            "title": "DSC 8994",
+            "location": "Banff National Park, Canada",
+            "description": "A glacial-fed lake at first light, the surface a perfect mirror of the limestone ridge above. A pair of canoes are pulled up on the gravel shore. The mountain reflection makes the splat feel taller than it is — the algorithm captured both above and below the waterline."
+          },
+          {
+            "url": "/spatial/_DSC2913.compressed.ply",
+            "title": "DSC 2913",
+            "location": "Marrakech, Morocco",
+            "description": "Late-afternoon souk light filters through woven palm-frond awnings onto stacks of spice cones — saffron yellow, paprika red, dried-rose pink. The narrow passage and overhead awning make the splat reconstruction read almost like a tunnel, with the spice colours saturating warmly along both walls."
+          }
         ],
-        "autoAdvanceMs": 15000,
+        "autoAdvanceMs": 30000,
         "splatY": 0,
-        "splatAlphaRemovalThreshold": 5
+        "_comment_alpha_threshold": "Climbed 5 → 20 → 35 → 60 as Photos-mode stayed fragment-bound. [perf] showed 2.33M tris/frame even at 35 — roughly ~1.1M splats per scene, which exceeds Quest 3's per-frame triangle budget at 90 Hz. 60 keeps only splats with alpha ≥ ~24% (60/255), expected to drop another 30-40% of splats. Visible quality cost: faint translucent splats (mist, hair, foliage edges) thin out; solid-surface fidelity unchanged. If Quest still struggles after this, the next lever is splatRenderMode:TWO_D in liveSplatGalleryCell.ts (2D billboards, 2-3× faster fragment shading, loses parallax-correct depth — fine for a stationary photo gallery). The clean-quality path is re-converting source .ply with splat-transform decimation flags.",
+        "splatAlphaRemovalThreshold": 60,
+        "scenePosition": [0, 0, 0],
+        "_comment_rotation": "Quaternion [-1, 0, 0, 0] applies a 180° flip around X (horizontal mirror as viewed from the front). Per user feedback the SOGs were arriving mirrored.",
+        "sceneRotation": [-1, 0, 0, 0],
+        "sceneScale":    [0.6, 0.6, 0.6]
       },
       "deviceRef": "cabin-spatial-gallery-001",
-      "hoverable": true
+      "hoverable": true,
+      "defaultVisible": false
     }
-  ]
+  ],
+
+  "hud": {
+    "position": "bottom",
+    "items": [
+      { "id": "uc4-imu",     "label": "Flight Info", "icon": "+", "action": "show-only:airplane-imu" },
+      { "id": "uc4-music",   "label": "Music",    "icon": ">", "action": "show-only:cabin-boombox" },
+      { "id": "uc4-video",   "label": "Video",    "icon": "*", "action": "show-only:cabin-display" },
+      { "id": "uc4-photos",  "label": "Photos",   "icon": ".", "action": "show-only:cabin-spatial-gallery" },
+      { "id": "recenter",    "label": "Recenter", "icon": "@", "action": "recenter" },
+      { "id": "leave",       "label": "Leave",    "icon": "x", "action": "leave-dataspace" }
+    ]
+  }
 }

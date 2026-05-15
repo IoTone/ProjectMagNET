@@ -38,6 +38,7 @@ function makeRecordingBuilder(opts: { withRefresh?: boolean } = {}): RecordingBu
         drillable: false,
         hoverable: false,
         draggable: false,
+        defaultVisible: true,
       };
       if (withRefresh) {
         mark.refresh = (s: MarkSpec) => {

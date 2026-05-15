@@ -21,6 +21,10 @@ export interface LoadedMark {
   drillable: boolean;
   hoverable: boolean;
   draggable: boolean;
+  /** From `MarkSpec.defaultVisible`; default true. renderManifest toggles
+   *  the cell's `visible` flag accordingly so the HUD handler can flip
+   *  it without re-loading. */
+  defaultVisible: boolean;
   /**
    * Optional updater. The loader calls this on the cadence specified by the
    * mark's `data.refreshInterval` (seconds). The spec passed in already has
@@ -126,7 +130,30 @@ export async function loadManifest(manifest: DataspaceManifest, token?: string):
     }
   }
 
-  const dispose = () => { for (const h of intervals) clearInterval(h); intervals.length = 0; };
+  const dispose = () => {
+    // Manifest-level refresh intervals (set up below for URL-data marks).
+    for (const h of intervals) clearInterval(h);
+    intervals.length = 0;
+
+    // Walk every mark and ask its viz to tear itself down. Cells own work
+    // the manifest layer can't see — splat-gallery has its own
+    // setInterval(autoTimer) for photo cycling, liveImuCell drives its
+    // own self-rescheduling poller, the spatial-audio cell holds a
+    // looping AudioBufferSourceNode, the video panel owns an HLS
+    // instance. Without this loop, every manifest replace (Vite HMR
+    // during dev, leave-rejoin in XR) leaves the previous cells'
+    // background work running and accumulates zombie timers — observed
+    // as "SOG reloads every 5–10 seconds" because N stacked autoTimers
+    // each fire at their own 15 s offset.
+    for (const m of marks) {
+      const v = m.viz as { dispose?: () => void } | null;
+      if (v && typeof v.dispose === 'function') {
+        try { v.dispose(); }
+        catch (e) { console.warn(`[manifest] dispose failed for mark "${m.id}":`, e); }
+      }
+    }
+    marks.length = 0;
+  };
 
   return {
     name: manifest.name,

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import ThreeMeshUI from 'three-mesh-ui';
 import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import Stats from 'three/examples/jsm/libs/stats.module.js';
 import { XRRig } from './xrRig';
 import { Text } from 'troika-three-text';
 import { buildDemoScene } from './demo/marks';
@@ -72,6 +73,27 @@ renderer.xr.addEventListener('sessionend', () => {
   renderer.setClearColor(0x0b1220, 1);
 });
 document.body.appendChild(renderer.domElement);
+
+// ─── Perf telemetry ──────────────────────────────────────────────────
+//
+// Stats panel (FPS / MS / MB) plus a 1 Hz dump of `renderer.info` to the
+// console — both gated to desktop view since the panel is HTML overlay
+// and not visible inside an XR headset. For in-headset perf, attach via
+// `chrome://inspect` (Quest) and read the same console output.
+//
+// Click the panel to cycle between FPS, MS (frame time), and MB (heap).
+// `?perf=0` in the URL turns it off for clean screenshots / smoke runs.
+const perfEnabled = new URLSearchParams(window.location.search).get('perf') !== '0';
+let stats: Stats | null = null;
+if (perfEnabled) {
+  stats = new Stats();
+  stats.dom.style.position = 'absolute';
+  stats.dom.style.top = '8px';
+  stats.dom.style.left = '8px';
+  stats.dom.style.zIndex = '9999';
+  document.body.appendChild(stats.dom);
+  console.log('[perf] stats panel enabled (`?perf=0` to disable)');
+}
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 100);
@@ -152,6 +174,49 @@ uiAnchor.add(demoRoot);
 const vizAnchor = new THREE.Group();
 vizAnchor.name = 'vizAnchor';
 scene.add(vizAnchor);
+
+/**
+ * Floating "WebXR of Things — UC# Name" title above whatever scene is
+ * active. Manifest-driven dataspaces fill it from `manifest.displayTitle`
+ * (falling back to a formatted version of `manifest.name`); cleared when
+ * the dataspace is left so the gallery doesn't inherit a stale UC name.
+ *
+ * Anchored to the scene (not to vizAnchor) so it survives gallery /
+ * manifest mode swaps without re-attaching.
+ */
+const dataspaceTitle = new Text();
+dataspaceTitle.text = '';
+dataspaceTitle.fontSize = 0.040;
+dataspaceTitle.color = TEXT.primary;
+dataspaceTitle.anchorX = 'center';
+dataspaceTitle.anchorY = 'bottom';
+dataspaceTitle.position.set(0, 2.10, -1.2);
+dataspaceTitle.sync();
+dataspaceTitle.visible = false;
+scene.add(dataspaceTitle);
+
+/** Format the manifest's `name` into a Title-Case display string used as
+ *  the fallback when `displayTitle` is absent. Strips common UC prefixes
+ *  ("uc4-airplane" → "WebXR of Things — UC4 · Airplane"). */
+function formatFallbackTitle(name: string): string {
+  const m = /^uc(\d+)[-_](.+)$/i.exec(name);
+  if (m) {
+    const rest = m[2]!.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return `WebXR of Things  -  UC${m[1]}  ${rest}`;
+  }
+  // No UC prefix — just present the name verbatim under the same banner.
+  return `WebXR of Things  -  ${name}`;
+}
+
+function setDataspaceTitle(text: string | null) {
+  if (!text) {
+    dataspaceTitle.visible = false;
+    return;
+  }
+  dataspaceTitle.text = text;
+  dataspaceTitle.sync();
+  dataspaceTitle.visible = true;
+}
 const { root: galleryRoot, items: galleryItems, force: forceViz, tree: treeViz, treemap: treemapViz, sunburst: sunburstViz, pack: packViz, ridgeline: ridgelineViz, sankey: sankeyViz, streamgraph: streamgraphViz, treeCell, treemapCell, sunburstCell, packCell, tidyTree: tidyTreeViz, tangledTree: tangledTreeViz, parallel: parallelViz, edgeBundle: edgeBundleViz, morphDemo: morphDemoViz, videoPanel: videoPanelViz, liveHr: liveHrViz, liveBr: liveBrViz, livePhases: livePhasesViz, liveTargets: liveTargetsViz } = buildVizGallery();
 
 // Stop the polling intervals inside live vitals cells AND any active
@@ -1372,6 +1437,11 @@ const privacyBanner: PrivacyBannerController = createPrivacyBannerController({
 });
 
 // --- Active manifest result (so we can stop its refresh intervals on leave/replace) ---
+// Stash the currently-loaded marks so HUD actions can find them by id.
+// UC4 uses `show-only:<markId>` to flip between content modes; the lookup
+// has to happen lazily because mark identity changes on every manifest load.
+let currentLoadedMarks: import('./manifest/loader').LoadedMark[] = [];
+
 const manifestController: ManifestController = createManifestController({
   privacyBanner,
   render: (result) => {
@@ -1380,7 +1450,23 @@ const manifestController: ManifestController = createManifestController({
   },
   onLoaded: (manifest, result) => {
     console.log(`[manifest] Loaded ${result.marks.length} marks from "${result.name}"`);
+    currentLoadedMarks = result.marks;
+    setDataspaceTitle(manifest.displayTitle ?? formatFallbackTitle(manifest.name));
     createDataspaceMenu(manifest.hud?.items, manifest.hud?.position);
+
+    // Initial activation. Cells now construct in the inactive state
+    // (no polling, no auto-advance, no SOG fetch) and rely on this loop
+    // to flip on whichever marks the manifest wants visible by default.
+    // For UC1/2/3-style gallery manifests, every mark has defaultVisible
+    // !== false so all of them become active. For UC4-style show-only
+    // manifests, only the mark with defaultVisible:true (airplane-imu)
+    // wakes up; the rest stay dormant until the user navigates to them.
+    for (const mark of result.marks) {
+      const v = mark.viz as { setActive?: (a: boolean) => void } | null;
+      if (v && typeof v.setActive === 'function') {
+        v.setActive(mark.defaultVisible !== false);
+      }
+    }
   },
   onError: (_e, source) => {
     if (source === 'url') {
@@ -1410,6 +1496,8 @@ function handleDataspaceMenuAction(actionId: string) {
       hideDataspaceMenu();
       disposeCurrentManifest();
       privacyBanner?.hide();
+      setDataspaceTitle(null);
+      currentLoadedMarks = [];
       showJoinPanel();
       break;
     case 'toggle-ambient':
@@ -1428,18 +1516,82 @@ function handleDataspaceMenuAction(actionId: string) {
       privacyBanner.show();   // controller is a no-op if no manifest has been attached
       break;
     default:
+      if (actionId.startsWith('show-only:')) {
+        applyShowOnly(actionId.slice('show-only:'.length));
+        break;
+      }
       console.warn(`[dataspace-menu] unhandled custom action: ${actionId}`);
       break;
   }
 }
 
+/**
+ * UC4-style mutually-exclusive content switch. Hides every cell except
+ * the one whose mark id matches `targetId`, plus pauses any audio/video
+ * cells that aren't the target so the user only ever hears/sees the
+ * mode they've selected. The cells stay loaded — only the THREE.Group
+ * cell wrapper's visibility flips, plus a play/pause toggle for sound
+ * and HLS, so switching back is instant.
+ *
+ * The cell wrapper that renderManifestToScene attaches is named
+ * `cell-<markId>`; that's how we find it for the visibility toggle.
+ */
+function applyShowOnly(targetId: string): void {
+  if (currentLoadedMarks.length === 0) return;
+  let found = false;
+  for (const mark of currentLoadedMarks) {
+    const cell = mark.group.parent;     // the cell wrapper added by renderManifest
+    const isTarget = mark.id === targetId;
+    if (cell) cell.visible = isTarget;
+    if (isTarget) found = true;
+    // Pause / resume cells that hold playback state. The runtime shapes
+    // come from liveSpatialAudioCell + viz/videoPanel + liveImuCell +
+    // liveSplatGalleryCell. Cells expose any combination of:
+    //   - play() / pause()      audio + video — already there
+    //   - setActive(boolean)    cells with async work that must stop when
+    //                           offstage (IMU poller, splat auto-advance)
+    // Both methods are called when available — three.js's `visible=false`
+    // skips RENDERING, but it does nothing about setInterval/fetch loops
+    // running in the background. The setActive call is what actually
+    // stops the splat-gallery from cycling photos while the user is on
+    // Flight Info, and stops the IMU from polling /api/v1/sensor/imu
+    // when the user is on Music / Video / Photos.
+    const v = mark.viz as {
+      play?: () => unknown;
+      pause?: () => void;
+      setActive?: (active: boolean) => void;
+    } | null;
+    if (v) {
+      if (typeof v.setActive === 'function') v.setActive(isTarget);
+      if (typeof v.pause === 'function' && typeof v.play === 'function') {
+        if (isTarget) void v.play(); else v.pause();
+      }
+    }
+  }
+  if (!found) {
+    console.warn(`[dataspace-menu] show-only: no mark with id "${targetId}"`);
+  }
+}
+
 function createDataspaceMenu(items?: import('./manifest/schema').DataspaceHudItem[], position?: 'bottom' | 'side' | 'wrist') {
-  // Clean up existing menu registrations
+  // Tear down the existing menu before creating its replacement:
+  // unregister Interact handlers AND detach the previous menu's group
+  // from the scene. Earlier we only did the Interact cleanup, so the
+  // initial DEFAULT_HUD_ITEMS menu (Privacy / Refresh / Recenter / Leave)
+  // stayed attached to dataspaceMenuAnchor when a manifest's HUD landed
+  // on top, producing the doubled-up button stack in the UC4 screenshot.
   if (dataspaceMenu) {
     for (const { id } of dataspaceMenu.getBlocks()) {
       interact.remove(id);
     }
+    dataspaceMenuAnchor.remove(dataspaceMenu.group);
   }
+  // Also clear any wrist HandMenu hooked into the prior menu so a
+  // freshly-loaded manifest doesn't keep palm-up-tracking the stale one.
+  // HandMenu has no internal subscriptions to clean up (its `update` is
+  // polled from the render loop, which null-checks), so dropping the
+  // reference is enough.
+  handMenu = null;
 
   const menuItems = items ?? DEFAULT_HUD_ITEMS;
   dataspaceMenu = new DataspaceMenu({
@@ -1538,7 +1690,9 @@ if (isManifestMode && urlManifest) {
 }
 
 let lastT = 0;
+let lastPerfLog = 0;
 renderer.setAnimationLoop((time, frame) => {
+  stats?.begin();
   const dt = lastT ? (time - lastT) / 1000 : 0;
   lastT = time;
   rig.update(frame);
@@ -1626,4 +1780,22 @@ renderer.setAnimationLoop((time, frame) => {
     uiAnchor.rotation.set(0, 0, 0);
   }
   renderer.render(scene, camera);
+
+  // 1 Hz draw-call / memory dump. Keep this format stable — it's the
+  // ground truth for perf comparisons across UC1/2/3/4. `calls` is the
+  // headline number Notblox cites (target < 200 for web). `triangles`
+  // surfaces Gaussian-splat blowups (each splat in mkkellogg's mesh is
+  // 2 tris; an 18 MB splat ≈ ~300k tris). `textures` + `geometries`
+  // catch leaks across mode swaps.
+  if (perfEnabled && time - lastPerfLog > 1000) {
+    lastPerfLog = time;
+    const r = renderer.info.render;
+    const m = renderer.info.memory;
+    console.log(
+      `[perf] calls=${r.calls} tris=${r.triangles} ` +
+      `points=${r.points} lines=${r.lines} | ` +
+      `tex=${m.textures} geom=${m.geometries}`,
+    );
+  }
+  stats?.end();
 });

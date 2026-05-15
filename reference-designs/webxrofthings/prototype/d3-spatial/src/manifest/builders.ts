@@ -80,6 +80,7 @@ function makeMark(spec: MarkSpec, group: THREE.Group, viz: unknown, defaults?: P
     drillable: spec.drillable ?? defaults?.drillable ?? false,
     hoverable: spec.hoverable ?? defaults?.hoverable ?? false,
     draggable: spec.draggable ?? defaults?.draggable ?? false,
+    defaultVisible: spec.defaultVisible ?? defaults?.defaultVisible ?? true,
   };
 }
 
@@ -420,12 +421,12 @@ export function registerAllBuilders() {
   registerMarkBuilder('spatial-audio', (spec) => {
     const cfg = (spec.config ?? {}) as Record<string, unknown>;
     const cell = buildLiveSpatialAudioCell({
-      size:        (cfg.size        as number)  ?? 0.08,
-      bodyColor:   (cfg.bodyColor   as number)  ?? TEXT.muted,
-      accentColor: (cfg.accentColor as number)  ?? TEXT.primary,
+      size:        (cfg.size        as number)  ?? 0.10,
+      accentColor: (cfg.accentColor as number)  ?? 0x4ec5ff,
       refDistance: (cfg.refDistance as number)  ?? 0.6,
       gain:        (cfg.gain        as number)  ?? 0.7,
-      autoplay:    (cfg.autoplay    as boolean) ?? true,
+      autoplay:    (cfg.autoplay    as boolean) ?? false,
+      theme:       cfg.theme as 'ambient' | 'downtempo' | 'chillout' | 'lofi' | undefined,
     });
     return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
   });
@@ -458,6 +459,9 @@ export function registerAllBuilders() {
       bindKeyboard:  (cfg.bindKeyboard  as boolean) ?? true,
       splatAlphaRemovalThreshold:
         (cfg.splatAlphaRemovalThreshold as number) ?? 5,
+      scenePosition: cfg.scenePosition as [number, number, number] | undefined,
+      sceneRotation: cfg.sceneRotation as [number, number, number, number] | undefined,
+      sceneScale:    cfg.sceneScale    as [number, number, number] | undefined,
     });
     return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
   });
