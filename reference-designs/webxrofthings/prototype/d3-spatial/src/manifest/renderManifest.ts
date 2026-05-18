@@ -16,6 +16,15 @@ import { TEXT } from '../ui/palette';
 export interface ManifestSceneResult {
   root: THREE.Group;
   marks: LoadedMark[];
+  /**
+   * Tear the rendered scene down: detach `root` from its parent and
+   * unregister every Interact item this render added. MUST be called
+   * before rendering a replacement manifest and on leave-dataspace —
+   * without it the old root + its interactables linger, so a
+   * leave→rejoin stacked a second copy of every mark ("Room controls"
+   * twice, content piled on the controls) and broke rejoin.
+   */
+  dispose(): void;
 }
 
 export function renderManifestToScene(
@@ -27,10 +36,23 @@ export function renderManifestToScene(
   const root = new THREE.Group();
   root.name = `manifest-${loadResult.name}`;
 
+  // Every Interact id this render registers — collected so dispose()
+  // can unregister exactly these (and nothing else) on teardown.
+  const registeredIds: string[] = [];
+  const reg = (h: Parameters<Interact['add']>[0]) => {
+    registeredIds.push(h.id);
+    interact.add(h);
+  };
+  const makeDispose = () => () => {
+    if (root.parent) root.parent.remove(root);
+    for (const id of registeredIds) interact.remove(id);
+    registeredIds.length = 0;
+  };
+
   const marks = loadResult.marks;
   if (marks.length === 0) {
     parent.add(root);
-    return { root, marks };
+    return { root, marks, dispose: makeDispose() };
   }
 
   // "Stage mode" — when any mark is authored as defaultVisible:false the
@@ -43,21 +65,55 @@ export function renderManifestToScene(
   // keep the grid layout.
   const stageMode = marks.some(m => m.defaultVisible === false);
 
-  const cols = stageMode ? 1 : Math.min(4, marks.length);
-  const rows = stageMode ? 1 : Math.ceil(marks.length / cols);
+  // Actuator panels are large (~0.70 tall) and own their own chrome —
+  // they don't belong in the small sensor grid (they swallowed the
+  // neighbouring cells, the "collapsed on top of the controls" report).
+  // Lay the sensor/data marks out in the grid, then drop any
+  // actuator-panel mark into a dedicated band BELOW the grid so the
+  // simulated data sits above the controls in Y, as requested.
+  const gridMarks = marks.filter(m => m.type !== 'actuator-panel');
+
   const cellW = 0.38;
   const cellH = 0.30;
   const rowGap = 0.10;
+  const rowPitch = cellH + rowGap;
+  const cols = stageMode ? 1 : Math.min(4, Math.max(1, gridMarks.length));
+  const rows = stageMode ? 1 : Math.ceil(Math.max(1, gridMarks.length) / cols);
 
-  marks.forEach((mark, i) => {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const x = stageMode ? 0 : (col - (cols - 1) / 2) * cellW;
-    const y = stageMode ? 0 : ((rows - 1) / 2 - row) * (cellH + rowGap);
+  // Actuator panel placement: to the LEFT of the sensor grid, angled
+  // ~22° inward to face the user. Previously it sat *below* the grid
+  // which (a) forced a big grid lift that pushed everything up under
+  // the title, and (b) parked it right where the camera-locked debug
+  // panel lives. Side placement keeps the simulated data grid centred
+  // (no lift) and clear of the debug panel.
+  const PANEL_HALF_W = 0.34;          // ~half the actuator panel's width + pad
+  const SIDE_GAP = 0.06;
+  const ACTUATOR_ANGLE = THREE.MathUtils.degToRad(22);   // toe-in toward the user
+  const gridLeftEdge = (0 - (cols - 1) / 2) * cellW - cellW / 2;
+  const panelX = gridLeftEdge - SIDE_GAP - PANEL_HALF_W;
+
+  marks.forEach((mark) => {
+    const isPanel = mark.type === 'actuator-panel';
+    let x: number, y: number;
+    if (stageMode) {
+      x = 0; y = 0;
+    } else if (isPanel) {
+      x = panelX; y = 0;            // left of the grid, vertically centred
+    } else {
+      const gi = gridMarks.indexOf(mark);
+      const col = gi % cols;
+      const row = Math.floor(gi / cols);
+      x = (col - (cols - 1) / 2) * cellW;
+      y = ((rows - 1) / 2 - row) * rowPitch;   // centred grid — no lift
+    }
 
     const cell = new THREE.Group();
     cell.name = `cell-${mark.id}`;
     cell.position.set(x, y, 0);
+    // Toe the side-mounted actuator panel in toward the viewer so it
+    // isn't edge-on. Sign chosen so a left-of-centre panel rotates its
+    // face back toward a centred user; flip the sign if it reads wrong.
+    if (isPanel && !stageMode) cell.rotation.y = ACTUATOR_ANGLE;
     cell.add(mark.group);
 
     // Manifest can author marks that start hidden — used by UC4 to switch
@@ -66,28 +122,32 @@ export function renderManifestToScene(
     // flip visibility back on without reloading data.
     if (mark.defaultVisible === false) cell.visible = false;
 
-    // Title label
-    const title = new Text();
-    title.text = mark.title;
-    title.fontSize = 0.018;
-    title.color = TEXT.primary;
-    title.anchorX = 'center';
-    title.anchorY = 'bottom';
-    title.position.set(0, cellH / 2 + 0.015, 0.03);
-    title.sync();
-    cell.add(title);
+    // Title / subtitle — skipped for actuator-panel: that cell draws its
+    // own title at the correct spot for its tall panel, and the generic
+    // one (placed at cellH/2 above centre) would float mid-panel and
+    // read as a duplicate ("Room controls" twice).
+    if (!isPanel) {
+      const title = new Text();
+      title.text = mark.title;
+      title.fontSize = 0.018;
+      title.color = TEXT.primary;
+      title.anchorX = 'center';
+      title.anchorY = 'bottom';
+      title.position.set(0, cellH / 2 + 0.015, 0.03);
+      title.sync();
+      cell.add(title);
 
-    // Subtitle label
-    if (mark.subtitle) {
-      const sub = new Text();
-      sub.text = mark.subtitle;
-      sub.fontSize = 0.011;
-      sub.color = TEXT.muted;
-      sub.anchorX = 'center';
-      sub.anchorY = 'top';
-      sub.position.set(0, -cellH / 2 - 0.015, 0.03);
-      sub.sync();
-      cell.add(sub);
+      if (mark.subtitle) {
+        const sub = new Text();
+        sub.text = mark.subtitle;
+        sub.fontSize = 0.011;
+        sub.color = TEXT.muted;
+        sub.anchorX = 'center';
+        sub.anchorY = 'top';
+        sub.position.set(0, -cellH / 2 - 0.015, 0.03);
+        sub.sync();
+        cell.add(sub);
+      }
     }
 
     root.add(cell);
@@ -99,7 +159,7 @@ export function renderManifestToScene(
 
       // Force graphs have nodeMesh
       if (viz.nodeMesh) {
-        interact.add({
+        reg({
           id: `manifest:${mark.id}:nodes`,
           object: viz.nodeMesh,
           supportsInstances: true,
@@ -138,7 +198,7 @@ export function renderManifestToScene(
       // hover callbacks are no-ops — the Hoverable interface requires
       // them but this cell doesn't currently surface hover feedback.
       if (viz.clickTarget && typeof viz.onSelect === 'function') {
-        interact.add({
+        reg({
           id: `manifest:${mark.id}:select`,
           object: viz.clickTarget,
           onHoverIn:  () => {},
@@ -161,7 +221,7 @@ export function renderManifestToScene(
           onHoverIn?: () => void;
           onHoverOut?: () => void;
         }>) {
-          interact.add({
+          reg({
             id: `manifest:${mark.id}:${e.id}`,
             object: e.object,
             onHoverIn: e.onHoverIn ?? (() => { (e.object as any).set?.({ backgroundOpacity: 1.0 }); }),
@@ -173,7 +233,7 @@ export function renderManifestToScene(
 
       // Hierarchy marks with group-level hover (sunburst, pack)
       if (viz.group && viz.getSegmentWorldPosition) {
-        interact.add({
+        reg({
           id: `manifest:${mark.id}:segments`,
           object: viz.group,
           onHoverIn: (ctx) => {
@@ -194,5 +254,5 @@ export function renderManifestToScene(
   });
 
   parent.add(root);
-  return { root, marks };
+  return { root, marks, dispose: makeDispose() };
 }

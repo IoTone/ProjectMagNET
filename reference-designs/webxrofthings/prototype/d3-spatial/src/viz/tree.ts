@@ -144,7 +144,8 @@ export function buildTree(root: HNode, opts: TreeOptions = {}): TreeViz {
       const p = positions[i]!;
       const txt = new Text();
       txt.text = n.data.name;
-      txt.fontSize = 0.009;
+      // 0.009 was unreadable in-headset (the UC2 "Topology" report).
+      txt.fontSize = 0.017;
       txt.color = TEXT.body;
       txt.anchorX = 'left';
       txt.anchorY = 'middle';

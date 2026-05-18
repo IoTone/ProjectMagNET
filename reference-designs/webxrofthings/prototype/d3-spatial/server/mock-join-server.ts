@@ -288,7 +288,11 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
 
   function aqiAt(t: number): number {
     const m = t / 60_000;
-    return 50 + 25 * Math.sin(m / 30) + 10 * Math.sin(m / 7.5);
+    // Slow trend + a few faster terms so a 30 s refresh visibly moves the
+    // line (the "make the fake data semi-dynamic" ask). Stays within the
+    // chart's 0–150 band.
+    return 50 + 25 * Math.sin(m / 30) + 10 * Math.sin(m / 7.5)
+              + 8 * Math.sin(m / 1.5) + 4 * Math.sin(m * 1.3);
   }
   function aqiCategory(aqi: number): string {
     if (aqi < 50) return 'good';
@@ -316,7 +320,10 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
   function hpaAt(t: number): number {
     // Atmospheric pressure: ~1009-1021 hPa range, slow weather-like drift.
     const m = t / 60_000;
-    return 1015 + 5 * Math.sin(m / 60) + Math.sin(m / 7);
+    // Weather-slow base + gentle faster wobble so it isn't a flat line
+    // between refreshes. Stays within the chart's 1005–1025 band.
+    return 1015 + 5 * Math.sin(m / 60) + Math.sin(m / 7)
+                + 0.8 * Math.sin(m / 2.5) + 0.3 * Math.sin(m * 0.9);
   }
   app.get('/api/v1/sensor/barometer/history', (_req, res) => {
     const now = Date.now();
@@ -339,7 +346,10 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
   function pollenAt(t: number): number {
     // Daily cycle — pollen peaks mid-morning. Range ~1-7 (clipped at 0).
     const m = t / 60_000;
-    return Math.max(0, 4 + 3 * Math.sin(m / 120) + 0.5 * Math.sin(m * 1.7));
+    // Daily cycle + a faster term so the trace drifts each refresh.
+    // Clipped at 0; stays within the chart's 0–12 band.
+    return Math.max(0, 4 + 3 * Math.sin(m / 120) + 0.7 * Math.sin(m / 2)
+                          + 0.5 * Math.sin(m * 1.7));
   }
   function pollenLevel(count: number): string {
     if (count < 2.4) return 'low';

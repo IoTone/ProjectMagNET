@@ -112,16 +112,17 @@ const scene = new THREE.Scene();
 // chrome://inspect) gets diagnostics; `?debug=0` disables for clean
 // demo runs. Added to the scene directly so it survives gallery /
 // manifest mode swaps and renders even if world content fails.
-const debugEnabled = new URLSearchParams(window.location.search).get('debug') !== '0';
-let debugConsole: DebugConsole | null = null;
-if (debugEnabled) {
-  debugConsole = createDebugConsole();
-  scene.add(debugConsole.group);
-  console.log('[debug] in-scene console enabled (`?debug=0` to disable)');
-  // Note: initial place() happens just after the camera is constructed
-  // below (the panel is placed relative to a camera, and `camera` is
-  // declared after this block). Re-placed on XR sessionstart.
-}
+// Always created (so the toolbar "Debug" toggle always works) but the
+// panel starts hidden unless `?debug=1`. console.* capture happens at
+// creation regardless of visibility, so toggling it on later still
+// shows everything that was logged while hidden.
+const debugParam = new URLSearchParams(window.location.search).get('debug');
+const debugConsole: DebugConsole = createDebugConsole();
+scene.add(debugConsole.group);
+debugConsole.group.visible = debugParam === '1' || debugParam === 'true';
+console.log(`[debug] in-scene console created — start ${debugConsole.group.visible ? 'on' : 'off'}; toggle via the toolbar "Debug" button`);
+// Initial place() happens just after the camera is constructed below
+// (the panel is placed relative to a camera). Re-placed on XR sessionstart.
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 100);
 camera.position.set(0, 1.4, 1.2);
@@ -316,7 +317,10 @@ function showVizGallery(show: boolean) {
   uiAnchor.visible = !show;
   // Hide join panel when switching to gallery/charts
   if (_joinPanelRef?.visible()) _joinPanelRef.hide();
-  if (toolbar) toolbar.setActive(show ? 'gallery' : 'charts');
+  if (toolbar) {
+    toolbar.setActive(show ? 'gallery' : 'charts');
+    toolbar.group.visible = true;   // toolbar belongs to the demo gallery/charts view
+  }
   // Show/hide the dataspace menu with the gallery
   if (show) showDataspaceMenu(); else hideDataspaceMenu();
   if (show) {
@@ -1018,12 +1022,15 @@ function placeDataspaceInFrontOfUser() {
   );
   vizAnchor.lookAt(pos.x, vizAnchor.position.y, pos.z);
 
-  // Title rides just above the content, same heading, a hair closer so it
-  // doesn't clip the content's top edge. +0.20 above eye ≈ 8° up at 1.35 m
-  // — inside Spectacles' ~13° half-vertical FOV.
+  // Title sits clearly ABOVE the top row of the data dashboards. The
+  // sensor grid's top row + its per-cell title reach ~camY+0.17 (grid
+  // is centred at vizAnchor.y = camY-0.20, row pitch 0.40, cell title
+  // +0.165), so +0.50 leaves a clean gap instead of overlapping
+  // "Room devices" as it did before. Still inside a comfortable upward
+  // glance on Spectacles' FOV.
   dataspaceTitle.position.set(
     pos.x + fwd.x * 1.35,
-    pos.y + 0.20,
+    pos.y + 0.50,
     pos.z + fwd.z * 1.35,
   );
   dataspaceTitle.lookAt(pos.x, dataspaceTitle.position.y, pos.z);
@@ -1523,6 +1530,17 @@ window.addEventListener('keydown', e => {
   if (e.key === 'g' || e.key === 'G') showVizGallery(!vizAnchor.visible);
 });
 
+/** Toggle the in-scene debug console. When turning it on, re-place it
+ *  against the live camera so it lands correctly (esp. on Spectacles). */
+function toggleDebugConsole() {
+  debugConsole.group.visible = !debugConsole.group.visible;
+  if (debugConsole.group.visible) {
+    const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+    debugConsole.place(cam);
+  }
+  console.log(`[debug] console ${debugConsole.group.visible ? 'shown' : 'hidden'}`);
+}
+
 const toolbarController = createToolbarController({
   scene, camera, renderer, interact,
   buttons: [
@@ -1532,6 +1550,7 @@ const toolbarController = createToolbarController({
     { id: 'morph',   label: 'Morph',   onSelect: () => { hideJoinPanel(); startMorphMode(); placeAnchorInFrontOfUser(); } },
     { id: 'recenter', label: 'Recenter', onSelect: () => placeAnchorInFrontOfUser() },
     { id: 'floor', label: 'Set Floor', onSelect: () => placeFloorUnderHead() },
+    { id: 'debug', label: 'Debug', onSelect: () => toggleDebugConsole() },
   ],
 });
 const toolbar = toolbarController.toolbar;
@@ -1555,10 +1574,17 @@ const privacyBanner: PrivacyBannerController = createPrivacyBannerController({
 // has to happen lazily because mark identity changes on every manifest load.
 let currentLoadedMarks: import('./manifest/loader').LoadedMark[] = [];
 
+// The currently-rendered manifest scene. Disposing it detaches its root
+// group AND unregisters its Interact items — MUST happen before the next
+// render and on leave, else a leave→rejoin stacks a second copy of every
+// mark (the "Room controls twice / content piled" bug).
+let currentManifestScene: import('./manifest/renderManifest').ManifestSceneResult | null = null;
+
 const manifestController: ManifestController = createManifestController({
   privacyBanner,
   render: (result) => {
-    renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
+    currentManifestScene?.dispose();
+    currentManifestScene = renderManifestToScene(result, vizAnchor, interact, nodeHoverFxs);
     // Position is set in onLoaded via placeDataspaceInFrontOfUser() so it
     // anchors to the live camera rather than a fixed world Y (which
     // floated content above the user's head on Spectacles).
@@ -1577,6 +1603,10 @@ const manifestController: ManifestController = createManifestController({
     galleryRoot.visible = false;
     uiAnchor.visible = false;
     vizAnchor.visible = true;
+    // The dev/demo toolbar (Join/Gallery/Charts/Morph/…) is for the demo
+    // gallery only — hide it inside a real dataspace so it doesn't float
+    // over the content (it was overlapping UC2). Re-shown on leave.
+    toolbar.group.visible = false;
     placeDataspaceInFrontOfUser();
 
     // Initial activation. Cells now construct in the inactive state
@@ -1620,9 +1650,16 @@ function handleDataspaceMenuAction(actionId: string) {
       vizAnchor.visible = false;
       hideDataspaceMenu();
       disposeCurrentManifest();
+      // Detach the rendered manifest root + its Interact items. Without
+      // this the old marks stayed in vizAnchor; rejoin stacked a second
+      // copy ("Room controls" twice) and the panel/sliders no longer
+      // responded to the pointer (duplicate interactables).
+      currentManifestScene?.dispose();
+      currentManifestScene = null;
       privacyBanner?.hide();
       setDataspaceTitle(null);
       currentLoadedMarks = [];
+      toolbar.group.visible = true;   // dev/demo toolbar is OK again outside a dataspace
       showJoinPanel();
       break;
     case 'toggle-ambient':
