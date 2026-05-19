@@ -14,12 +14,16 @@ strips light correctly. WiFi/BLE provisioning and the
 - **Board**: Seeed Xiao ESP32C3 in a Grove Shield for XIAO
 - **Strips**: 4 × WS2812 (NEO_GRB, 800 kHz), 60 px each
 
-| Logical strip | GPIO | Original sketch |
-|---------------|------|-----------------|
-| 0 | 0 | strip1 |
-| 1 | 5 | strip2 |
-| 2 | 1 | strip3 |
-| 3 | 2 | strip4 |
+| Logical strip | XIAO pad | GPIO | Original sketch |
+|---------------|----------|------|-----------------|
+| 0 | D0 | 2 | strip1 |
+| 1 | D5 | 7 | strip2 |
+| 2 | D1 | 3 | strip3 |
+| 3 | D2 | 4 | strip4 |
+
+The XIAO ESP32C3 does **not** break out raw GPIO 0/1 — its silkscreen pads
+D0..D5 are GPIO 2,3,4,5,6,7. The original Arduino sketch's pin integers are
+the XIAO Dx pad labels, not raw GPIO numbers (a bare-metal port must remap).
 
 The ESP32-C3 has only 2 RMT TX channels / 1 SPI host, so it cannot drive 4
 independent strips with the hardware `led_strip` driver. Instead a
