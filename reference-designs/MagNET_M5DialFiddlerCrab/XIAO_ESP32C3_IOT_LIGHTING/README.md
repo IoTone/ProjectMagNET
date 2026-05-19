@@ -71,10 +71,68 @@ common ground against the table above.
 The high-level `selftest*` / `randrun` words are defined in Forth (loaded at
 boot from a bundle in `main.c`) and can be redefined live at the REPL.
 
-## Phase 2 (next)
+## Phase 2 — WiFi + UC2 HTTP API
 
-BLE→WiFi provisioning (`craw_ble_provision` / `craw_wifi`), mDNS, and an HTTP
-API matching UC2's `/api/v1/actuator/neopixel` shape (on/off, brightness_pct,
-color{r,g,b}, pattern, pattern_speed_pct), modeled on `MagNET_Vitals_E4TH`.
-The bundled `components/craw_*` and `led_strip` managed dep are kept in place
-for that phase even though Phase 1 does not link them.
+BLE→WiFi provisioning (`craw_ble_provision` / `craw_wifi` / `craw_nvs`),
+mDNS, and an HTTP API the in-XR UC2 actuator panel drives directly.
+
+### Provisioning
+
+On boot the device advertises over BLE as `MagNET-lighting-<MAC4>` and
+accepts WiFi credentials (same flow as the M5_Hive_Cam). Once connected it
+auto-reconnects on later boots. At the REPL:
+
+- `prov-status` — BLE/WiFi state + current IP
+- `prov-reset` — clear stored creds, re-advertise
+
+On WiFi connect it starts mDNS (`magnet-lighting.local`) and the HTTP server.
+
+### API
+
+`GET` / `POST` `http://magnet-lighting.local/api/v1/actuator/neopixel`
+(also reachable at `http://<ip>/...`). CORS-enabled (`*`) with an OPTIONS
+preflight, so a browser-based WebXR client can call it cross-origin.
+
+POST body — all fields optional (partial update):
+
+```json
+{ "on": true,
+  "brightness_pct": 0-100,
+  "color": { "r": 0-255, "g": 0-255, "b": 0-255 },
+  "pattern": "solid|breathing|rainbow|chase|twinkle",
+  "pattern_speed_pct": 0-100 }
+```
+
+GET and POST both return the full state:
+
+```json
+{ "on", "brightness_pct", "color":{"r","g","b"}, "pattern",
+  "pattern_speed_pct", "led_count", "last_changed_at",
+  "available_patterns":[...], "timestamp_us" }
+```
+
+A FreeRTOS render task draws the current state continuously (solid /
+breathing / rainbow / chase / twinkle; `brightness_pct` maps to the `bri`
+cap; `pattern_speed_pct` sets animation rate).
+
+### Strip ownership (Phase 1 vs Phase 2)
+
+The render task stays **disengaged** until the first HTTP command (or
+`strip-engage`), so the Phase-1 Forth self-test still owns the strip at
+boot. `strip-release` hands it back to the REPL; `strip?` prints state.
+
+### Smoke test
+
+```bash
+tests/http-smoke.sh magnet-lighting.local      # or the device IP
+```
+Exercises GET/POST/OPTIONS against the live device; exits non-zero on any
+failure.
+
+### Wiring it to UC2
+
+Point the UC2 actuator panel's neopixel `usm_service_endpoint` (or the
+mock-join-server proxy target) at `http://magnet-lighting.local/api/v1`
+instead of the simulated endpoint — the request/response shapes match, so
+no client change is needed. Mind the small-chip HTTP serialization note
+(cap the dev-proxy at `maxSockets: 1`).

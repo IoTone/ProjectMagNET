@@ -18,3 +18,8 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
 
 # Save RAM
 CONFIG_LWIP_IPV6=n
+
+# HTTP server (Phase 2: UC2 neopixel API) — bigger socket pool for
+# browser keep-alive + TIME_WAIT, larger header buffer for CORS/fetch.
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
