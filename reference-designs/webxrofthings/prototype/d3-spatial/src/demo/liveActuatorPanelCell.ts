@@ -98,7 +98,7 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
   const mats: THREE.Material[] = [];
 
   const PANEL_W = 0.62;
-  const PANEL_H = 0.70;
+  const PANEL_H = 0.90;   // grew for Heat/Cool/Off row + 2 brightness sliders
 
   // ── Backdrop ───────────────────────────────────────────────────────
   const bgGeo = new THREE.PlaneGeometry(PANEL_W, PANEL_H);
@@ -230,6 +230,79 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
     };
   }
 
+  // ── Brightness sliders: Light + Strip ──────────────────────────────
+  //
+  // Segmented "level-meter" sliders (0–100% in 10% steps): cells up to
+  // the chosen level rest green, the rest dim. Reuses the same tap
+  // machinery as the thermostat slider. Picking a level also turns the
+  // device on (intuitive — you wouldn't set a brightness to leave it
+  // off) so the change is visible AND the power bars finally move (the
+  // power model scales by brightness_pct). The on/off toggles still
+  // independently control on/off; both reconcile on refresh.
+  const briSyncs: Array<(b: StateBundle) => void> = [];
+  function makeBrightnessSlider(opts: {
+    id: string;
+    label: string;
+    cy: number;
+    post: (pct: number) => Promise<void>;
+    readPct: (b: StateBundle) => number | undefined;
+  }) {
+    addText(opts.label, -PANEL_W / 2 + 0.04, opts.cy, 0.012, TEXT.body, 'left');
+    const COUNT = 11;                       // 0,10,…,100
+    const X0 = -0.16, X1 = 0.27;
+    const GAP = 0.003;
+    const CW = (X1 - X0 - GAP * (COUNT - 1)) / COUNT;
+    const CH = 0.034;
+    let activeIdx = -1;
+    const cms: THREE.MeshBasicMaterial[] = [];
+    const cbs: THREE.LineBasicMaterial[] = [];
+    const cfs: THREE.Mesh[] = [];
+    const paint = () => {
+      for (let i = 0; i < COUNT; i++) {
+        if (cfs[i] === hovered) continue;
+        if (i <= activeIdx) { cms[i]!.color.set(BG_ON); cbs[i]!.color.set(BORDER_ON); }
+        else { cms[i]!.color.set(BG_DEFAULT); cbs[i]!.color.set(BORDER_DEFAULT); }
+        cms[i]!.opacity = 0.95;
+      }
+    };
+    for (let i = 0; i < COUNT; i++) {
+      const x = X0 + CW / 2 + i * (CW + GAP);
+      const btn = makeButton(`${opts.id}-${i}`, x, opts.cy, CW, CH, '');
+      cms.push(btn.fillMat); cbs.push(btn.bMat); cfs.push(btn.fill);
+      const idx = i;
+      const resting: Painter = () => {
+        if (idx <= activeIdx) { btn.fillMat.color.set(BG_ON); btn.bMat.color.set(BORDER_ON); }
+        else { btn.fillMat.color.set(BG_DEFAULT); btn.bMat.color.set(BORDER_DEFAULT); }
+        btn.fillMat.opacity = 0.95;
+      };
+      wire(`${opts.id}-${i}`, btn, resting, () => {
+        const pct = idx * 10;
+        activeIdx = idx; paint();
+        setStatus(`${opts.label} → ${pct}%…`);
+        void opts.post(pct).then(() => { if (!disposed) void refreshStatus(); });
+      });
+    }
+    briSyncs.push((b) => {
+      const p = opts.readPct(b);
+      if (typeof p !== 'number') return;
+      activeIdx = Math.max(0, Math.min(COUNT - 1, Math.round(p / 10)));
+      paint();
+    });
+  }
+
+  cy -= 0.052;
+  makeBrightnessSlider({
+    id: 'lbri', label: 'Light  %', cy,
+    post: (pct) => postJSON('/light', { on: pct > 0, brightness_pct: pct }).then(() => {}),
+    readPct: (b) => b.light?.brightness_pct,
+  });
+  cy -= 0.052;
+  makeBrightnessSlider({
+    id: 'sbri', label: 'Strip  %', cy,
+    post: (pct) => postJSON('/neopixel', { on: pct > 0, brightness_pct: pct }).then(() => {}),
+    readPct: (b) => b.strip?.brightness_pct,
+  });
+
   // ── Thermostat: header + glowing mode disc ─────────────────────────
   cy -= 0.072;
   const thermoHdr = addText('Thermostat   —', -0.06, cy, 0.016, TEXT.primary, 'center');
@@ -262,6 +335,46 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
     discMat.color.copy(base).multiplyScalar(k);
     discMat.opacity = 0.95;
   };
+
+  // ── Thermostat mode selector: Heat / Cool / Off ────────────────────
+  //
+  // The glowing disc above only *reflected* mode — it was read-only.
+  // These three buttons make it settable: the active mode rests green
+  // (same affordance as the toggles), tap to POST {mode}. The disc +
+  // these buttons reconcile to server truth on every refresh.
+  cy -= 0.05;
+  const MODE_W = 0.155, MODE_H = 0.042, MODE_GAP = 0.018;
+  const modeDefs: Array<{ m: 'heat' | 'cool' | 'off'; label: string }> = [
+    { m: 'heat', label: 'Heat' },
+    { m: 'cool', label: 'Cool' },
+    { m: 'off',  label: 'Off' },
+  ];
+  const modeBtns: Partial<Record<'heat' | 'cool' | 'off', Btn>> = {};
+  function paintModes() {
+    for (const d of modeDefs) {
+      const b = modeBtns[d.m];
+      if (!b || b.fill === hovered) continue;   // keep focus colour
+      if (d.m === discMode) { b.fillMat.color.set(BG_ON); b.bMat.color.set(BORDER_ON); }
+      else { b.fillMat.color.set(BG_DEFAULT); b.bMat.color.set(BORDER_DEFAULT); }
+      b.fillMat.opacity = 0.95;
+    }
+  }
+  modeDefs.forEach((d, k) => {
+    const x = (k - 1) * (MODE_W + MODE_GAP);   // k=0,1,2 → centred triple
+    const btn = makeButton(`mode-${d.m}`, x, cy, MODE_W, MODE_H, d.label);
+    modeBtns[d.m] = btn;
+    const resting: Painter = () => {
+      if (d.m === discMode) { btn.fillMat.color.set(BG_ON); btn.bMat.color.set(BORDER_ON); }
+      else { btn.fillMat.color.set(BG_DEFAULT); btn.bMat.color.set(BORDER_DEFAULT); }
+      btn.fillMat.opacity = 0.95;
+    };
+    wire(`mode-${d.m}`, btn, resting, () => {
+      discMode = d.m;            // optimistic — disc + buttons update now
+      paintModes();
+      setStatus(`Thermostat mode → ${d.label}…`);
+      void postJSON('/thermostat', { mode: d.m }).then(() => { if (!disposed) void refreshStatus(); });
+    });
+  });
 
   // ── Thermostat segmented tap-slider ────────────────────────────────
   cy -= 0.05;
@@ -379,6 +492,7 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
     const b: StateBundle = { light, thermo, strip };
 
     for (const e of entries) e.syncToggle?.(b);
+    for (const s of briSyncs) s(b);   // reconcile Light/Strip brightness sliders
 
     if (thermo) {
       thermoHdr.text = `Thermostat   ${Number(thermo.setpoint_c).toFixed(1)}°C`;
@@ -388,6 +502,7 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
       discMode = (thermo.mode === 'heat' || thermo.mode === 'cool') ? thermo.mode : 'off';
       modeLbl.text = `${thermo.mode}  ${Number(thermo.current_c).toFixed(1)}°C`;
       modeLbl.sync();
+      paintModes();   // reconcile the Heat/Cool/Off buttons to server truth
     }
 
     // Fake but state-driven power model.
