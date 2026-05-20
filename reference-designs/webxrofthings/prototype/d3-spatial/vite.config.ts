@@ -44,8 +44,34 @@ const vitalsDiag = createProxyDiag('vitals', {
   valueWindowMs: 5 * 60_000,
 });
 const cameraDiag = createProxyDiag('camera');
+const lightingDiag = createProxyDiag('lighting');
+
+/**
+ * Defensive normalizer for *_HOST env vars. http-proxy's URL parser yields
+ * `hostname: null` for a bare IP / hostname (no scheme), and the downstream
+ * `setupOutgoing` then dies with `Cannot read properties of null (reading
+ * 'split')`. Auto-prefix `http://` so `LIGHTING_HOST=10.0.0.144 npm run dev`
+ * Just Works without crashing the dev server.
+ */
+const normalizeHost = (h: string | undefined, fallback: string): string => {
+  const s = (h && h.trim()) || fallback;
+  return /^https?:\/\//.test(s) ? s : `http://${s}`;
+};
 
 const cameraAgent = new http.Agent({ family: 4, keepAlive: false, timeout: 30000 });
+
+/**
+ * Lighting device agent — XIAO ESP32-C3 running esp_http_server.
+ * Same shape as the vitals agent: single socket, no keep-alive, IPv4-only.
+ * The C3 has even less RAM than the C6 and tolerates concurrent fetches
+ * even worse. Funnel the UC2 actuator panel through one connection.
+ */
+const lightingAgent = new http.Agent({
+  family: 4,
+  keepAlive: false,
+  maxSockets: 1,
+  timeout: 15000,
+});
 
 /**
  * Vitals device agent — XIAO ESP32-C6 running esp_http_server.
@@ -82,6 +108,39 @@ export default defineConfig({
       '.loca.lt',
     ],
     proxy: {
+      // XIAO_ESP32C3_IOT_LIGHTING — UC2 neopixel actuator.
+      // The device's mDNS hostname is MAC-suffixed to match its BLE name
+      // (e.g. magnet-lighting-b7c0.local). The default below probably will
+      // NOT resolve on a multi-device LAN — set LIGHTING_HOST explicitly:
+      //   LIGHTING_HOST=http://magnet-lighting-b7c0.local  npm run dev
+      //   LIGHTING_HOST=http://192.168.1.42                npm run dev
+      // Must appear BEFORE the generic '/api/v1' entry so this more-specific
+      // prefix matches first. The device exposes the URL verbatim
+      // (/api/v1/actuator/neopixel) so no rewrite. The other actuator paths
+      // (light, thermostat, speaker) fall through to the mock-join-server.
+      '/api/v1/actuator/neopixel': {
+        target: normalizeHost(process.env.LIGHTING_HOST, 'http://magnet-lighting.local'),
+        changeOrigin: true,
+        agent: lightingAgent,
+        configure: (proxy: any) => {
+          lightingDiag.attachToProxy(proxy);
+          proxy.on('proxyReq', (proxyReq: any) => {
+            // Same race guard + header strip as the vitals/camera proxies —
+            // ESP-IDF httpd's small header buffer can't hold full browser
+            // headers; CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024 helps but stripping
+            // the noisy headers is belt-and-braces.
+            if (proxyReq.headersSent) return;
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
+      } as any,
       // MagNET Vitals device — UC3 personal-health dataspace.
       // Override VITALS_HOST in your shell when the device IP changes:
       //   VITALS_HOST=http://192.168.1.42 npm run dev
@@ -91,7 +150,7 @@ export default defineConfig({
       // esp_http_server's default 512-byte header buffer can't hold (cookies,
       // sec-ch-*, accept-language, referer) — same pattern as the camera proxy.
       '/api/v1/vitals': {
-        target: process.env.VITALS_HOST || 'http://magnet-vitals.local',
+        target: normalizeHost(process.env.VITALS_HOST, 'http://magnet-vitals.local'),
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/api\/v1\/vitals/, ''),
         agent: vitalsAgent,
@@ -130,7 +189,7 @@ export default defineConfig({
       // - configure/proxyReq drops browser headers the camera's 512-byte header
       //   buffer can't hold; same pattern as /api/v1/vitals above
       '/camera': {
-        target: process.env.CAMERA_HOST || 'http://magnet-cam-8610.local',
+        target: normalizeHost(process.env.CAMERA_HOST, 'http://magnet-cam-8610.local'),
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/camera/, ''),
         agent: cameraAgent,
@@ -167,6 +226,7 @@ export default defineConfig({
       configureServer(server) {
         server.middlewares.use('/__diag/vitals', diagMiddleware(vitalsDiag));
         server.middlewares.use('/__diag/camera', diagMiddleware(cameraDiag));
+        server.middlewares.use('/__diag/lighting', diagMiddleware(lightingDiag));
       },
     },
   ],

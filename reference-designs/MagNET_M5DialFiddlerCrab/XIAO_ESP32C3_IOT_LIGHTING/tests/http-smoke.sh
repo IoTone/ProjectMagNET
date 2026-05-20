@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Smoke test for the UC2 neopixel actuator API.
 #
-#   ./http-smoke.sh [host]
+#   ./http-smoke.sh <host>
 #
-# host defaults to magnet-lighting.local; pass the device IP if mDNS
-# isn't resolving (e.g. ./http-smoke.sh 192.168.1.42).
+# host = the device's MAC-suffixed mDNS hostname (matches its BLE name),
+# or the IP if mDNS isn't resolving on your LAN. Examples:
+#   ./http-smoke.sh magnet-lighting-b7c0.local
+#   ./http-smoke.sh 192.168.1.42
+#
+# Find the device's hostname in the serial boot log:
+#   [mDNS] http://magnet-lighting-XXXX.local/ on the LAN
 #
 # Exercises the exact contract the in-XR UC2 actuator panel uses:
 #   GET  /api/v1/actuator/neopixel
@@ -12,7 +17,7 @@
 #   OPTIONS (CORS preflight)
 
 set -u
-HOST="${1:-magnet-lighting.local}"
+HOST="${1:-magnet-lighting-b7c0.local}"
 BASE="http://${HOST}/api/v1/actuator/neopixel"
 fail=0
 

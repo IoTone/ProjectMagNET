@@ -85,11 +85,14 @@ auto-reconnects on later boots. At the REPL:
 - `prov-status` — BLE/WiFi state + current IP
 - `prov-reset` — clear stored creds, re-advertise
 
-On WiFi connect it starts mDNS (`magnet-lighting.local`) and the HTTP server.
+On WiFi connect it starts mDNS as `magnet-lighting-<MAC4>.local` (e.g.
+`magnet-lighting-b7c0.local`) — the same MAC suffix the BLE name uses, so
+one identifier covers BLE provisioning and HTTP. Watch the serial log for
+the resolved hostname. Then the HTTP server starts on port 80.
 
 ### API
 
-`GET` / `POST` `http://magnet-lighting.local/api/v1/actuator/neopixel`
+`GET` / `POST` `http://magnet-lighting-<MAC4>.local/api/v1/actuator/neopixel`
 (also reachable at `http://<ip>/...`). CORS-enabled (`*`) with an OPTIONS
 preflight, so a browser-based WebXR client can call it cross-origin.
 
@@ -124,7 +127,7 @@ boot. `strip-release` hands it back to the REPL; `strip?` prints state.
 ### Smoke test
 
 ```bash
-tests/http-smoke.sh magnet-lighting.local      # or the device IP
+tests/http-smoke.sh magnet-lighting-b7c0.local   # or the device IP
 ```
 Exercises GET/POST/OPTIONS against the live device; exits non-zero on any
 failure.

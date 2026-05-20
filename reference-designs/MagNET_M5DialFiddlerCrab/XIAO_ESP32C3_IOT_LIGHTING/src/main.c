@@ -41,6 +41,7 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "driver/usb_serial_jtag.h"
 #include "led_strip.h"
 #include "mdns.h"
@@ -52,7 +53,11 @@
 #include "forth_core.h"
 #include "forth_version.h"
 
-#define MDNS_HOSTNAME  "magnet-lighting"
+/* mDNS hostname uses the same MAC-suffix the BLE name does, so the device
+ * has ONE identifier you read in nRF Connect and reuse for HTTP / smoke
+ * test (e.g. `magnet-lighting-b7c0.local`). Static buffer filled at boot. */
+#define MDNS_HOSTNAME_PREFIX "magnet-lighting"
+static char s_mdns_hostname[24] = MDNS_HOSTNAME_PREFIX;
 #define MDNS_INSTANCE  "MagNET Lighting"
 
 #define STRIP_COUNT 4
@@ -430,8 +435,15 @@ void strip_ctl_init(void) {
 
 static void start_mdns(void) {
     if (s_mdns_started) return;
+    /* Derive the same MAC suffix used by the BLE GAP name so the device
+     * has a single identifier across BLE and mDNS. */
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(s_mdns_hostname, sizeof(s_mdns_hostname), "%s-%02x%02x",
+             MDNS_HOSTNAME_PREFIX, mac[4], mac[5]);
+
     if (mdns_init() != ESP_OK) { ESP_LOGW(TAG, "mdns_init failed"); return; }
-    if (mdns_hostname_set(MDNS_HOSTNAME) != ESP_OK) {
+    if (mdns_hostname_set(s_mdns_hostname) != ESP_OK) {
         ESP_LOGW(TAG, "mdns_hostname_set failed"); return;
     }
     mdns_instance_name_set(MDNS_INSTANCE);
@@ -440,7 +452,7 @@ static void start_mdns(void) {
         ESP_LOGW(TAG, "mdns_service_add failed"); return;
     }
     s_mdns_started = true;
-    usb_printf("[mDNS] http://%s.local/ on the LAN\r\n", MDNS_HOSTNAME);
+    usb_printf("[mDNS] http://%s.local/ on the LAN\r\n", s_mdns_hostname);
 }
 
 /* ---- WiFi + BLE provisioning callbacks ---- */
