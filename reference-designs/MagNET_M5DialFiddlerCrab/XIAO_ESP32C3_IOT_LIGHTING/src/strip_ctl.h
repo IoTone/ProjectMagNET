@@ -18,6 +18,10 @@ typedef enum {
     PAT_RAINBOW,
     PAT_CHASE,
     PAT_TWINKLE,
+    PAT_NIGHT_RIDER,      /* KITT scanner — bright head, fading tail */
+    PAT_ITS_CHRISTMAS,    /* alternating red/green segments + white twinkle */
+    PAT_FIRE,             /* flicker palette with heat diffusion */
+    PAT_ROYAL_ENTRANCE,   /* purple base + sweeping gold spotlight */
     PAT_COUNT
 } strip_pattern_t;
 

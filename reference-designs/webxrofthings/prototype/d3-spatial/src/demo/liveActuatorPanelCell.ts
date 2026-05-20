@@ -98,7 +98,7 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
   const mats: THREE.Material[] = [];
 
   const PANEL_W = 0.62;
-  const PANEL_H = 0.90;   // grew for Heat/Cool/Off row + 2 brightness sliders
+  const PANEL_H = 1.02;   // grew for pattern selector (3x3 grid of 9 patterns)
 
   // ── Backdrop ───────────────────────────────────────────────────────
   const bgGeo = new THREE.PlaneGeometry(PANEL_W, PANEL_H);
@@ -303,6 +303,63 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
     readPct: (b) => b.strip?.brightness_pct,
   });
 
+  // ── Pattern selector (Strip only — the device's render task patterns)
+  //
+  // 3x3 grid of compact buttons covering the 9 firmware patterns. Active
+  // pattern paints BG_ON (same green-tinted affordance as the toggles +
+  // thermostat mode buttons), so the panel always reflects server truth
+  // after refreshStatus. Tapping a button POSTs { pattern, on: true }
+  // — turning the strip on if it was off, matching the brightness-slider
+  // behaviour for the same intuitive "you wouldn't select a pattern just
+  // to leave the strip dark" reason.
+  cy -= 0.054;
+  const patHdr = addText('Pattern   —', -PANEL_W / 2 + 0.04, cy, 0.014, TEXT.primary, 'left');
+  cy -= 0.027;
+  const PAT_DEFS: Array<{ id: string; label: string }> = [
+    { id: 'solid',          label: 'Solid' },
+    { id: 'breathing',      label: 'Breath' },
+    { id: 'rainbow',        label: 'Rainbow' },
+    { id: 'chase',          label: 'Chase' },
+    { id: 'twinkle',        label: 'Twinkle' },
+    { id: 'night-rider',    label: 'K.Rider' },
+    { id: 'its-christmas',  label: 'X-Mas' },
+    { id: 'fire',           label: 'Fire' },
+    { id: 'royal-entrance', label: 'Royal' },
+  ];
+  const PAT_COLS = 3, PAT_W = 0.185, PAT_H = 0.026, PAT_GAP_X = 0.006, PAT_GAP_Y = 0.005;
+  let currentPattern = '';
+  const patBtns: Record<string, Btn> = {};
+  function paintPatterns() {
+    for (const d of PAT_DEFS) {
+      const b = patBtns[d.id];
+      if (!b || b.fill === hovered) continue;
+      if (d.id === currentPattern) { b.fillMat.color.set(BG_ON); b.bMat.color.set(BORDER_ON); }
+      else { b.fillMat.color.set(BG_DEFAULT); b.bMat.color.set(BORDER_DEFAULT); }
+      b.fillMat.opacity = 0.95;
+    }
+  }
+  PAT_DEFS.forEach((d, k) => {
+    const col = k % PAT_COLS, row = Math.floor(k / PAT_COLS);
+    const x = (col - (PAT_COLS - 1) / 2) * (PAT_W + PAT_GAP_X);
+    const y = cy - row * (PAT_H + PAT_GAP_Y);
+    const btn = makeButton(`pat-${d.id}`, x, y, PAT_W, PAT_H, d.label);
+    patBtns[d.id] = btn;
+    const resting: Painter = () => {
+      if (d.id === currentPattern) { btn.fillMat.color.set(BG_ON); btn.bMat.color.set(BORDER_ON); }
+      else { btn.fillMat.color.set(BG_DEFAULT); btn.bMat.color.set(BORDER_DEFAULT); }
+      btn.fillMat.opacity = 0.95;
+    };
+    wire(`pat-${d.id}`, btn, resting, () => {
+      currentPattern = d.id;
+      patHdr.text = `Pattern   ${d.label}`; patHdr.sync();
+      paintPatterns();
+      setStatus(`Pattern → ${d.label}…`);
+      void postJSON('/neopixel', { pattern: d.id, on: true })
+        .then(() => { if (!disposed) void refreshStatus(); });
+    });
+  });
+  cy -= (PAT_H + PAT_GAP_Y) * (PAT_DEFS.length / PAT_COLS) - PAT_GAP_Y;
+
   // ── Thermostat: header + glowing mode disc ─────────────────────────
   cy -= 0.072;
   const thermoHdr = addText('Thermostat   —', -0.06, cy, 0.016, TEXT.primary, 'center');
@@ -493,6 +550,15 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
 
     for (const e of entries) e.syncToggle?.(b);
     for (const s of briSyncs) s(b);   // reconcile Light/Strip brightness sliders
+
+    // Reconcile the pattern selector with server truth (do nothing if the
+    // strip endpoint didn't respond — keep the last optimistic state).
+    if (strip?.pattern && typeof strip.pattern === 'string') {
+      currentPattern = strip.pattern;
+      const def = PAT_DEFS.find(d => d.id === currentPattern);
+      patHdr.text = `Pattern   ${def?.label ?? currentPattern}`; patHdr.sync();
+      paintPatterns();
+    }
 
     if (thermo) {
       thermoHdr.text = `Thermostat   ${Number(thermo.setpoint_c).toFixed(1)}°C`;

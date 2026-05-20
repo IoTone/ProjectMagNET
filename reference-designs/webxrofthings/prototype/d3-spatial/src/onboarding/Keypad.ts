@@ -60,6 +60,10 @@ export function createKeypad(): KeypadResult {
   const g = new THREE.Group();
   g.name = 'keypad';
   g.visible = false;
+  /* +10% over the original 0.022-key sizing so it reads bigger on the
+   * dataspace-login screen without re-tuning every constant below.
+   * Uniform scale also expands hit targets — good for XR raycast dwell. */
+  g.scale.setScalar(1.1);
 
   // ─── Geometry constants ────────────────────────────────────────────
   //

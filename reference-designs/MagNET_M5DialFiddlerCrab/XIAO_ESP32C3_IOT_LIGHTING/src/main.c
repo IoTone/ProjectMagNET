@@ -106,6 +106,7 @@ static bool  s_mdns_started = false;
 
 const char *const STRIP_PATTERN_NAMES[PAT_COUNT] = {
     "solid", "breathing", "rainbow", "chase", "twinkle",
+    "night-rider", "its-christmas", "fire", "royal-entrance",
 };
 
 static SemaphoreHandle_t s_strip_mtx;
@@ -347,6 +348,89 @@ static void render_frame(const strip_state_t *s, uint32_t f) {
         for (int i = 0; i < NUM_PIXELS; i++) {
             int k = tw[i];
             ws_set_pixel(0, i, s->r * k / 255, s->g * k / 255, s->b * k / 255);
+        }
+        break;
+    }
+    /* KITT scanner: single bright head bouncing end-to-end with a fading
+     * tail. Uses the user-configured color (classic look: 255,0,0). */
+    case PAT_NIGHT_RIDER: {
+        int step = 1 + spd / 8;
+        int t = (int)((f * step) % (NUM_PIXELS * 2));
+        int head = (t < NUM_PIXELS) ? t : (NUM_PIXELS * 2 - 1 - t);
+        for (int i = 0; i < NUM_PIXELS; i++) {
+            int d = head - i; if (d < 0) d = -d;
+            int k = (d <= 8) ? (255 - d * 32) : 0;
+            if (k < 0) k = 0;
+            ws_set_pixel(0, i, (uint8_t)(s->r * k / 255),
+                               (uint8_t)(s->g * k / 255),
+                               (uint8_t)(s->b * k / 255));
+        }
+        break;
+    }
+    /* Alternating red/green 4-px segments slowly rotating, sparse white
+     * twinkle overlay. User color is ignored — classic palette. */
+    case PAT_ITS_CHRISTMAS: {
+        int adv = (int)((f * (1 + spd / 12)) / 8);
+        for (int i = 0; i < NUM_PIXELS; i++) {
+            int seg = (i + adv) / 4;
+            if (seg & 1) ws_set_pixel(0, i, 0,   255, 0);
+            else         ws_set_pixel(0, i, 255, 0,   0);
+        }
+        int sparkles = 1 + spd / 25;
+        for (int n = 0; n < sparkles; n++) {
+            if ((esp_random() & 0x7) == 0) {
+                int i = esp_random() % NUM_PIXELS;
+                ws_set_pixel(0, i, 255, 255, 255);
+            }
+        }
+        break;
+    }
+    /* Classic fire effect: per-pixel heat buffer cools, drifts upward,
+     * randomly re-ignited at the base, mapped through a black-red-yellow-
+     * white palette. User color is ignored — palette is the point. */
+    case PAT_FIRE: {
+        static uint8_t heat[NUM_PIXELS];
+        int cool = 2 + spd / 20;
+        for (int i = 0; i < NUM_PIXELS; i++) {
+            int c = (int)heat[i] - (int)(esp_random() % (cool + 1));
+            heat[i] = (uint8_t)(c < 0 ? 0 : c);
+        }
+        for (int i = NUM_PIXELS - 1; i >= 2; i--)
+            heat[i] = (uint8_t)((heat[i - 1] + heat[i - 2] + heat[i - 2]) / 3);
+        if ((esp_random() % 100) < (uint32_t)(10 + spd / 4)) {
+            int idx = esp_random() % 5;
+            int v = (int)heat[idx] + (int)(160 + (esp_random() % 96));
+            heat[idx] = (uint8_t)(v > 255 ? 255 : v);
+        }
+        for (int i = 0; i < NUM_PIXELS; i++) {
+            uint8_t h = heat[i];
+            uint8_t rr, gg, bb;
+            if      (h < 85)  { rr = (uint8_t)(h * 3);          gg = 0;                       bb = 0; }
+            else if (h < 170) { rr = 255;                        gg = (uint8_t)((h - 85) * 3); bb = 0; }
+            else              { rr = 255;                        gg = 255;                     bb = (uint8_t)((h - 170) * 3); }
+            ws_set_pixel(0, i, rr, gg, bb);
+        }
+        break;
+    }
+    /* Deep purple breathing base with a gold spotlight sweeping
+     * back and forth — fanfare. */
+    case PAT_ROYAL_ENTRANCE: {
+        float ph = (float)f * 0.02f * 6.2832f * 0.25f;
+        float k_bg = 0.20f + 0.30f * (0.5f - 0.5f * cosf(ph));
+        uint8_t pr = (uint8_t)(128 * k_bg);
+        uint8_t pg = (uint8_t)(20  * k_bg);
+        uint8_t pb = (uint8_t)(200 * k_bg);
+        for (int i = 0; i < NUM_PIXELS; i++) ws_set_pixel(0, i, pr, pg, pb);
+        int step = 1 + spd / 10;
+        int t = (int)((f * step) % (NUM_PIXELS * 2));
+        int head = (t < NUM_PIXELS) ? t : (NUM_PIXELS * 2 - 1 - t);
+        for (int d = -4; d <= 4; d++) {
+            int i = head + d; if (i < 0 || i >= NUM_PIXELS) continue;
+            int ad = d < 0 ? -d : d;
+            int k = 255 - ad * 55; if (k < 0) k = 0;
+            ws_set_pixel(0, i, (uint8_t)(255 * k / 255),
+                               (uint8_t)(200 * k / 255),
+                               (uint8_t)(0));
         }
         break;
     }
