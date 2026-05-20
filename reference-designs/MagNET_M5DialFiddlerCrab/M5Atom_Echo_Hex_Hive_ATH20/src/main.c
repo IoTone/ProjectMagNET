@@ -213,6 +213,15 @@ static void play_tone_blocking(uint16_t freq_hz, uint16_t duration_ms) {
     }
 }
 
+/* Toggleable mute. The Atom Echo's NS4168 amp has no software enable,
+ * so the only way to silence WiFi RX/TX coupling that bleeds into the
+ * analog stage is to stop the I²S clocks — which makes the amp go
+ * idle. Tradeoff: when disabled, the amp may emit a low residual hiss
+ * (clocks gone, input floating) until you `audio-on` and the next tone
+ * plays. For most users RF clicks are worse than a faint hiss. */
+static volatile bool s_audio_off    = false;
+static volatile bool s_chan_enabled = true;
+
 static void tone_task(void *arg) {
     (void)arg;
     /* Continuously write either queued tone data or silence. This keeps the
@@ -221,6 +230,19 @@ static void tone_task(void *arg) {
     static int16_t silence[256] = {0};
     tone_cmd_t cmd;
     while (1) {
+        if (s_audio_off) {
+            if (s_chan_enabled) {
+                i2s_channel_disable(s_tx_chan);
+                s_chan_enabled = false;
+            }
+            /* Drain the queue without playing while muted. */
+            xQueueReceive(s_tone_q, &cmd, pdMS_TO_TICKS(100));
+            continue;
+        }
+        if (!s_chan_enabled) {
+            i2s_channel_enable(s_tx_chan);
+            s_chan_enabled = true;
+        }
         if (xQueueReceive(s_tone_q, &cmd, 0) == pdTRUE) {
             play_tone_blocking(cmd.freq_hz, cmd.duration_ms);
         } else {
@@ -912,6 +934,22 @@ static void w_i2c_scan(void) {
     aht20_scan_bus();
 }
 
+/* ( -- ) Disable the I²S channel so the NS4168 amp goes idle.
+ * Use this when WiFi RX/TX coupling bleeds audible noise into the amp
+ * (the Atom Echo's NS4168 has no SHUTDOWN pin we can pull; stopping
+ * the clocks is the only software lever). The amp may emit a faint
+ * residual hiss while muted — usually quieter than the RF clicks. */
+static void w_audio_off(void) {
+    s_audio_off = true;
+    uart_print("\r\naudio: off (I2S channel will be disabled)\r\n");
+}
+
+/* ( -- ) Re-enable the I²S channel; tones / `beep` work again. */
+static void w_audio_on(void) {
+    s_audio_off = false;
+    uart_print("\r\naudio: on\r\n");
+}
+
 /* ( -- ) Walk every LED index, lighting one at a time for 300 ms. Use to
  * map physical hex positions → logical indices. Restores status when done. */
 static void w_hex_test(void) {
@@ -969,6 +1007,8 @@ static void register_forth_words(void) {
     forth_register_word("cal-temp",    w_cal_temp);
     forth_register_word("cal-hum",     w_cal_hum);
     forth_register_word("i2c-scan",    w_i2c_scan);
+    forth_register_word("audio-off",   w_audio_off);
+    forth_register_word("audio-on",    w_audio_on);
 }
 
 /* ---- app_main ---- */
