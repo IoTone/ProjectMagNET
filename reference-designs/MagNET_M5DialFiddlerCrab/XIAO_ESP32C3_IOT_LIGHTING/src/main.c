@@ -58,7 +58,11 @@
 #define STRIP_COUNT 4
 #define NUM_PIXELS  60
 #define BYTES_PER   (NUM_PIXELS * 3)
-#define FORTH_HEAP_SIZE (64 * 1024)
+/* Trimmed from 64 KB: NimBLE controller needs a ~40 KB contiguous internal
+ * DRAM block, and a 64 KB Forth heap left so little contiguous space that
+ * nimble_port_init failed silently (no `advertising as ...` ESP_LOGI fires).
+ * 32 KB is plenty for ESP32forth core + our bundle. */
+#define FORTH_HEAP_SIZE (32 * 1024)
 
 /* Phase 1: ONE physical Grove WS2813 strip on the D0 socket, driven by the
  * ESP32-C3 RMT peripheral (hardware-timed -- no bit-bang jitter). WS2813
@@ -106,9 +110,20 @@ static strip_state_t s_strip = {
     .pattern = PAT_SOLID, .pattern_speed_pct = 50,
     .led_count = NUM_PIXELS, .last_changed_us = 0,
 };
-/* The render task leaves the strip alone until the first HTTP command (or
- * `strip-engage`), so the Phase-1 Forth self-test still owns it at boot. */
-static volatile bool s_engaged = false;
+/* Three-way ownership of the strip's pixels.
+ *  STATUS: render the BLE/WiFi provisioning status pattern (boot default —
+ *          gives the installer visual feedback during bring-up).
+ *  FORTH:  Forth REPL owns the strip; the task does not touch it (use
+ *          `strip-release` to enter this state for self-test).
+ *  HTTP:   render the HTTP-driven `s_strip` state (set automatically on
+ *          the first `strip_set()` call, or manually via `strip-engage`). */
+typedef enum { OWNER_STATUS = 0, OWNER_FORTH = 1, OWNER_HTTP = 2 } strip_owner_t;
+static volatile strip_owner_t s_owner = OWNER_STATUS;
+
+/* BLE-write ack: a transient white pulse on the strip whenever a BLE
+ * characteristic write fires (creds received / commit requested), so the
+ * installer can see the device accepted the provisioning packet. */
+static volatile int64_t s_ack_until_us = 0;
 
 /* ---- USB serial I/O ---- */
 
@@ -255,7 +270,7 @@ void strip_set(const bool *on, const int *bri, const uint8_t rgb[3],
     if (spd) s_strip.pattern_speed_pct = *spd < 0 ? 0 : *spd > 100 ? 100 : *spd;
     s_strip.last_changed_us = esp_timer_get_time();
     xSemaphoreGive(s_strip_mtx);
-    s_engaged = true;   /* HTTP/REPL now owns the strip */
+    s_owner = OWNER_HTTP;   /* HTTP now owns the strip */
 }
 
 static void hsv2rgb(int h, uint8_t *r, uint8_t *g, uint8_t *b) {
@@ -335,14 +350,73 @@ static void render_frame(const strip_state_t *s, uint32_t f) {
     ws_show(0);
 }
 
+/* Provisioning-status renderer — the BLE/WiFi UX shown on the strip when
+ * neither HTTP nor the Forth REPL has claimed it.
+ *
+ * Standard hive node UX language:
+ *   IDLE (no creds, advertising)     orange flash (~1 Hz)
+ *   CREDS/COMMIT/CONNECTING          orange faster flash (~3 Hz)
+ *   CONNECTED                        green breathing (~0.5 Hz)
+ *   FAILED                           red strobe (~8 Hz)
+ *   BLE characteristic write         white pulse (~250 ms) overrides above */
+static void render_status(uint32_t f) {
+    s_bri_cap = 48;   /* USB-safe full-strip brightness */
+    int64_t now = esp_timer_get_time();
+    if (now < s_ack_until_us) {
+        for (int i = 0; i < NUM_PIXELS; i++) ws_set_pixel(0, i, 255, 255, 255);
+        ws_show(0);
+        return;
+    }
+    uint8_t r = 0, g = 0, b = 0;
+    bool lit = true;
+    switch (s_prov_state) {
+    case CRAW_BLE_PROV_FAILED:
+        lit = ((f / 3) & 1);   /* 3 frames * 20ms ≈ 60ms on/60ms off, ~8 Hz */
+        r = 255; g = 0; b = 0;
+        break;
+    case CRAW_BLE_PROV_CONNECTED: {
+        float ph = (float)f * 0.02f * 6.2832f * 0.4f;   /* ~0.4 Hz breath */
+        float k  = 0.10f + 0.90f * (0.5f - 0.5f * cosf(ph));
+        r = 0; g = (uint8_t)(255 * k); b = 0;
+        break;
+    }
+    case CRAW_BLE_PROV_CREDS_RECEIVED:
+    case CRAW_BLE_PROV_COMMIT_REQUESTED:
+    case CRAW_BLE_PROV_CONNECTING:
+        lit = ((f / 8) & 1);   /* 8 frames * 20ms ≈ 160ms on/off, ~3 Hz */
+        r = 255; g = 80; b = 0;
+        break;
+    case CRAW_BLE_PROV_IDLE:
+    default:
+        lit = ((f / 25) & 1);  /* 25 frames * 20ms = 500ms on/off, 1 Hz */
+        r = 255; g = 80; b = 0;
+        break;
+    }
+    if (lit) for (int i = 0; i < NUM_PIXELS; i++) ws_set_pixel(0, i, r, g, b);
+    else     for (int i = 0; i < NUM_PIXELS; i++) ws_set_pixel(0, i, 0, 0, 0);
+    ws_show(0);
+}
+
 static void strip_task(void *arg) {
     (void)arg;
     uint32_t f = 0;
     for (;;) {
-        if (!s_engaged) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
-        strip_state_t s;
-        strip_get_state(&s);
-        render_frame(&s, f++);
+        switch (s_owner) {
+        case OWNER_HTTP: {
+            strip_state_t s;
+            strip_get_state(&s);
+            render_frame(&s, f);
+            break;
+        }
+        case OWNER_STATUS:
+            render_status(f);
+            break;
+        case OWNER_FORTH:
+        default:
+            /* leave the strip alone; Forth REPL owns the pixels */
+            break;
+        }
+        f++;
         vTaskDelay(pdMS_TO_TICKS(20));   /* ~50 fps */
     }
 }
@@ -404,6 +478,9 @@ static void on_prov_event(craw_ble_prov_state_t state,
                           const char *ssid, const char *pass, void *ctx) {
     (void)ctx;
     s_prov_state = (int)state;
+    /* Acknowledge every BLE characteristic write with a brief white pulse
+     * (rendered by render_status() when the strip is in OWNER_STATUS). */
+    s_ack_until_us = esp_timer_get_time() + 250000;
     switch (state) {
     case CRAW_BLE_PROV_CREDS_RECEIVED:
         usb_printf("\r\n[PROV] creds: ssid='%s' pass=%d chars\r\n",
@@ -537,7 +614,10 @@ static void w_strips(void) {
     usb_print("Phase 2 (WiFi/HTTP):\r\n");
     usb_print("  prov-status     BLE/WiFi provisioning state + IP\r\n");
     usb_print("  prov-reset      clear WiFi creds, re-advertise\r\n");
-    usb_print("  strip?          show HTTP-driven strip state\r\n");
+    usb_print("  strip?          show HTTP-driven strip state + owner\r\n");
+    usb_print("  strip-status    show BLE/WiFi indicator on the strip\r\n");
+    usb_print("                  (orange flash=unconfigured, red strobe=failed,\r\n");
+    usb_print("                   green breath=connected, white pulse=BLE write)\r\n");
     usb_print("  strip-engage / strip-release  HTTP vs Forth owns strip\r\n");
 }
 
@@ -569,26 +649,35 @@ static void w_prov_reset(void) {
     usb_print("\r\nProvisioning reset. Advertising.\r\n");
 }
 
-/* ( -- ) print the HTTP-driven strip state */
+/* ( -- ) print the HTTP-driven strip state + current owner */
 static void w_strip_q(void) {
     strip_state_t s;
     strip_get_state(&s);
-    usb_printf("\r\nstrip: %s  bri=%d%%  rgb=%d,%d,%d  pat=%s  spd=%d%%  %s\r\n",
+    const char *owner =
+        (s_owner == OWNER_HTTP)   ? "HTTP"   :
+        (s_owner == OWNER_FORTH)  ? "Forth"  :
+                                    "status";
+    usb_printf("\r\nstrip: %s  bri=%d%%  rgb=%d,%d,%d  pat=%s  spd=%d%%  owner=%s\r\n",
         s.on ? "ON" : "off", s.brightness_pct, s.r, s.g, s.b,
-        STRIP_PATTERN_NAMES[s.pattern], s.pattern_speed_pct,
-        s_engaged ? "[engaged]" : "[free: Forth owns strip]");
+        STRIP_PATTERN_NAMES[s.pattern], s.pattern_speed_pct, owner);
 }
 
-/* ( -- ) hand the strip back to the Forth self-test (disengage render task) */
+/* ( -- ) hand the strip to the Forth REPL (render task stops touching it) */
 static void w_strip_release(void) {
-    s_engaged = false;
-    usb_print("\r\nrender task released; Forth owns the strip\r\n");
+    s_owner = OWNER_FORTH;
+    usb_print("\r\nowner=Forth (REPL self-test owns the strip)\r\n");
 }
 
-/* ( -- ) let the render task drive the strip from HTTP state */
+/* ( -- ) give the strip back to the HTTP-driven render task */
 static void w_strip_engage(void) {
-    s_engaged = true;
-    usb_print("\r\nrender task engaged (HTTP-driven)\r\n");
+    s_owner = OWNER_HTTP;
+    usb_print("\r\nowner=HTTP (render task drives the strip)\r\n");
+}
+
+/* ( -- ) show the provisioning-status pattern on the strip */
+static void w_strip_status(void) {
+    s_owner = OWNER_STATUS;
+    usb_print("\r\nowner=status (BLE/WiFi indicator pattern)\r\n");
 }
 
 static void register_words(void) {
@@ -597,6 +686,7 @@ static void register_words(void) {
     forth_register_word("strip?",       w_strip_q);
     forth_register_word("strip-release",w_strip_release);
     forth_register_word("strip-engage", w_strip_engage);
+    forth_register_word("strip-status", w_strip_status);
     forth_register_word("ws-px",        w_ws_px);
     forth_register_word("ws-fill",      w_ws_fill);
     forth_register_word("ws-fill-all",  w_ws_fill_all);
@@ -697,17 +787,27 @@ void app_main(void) {
     strip_ctl_init();
     usb_print("Forth engine + render task initialized.\r\n");
 
-    /* Phase 2: NVS + WiFi + BLE provisioning (after Forth has its heap) */
+    /* Phase 2: NVS, then BLE FIRST so the controller gets its contiguous
+     * ~40 KB DRAM block before WiFi grabs its share. (WiFi's allocations
+     * are more tolerant of fragmentation than the NimBLE controller's.) */
     craw_nvs_init_flash();
     craw_nvs_migrate_wifi_profiles();
-    craw_wifi_init("MagNET-lighting", on_wifi_event, NULL);
+
     craw_ble_provision_config_t prov_cfg = {
         .name_prefix = "MagNET-lighting",
         .role        = "lighting",
+        /* BT SIG Appearance: 0x0580 = Generic Light Fixtures. Drives the
+         * lightbulb icon in nRF Connect's scan list and after connect. */
+        .appearance  = 0x0580,
     };
     craw_ble_provision_init(&prov_cfg, on_prov_event, NULL);
-    usb_printf("BLE advertising as '%s'\r\n", craw_ble_provision_device_name());
-    usb_printf("Free heap after WiFi/BLE: %lu bytes\r\n\r\n",
+    /* (whether the radio is actually on the air is reported by the
+     *  craw_ble_prov: advertising as '...' ESP_LOGI from ble_on_sync) */
+    usb_printf("BLE init done; device name='%s'\r\n",
+               craw_ble_provision_device_name());
+
+    craw_wifi_init("MagNET-lighting", on_wifi_event, NULL);
+    usb_printf("Free heap after BLE+WiFi: %lu bytes\r\n\r\n",
         (unsigned long)esp_get_free_heap_size());
 
     w_strips();
@@ -723,8 +823,9 @@ void app_main(void) {
         usb_print("No stored WiFi. Provision over BLE, then the UC2\r\n");
         usb_print("panel POSTs /api/v1/actuator/neopixel to drive the strip.\r\n");
     }
-    usb_print("REPL still owns the strip until first HTTP cmd (or "
-              "'strip-engage'); 'strip-release' hands it back.\r\n\r\n");
+    usb_print("Strip shows BLE/WiFi status pattern until the first HTTP cmd.\r\n");
+    usb_print("Use 'strip-release' for Forth self-test, 'strip-status' to\r\n");
+    usb_print("force the indicator pattern back on.\r\n\r\n");
 
     forth_repl(uart_getchar, uart_putchar);
     forth_deinit();

@@ -41,6 +41,7 @@ static char                     s_ssid[SSID_MAX + 1]           = {0};
 static char                     s_pass[PASS_MAX + 1]           = {0};
 static char                     s_ip[IP_MAX]                   = "N/A";
 static uint8_t                  s_status                       = CRAW_BLE_PROV_IDLE;
+static uint16_t                 s_appearance                   = 0;  /* BT SIG Appearance; 0 = omit */
 static craw_ble_provision_cb_t  s_cb                           = NULL;
 static void                    *s_cb_ctx                       = NULL;
 
@@ -272,6 +273,10 @@ static void ble_start_advertising_internal(void) {
     fields.name             = (uint8_t *)s_device_name;
     fields.name_len         = strlen(s_device_name);
     fields.name_is_complete = 1;
+    if (s_appearance != 0) {
+        fields.appearance            = s_appearance;
+        fields.appearance_is_present = 1;
+    }
 
     ble_gap_adv_set_fields(&fields);
     ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
@@ -308,6 +313,7 @@ void craw_ble_provision_init(const craw_ble_provision_config_t *cfg,
     if (cfg && cfg->role) {
         strncpy(s_role, cfg->role, sizeof(s_role) - 1);
     }
+    s_appearance = (cfg ? cfg->appearance : 0);
     s_cb     = cb;
     s_cb_ctx = cb_ctx;
     s_status = CRAW_BLE_PROV_IDLE;
@@ -342,6 +348,7 @@ void craw_ble_provision_init(const craw_ble_provision_config_t *cfg,
 
     ble_hs_cfg.sync_cb = ble_on_sync;
     ble_svc_gap_device_name_set(s_device_name);
+    if (s_appearance != 0) ble_svc_gap_device_appearance_set(s_appearance);
 
     nimble_port_freertos_init(ble_host_task);
     ESP_LOGI(TAG, "initialized as '%s'", s_device_name);
