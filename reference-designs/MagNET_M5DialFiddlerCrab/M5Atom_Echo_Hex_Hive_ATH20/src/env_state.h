@@ -27,4 +27,15 @@ void env_state_get(env_reading_t *out);
 void env_set_cal(float t_offset_c, float rh_offset_pct);
 void env_get_cal(float *t_offset_c, float *rh_offset_pct);
 
+/* 60-sample history (≈ last 60 min at one push/min). Matches the
+ * mock-join-server's `/light/history` shape so the existing live-line
+ * chart in d3-spatial renders without changes. */
+#define ENV_HIST_LEN 60
+typedef struct { int64_t t_ms; float v; } env_sample_t;
+
+/* Copy up to max_n recent samples into out (oldest → newest).
+ * Returns the number copied. */
+int env_history_temperature(env_sample_t *out, int max_n);
+int env_history_humidity   (env_sample_t *out, int max_n);
+
 #endif /* ENV_STATE_H */

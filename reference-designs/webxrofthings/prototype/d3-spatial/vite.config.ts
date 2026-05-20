@@ -46,6 +46,7 @@ const vitalsDiag = createProxyDiag('vitals', {
 const cameraDiag = createProxyDiag('camera');
 const lightingDiag = createProxyDiag('lighting');
 const boomboxDiag = createProxyDiag('boombox');
+const envDiag = createProxyDiag('env');
 
 /**
  * Defensive normalizer for *_HOST env vars. http-proxy's URL parser yields
@@ -81,6 +82,18 @@ const lightingAgent = new http.Agent({
  * from the UC2 panel and never needs concurrency.
  */
 const boomboxAgent = new http.Agent({
+  family: 4,
+  keepAlive: false,
+  maxSockets: 1,
+  timeout: 15000,
+});
+
+/**
+ * Environment-sensor (AHT20) device agent — M5 Atom Echo + Hex.
+ * Same single-socket pattern. Polled cadence from the dataspace is low
+ * (sensor task on the device samples at 0.5 Hz; UI panel reads at 1–5 s).
+ */
+const envAgent = new http.Agent({
   family: 4,
   keepAlive: false,
   maxSockets: 1,
@@ -143,6 +156,31 @@ export default defineConfig({
             // ESP-IDF httpd's small header buffer can't hold full browser
             // headers; CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024 helps but stripping
             // the noisy headers is belt-and-braces.
+            if (proxyReq.headersSent) return;
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
+      } as any,
+      // M5Atom_Echo_Hex_Hive_ATH20 — UC2 environment sensor (temp + humidity).
+      // The AHT20 firmware exposes /api/v1/sensor/{environment,temperature,
+      // humidity}. Set ENV_HOST to the device IP (mDNS is published via the
+      // hive flow, post-SNTP; IP is the reliable default).
+      //   ENV_HOST=http://10.0.0.55  npm run dev
+      // Must appear BEFORE the generic '/api/v1' entry.
+      '/api/v1/sensor': {
+        target: normalizeHost(process.env.ENV_HOST, 'http://magnet-atom-echo.local'),
+        changeOrigin: true,
+        agent: envAgent,
+        configure: (proxy: any) => {
+          envDiag.attachToProxy(proxy);
+          proxy.on('proxyReq', (proxyReq: any) => {
             if (proxyReq.headersSent) return;
             const drop = [
               'cookie', 'accept-language', 'referer', 'origin',
@@ -268,6 +306,7 @@ export default defineConfig({
         server.middlewares.use('/__diag/camera', diagMiddleware(cameraDiag));
         server.middlewares.use('/__diag/lighting', diagMiddleware(lightingDiag));
         server.middlewares.use('/__diag/boombox', diagMiddleware(boomboxDiag));
+        server.middlewares.use('/__diag/env', diagMiddleware(envDiag));
       },
     },
   ],

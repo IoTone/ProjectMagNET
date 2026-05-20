@@ -17,9 +17,11 @@
 static const char *TAG = "http_env";
 static httpd_handle_t s_server = NULL;
 
-#define ENV_URI  "/api/v1/sensor/environment"
-#define TEMP_URI "/api/v1/sensor/temperature"
-#define HUM_URI  "/api/v1/sensor/humidity"
+#define ENV_URI       "/api/v1/sensor/environment"
+#define TEMP_URI      "/api/v1/sensor/temperature"
+#define TEMP_HIST_URI "/api/v1/sensor/temperature/history"
+#define HUM_URI       "/api/v1/sensor/humidity"
+#define HUM_HIST_URI  "/api/v1/sensor/humidity/history"
 
 static void cors_headers(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin",  "*");
@@ -62,6 +64,33 @@ static esp_err_t h_temp(httpd_req_t *req) {
     return httpd_resp_send(req, buf, n);
 }
 
+/* Common helper for /temperature/history and /humidity/history — same
+ * `{samples:[{t,v}]}` shape as mock-join-server's /light/history, so the
+ * existing live-line chart cell in d3-spatial renders it without changes. */
+static esp_err_t serve_history(httpd_req_t *req, bool humidity) {
+    env_sample_t buf[ENV_HIST_LEN];
+    int n = humidity ? env_history_humidity(buf, ENV_HIST_LEN)
+                     : env_history_temperature(buf, ENV_HIST_LEN);
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr  = cJSON_AddArrayToObject(root, "samples");
+    for (int i = 0; i < n; i++) {
+        cJSON *s = cJSON_CreateObject();
+        cJSON_AddNumberToObject(s, "t", (double)buf[i].t_ms);
+        cJSON_AddNumberToObject(s, "v", buf[i].v);
+        cJSON_AddItemToArray(arr, s);
+    }
+    char *body = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t e = httpd_resp_sendstr(req, body ? body : "{\"samples\":[]}");
+    if (body) cJSON_free(body);
+    return e;
+}
+
+static esp_err_t h_temp_hist(httpd_req_t *req) { return serve_history(req, false); }
+static esp_err_t h_hum_hist (httpd_req_t *req) { return serve_history(req, true);  }
+
 static esp_err_t h_hum(httpd_req_t *req) {
     env_reading_t r; env_state_get(&r);
     char buf[128];
@@ -81,16 +110,18 @@ static esp_err_t h_options(httpd_req_t *req) {
     return ESP_OK;
 }
 
-static const httpd_uri_t s_get_env  = { .uri = ENV_URI,  .method = HTTP_GET, .handler = h_env,  .user_ctx = NULL };
-static const httpd_uri_t s_get_temp = { .uri = TEMP_URI, .method = HTTP_GET, .handler = h_temp, .user_ctx = NULL };
-static const httpd_uri_t s_get_hum  = { .uri = HUM_URI,  .method = HTTP_GET, .handler = h_hum,  .user_ctx = NULL };
-static const httpd_uri_t s_options  = { .uri = "/*", .method = HTTP_OPTIONS, .handler = h_options, .user_ctx = NULL };
+static const httpd_uri_t s_get_env      = { .uri = ENV_URI,       .method = HTTP_GET, .handler = h_env,       .user_ctx = NULL };
+static const httpd_uri_t s_get_temp     = { .uri = TEMP_URI,      .method = HTTP_GET, .handler = h_temp,      .user_ctx = NULL };
+static const httpd_uri_t s_get_temp_h   = { .uri = TEMP_HIST_URI, .method = HTTP_GET, .handler = h_temp_hist, .user_ctx = NULL };
+static const httpd_uri_t s_get_hum      = { .uri = HUM_URI,       .method = HTTP_GET, .handler = h_hum,       .user_ctx = NULL };
+static const httpd_uri_t s_get_hum_h    = { .uri = HUM_HIST_URI,  .method = HTTP_GET, .handler = h_hum_hist,  .user_ctx = NULL };
+static const httpd_uri_t s_options      = { .uri = "/*",          .method = HTTP_OPTIONS, .handler = h_options, .user_ctx = NULL };
 
 esp_err_t http_env_start(void) {
     if (s_server) return ESP_OK;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.uri_match_fn     = httpd_uri_match_wildcard;
-    cfg.max_uri_handlers = 6;
+    cfg.max_uri_handlers = 8;
     cfg.lru_purge_enable = true;
     cfg.max_open_sockets = 7;
     cfg.recv_wait_timeout = 5;
@@ -105,9 +136,11 @@ esp_err_t http_env_start(void) {
     }
     httpd_register_uri_handler(s_server, &s_get_env);
     httpd_register_uri_handler(s_server, &s_get_temp);
+    httpd_register_uri_handler(s_server, &s_get_temp_h);
     httpd_register_uri_handler(s_server, &s_get_hum);
+    httpd_register_uri_handler(s_server, &s_get_hum_h);
     httpd_register_uri_handler(s_server, &s_options);
-    ESP_LOGI(TAG, "env API up: %s + %s + %s", ENV_URI, TEMP_URI, HUM_URI);
+    ESP_LOGI(TAG, "env API up: %s + history endpoints", ENV_URI);
     return ESP_OK;
 }
 

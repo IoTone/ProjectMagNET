@@ -56,6 +56,10 @@ static const char *TAG = "m5echo_hive";
 
 /* ---- Pin map (M5Atom Echo + M5 Unit Hex on Grove) ---- */
 #define HEX_LED_GPIO        26          /* Grove port DATA pin on Atom Echo */
+#define ATOM_LED_GPIO       27          /* Atom Echo's onboard single RGB LED
+                                         * (distinct from the HEX chain). Used
+                                         * for WiFi/provisioning status per
+                                         * UDM §10.9 vocabulary. */
 #define HEX_LED_COUNT       37
 #define BTN_GPIO            39          /* Onboard button (input-only, external PU) */
 #define CONSOLE_UART        UART_NUM_0
@@ -89,7 +93,12 @@ static const uint8_t HEX_RIGHT_IDX[HEX_RIGHT_COUNT] = {
     20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
 };
 
-#define FORTH_HEAP_SIZE     (32 * 1024)
+/* Trimmed from 32 KB: classic ESP32 with NimBLE + WiFi + httpd + I2S +
+ * 2× led_strip RMT + I²C is RAM-tight. The earlier 32 KB Forth heap left
+ * the BT/WiFi coex arbiter unable to find its contiguous block at
+ * esp_wifi_start (`Coex arbit init: no memory!` → ESP_ERR_NO_MEM abort).
+ * 16 KB is still plenty for ESP32forth core + the bundle on this node. */
+#define FORTH_HEAP_SIZE     (16 * 1024)
 
 /* ---- LED strip ---- */
 static led_strip_handle_t s_hex = NULL;
@@ -110,6 +119,26 @@ static void hex_init(void) {
     ESP_ERROR_CHECK(led_strip_new_rmt_device(&cfg, &rmt, &s_hex));
     hex_clear();
     hex_refresh();
+}
+
+/* ---- Atom Echo onboard single RGB LED init (G27) ----
+ * Just the led_strip handle here; the animator lives after the
+ * Status model declarations below (it needs `s_wifi_ui`). */
+static led_strip_handle_t s_atom_led = NULL;
+
+static void atom_led_init(void) {
+    led_strip_config_t cfg = {
+        .strip_gpio_num = ATOM_LED_GPIO,
+        .max_leds       = 1,
+    };
+    led_strip_rmt_config_t rmt = { .resolution_hz = 10 * 1000 * 1000 };
+    if (led_strip_new_rmt_device(&cfg, &rmt, &s_atom_led) != ESP_OK) {
+        ESP_LOGE(TAG, "atom_led init failed on GPIO %d", ATOM_LED_GPIO);
+        s_atom_led = NULL;
+        return;
+    }
+    led_strip_clear(s_atom_led);
+    led_strip_refresh(s_atom_led);
 }
 
 /* ---- I2S tone player ---- */
@@ -227,6 +256,62 @@ static volatile ble_ui_t  s_ble_ui  = BLE_OFF;
 static volatile wifi_ui_t s_wifi_ui = WIFI_OFF;
 static volatile craw_hive_node_state_t s_hive_ui = CRAW_HIVE_NODE_OFFLINE;
 static volatile int64_t s_heartbeat_until_ms = 0;
+
+/* ---- Atom Echo onboard LED animator (UDM §10.9 vocabulary) ----
+ *
+ *   WIFI_OFF (no creds)   → orange slow flash (~1 Hz)   — unconfigured
+ *   WIFI_CONNECTING       → orange fast flash (~3 Hz)   — joining
+ *   WIFI_CONNECTED        → green breath    (~0.4 Hz)   — online
+ *   WIFI_FAILED           → red strobe      (~8 Hz)     — attention
+ *
+ * Runs as its own ~30 fps task so the breath / strobe cadences are smooth
+ * without interfering with the throttled hex paint_status. */
+
+#define ATOM_LED_CAP  80   /* Onboard LED is small but bright; cap at ~31%. */
+
+static void atom_led_paint(uint32_t f) {
+    if (!s_atom_led) return;
+    uint8_t r = 0, g = 0, b = 0;
+    switch (s_wifi_ui) {
+        case WIFI_CONNECTED: {
+            /* Green breathing ~0.4 Hz (~2.5 s period). */
+            float ph = (float)f * 0.033f * 6.2832f * 0.4f;
+            float k  = 0.10f + 0.50f * (0.5f - 0.5f * cosf(ph));
+            g = (uint8_t)(255.0f * k);
+            break;
+        }
+        case WIFI_FAILED: {
+            /* Red strobe ~8 Hz (2 frames * 33 ms ≈ 60 ms on/off). */
+            if ((f / 2) & 1) r = 220;
+            break;
+        }
+        case WIFI_CONNECTING: {
+            /* Orange flash ~3 Hz (5 frames * 33 ms ≈ 165 ms on/off). */
+            if ((f / 5) & 1) { r = 255; g = 90; }
+            break;
+        }
+        case WIFI_OFF:
+        default: {
+            /* Orange flash ~1 Hz (15 frames * 33 ms ≈ 500 ms on/off). */
+            if ((f / 15) & 1) { r = 255; g = 90; }
+            break;
+        }
+    }
+    r = (uint8_t)((uint32_t)r * ATOM_LED_CAP / 255);
+    g = (uint8_t)((uint32_t)g * ATOM_LED_CAP / 255);
+    b = (uint8_t)((uint32_t)b * ATOM_LED_CAP / 255);
+    led_strip_set_pixel(s_atom_led, 0, r, g, b);
+    led_strip_refresh(s_atom_led);
+}
+
+static void atom_led_task(void *arg) {
+    (void)arg;
+    uint32_t f = 0;
+    while (1) {
+        atom_led_paint(f++);
+        vTaskDelay(pdMS_TO_TICKS(33));   /* ~30 fps */
+    }
+}
 static char s_ip_str[20] = "N/A";
 /* Deferred BLE teardown: set from the WiFi event callback, acted on by
  * housekeeping_task so deinit runs outside any NimBLE callback context.
@@ -610,6 +695,16 @@ static env_reading_t     s_env;            /* protected by s_env_mtx */
 static float             s_cal_t_off = -1.5f;
 static float             s_cal_h_off =  0.0f;
 
+/* History ring buffers — pushed once per minute by env_state_set when
+ * the cadence elapses. ENV_HIST_LEN entries each → ~60 min @ 1 sample/min. */
+static env_sample_t s_t_hist[ENV_HIST_LEN];
+static env_sample_t s_h_hist[ENV_HIST_LEN];
+static int          s_hist_count    = 0;   /* # valid samples (0..ENV_HIST_LEN) */
+static int          s_hist_head     = 0;   /* next write slot (wraps) */
+static int64_t      s_last_push_us  = 0;
+
+#define HIST_PUSH_INTERVAL_US  (60LL * 1000 * 1000)
+
 void env_state_init(void) {
     if (s_env_mtx) return;
     s_env_mtx = xSemaphoreCreateMutex();
@@ -630,12 +725,44 @@ void env_state_set(float t_c, float rh_pct) {
     rh_pct += s_cal_h_off;
     if (rh_pct < 0)   rh_pct = 0;
     if (rh_pct > 100) rh_pct = 100;
+    int64_t now_us = esp_timer_get_time();
     xSemaphoreTake(s_env_mtx, portMAX_DELAY);
     s_env.valid  = true;
     s_env.t_c    = t_c;
     s_env.rh_pct = rh_pct;
-    s_env.ts_us  = esp_timer_get_time();
+    s_env.ts_us  = now_us;
+    /* Push one sample per minute to the history ring. */
+    if (s_last_push_us == 0 || (now_us - s_last_push_us) >= HIST_PUSH_INTERVAL_US) {
+        int64_t t_ms = now_us / 1000;
+        s_t_hist[s_hist_head] = (env_sample_t){ .t_ms = t_ms, .v = t_c };
+        s_h_hist[s_hist_head] = (env_sample_t){ .t_ms = t_ms, .v = rh_pct };
+        s_hist_head = (s_hist_head + 1) % ENV_HIST_LEN;
+        if (s_hist_count < ENV_HIST_LEN) s_hist_count++;
+        s_last_push_us = now_us;
+    }
     xSemaphoreGive(s_env_mtx);
+}
+
+/* Copy oldest→newest samples into `out`. Always returns at most max_n,
+ * even if the ring holds more (we cap at the ring's tail). */
+static int env_history_copy(const env_sample_t *ring, env_sample_t *out, int max_n) {
+    xSemaphoreTake(s_env_mtx, portMAX_DELAY);
+    int n = s_hist_count < max_n ? s_hist_count : max_n;
+    /* Start at the oldest sample. When the ring is full, oldest is at
+     * s_hist_head; while partially filled, oldest is at 0. */
+    int start = (s_hist_count == ENV_HIST_LEN) ? s_hist_head : 0;
+    for (int i = 0; i < n; i++)
+        out[i] = ring[(start + i) % ENV_HIST_LEN];
+    xSemaphoreGive(s_env_mtx);
+    return n;
+}
+
+int env_history_temperature(env_sample_t *out, int max_n) {
+    return env_history_copy(s_t_hist, out, max_n);
+}
+
+int env_history_humidity(env_sample_t *out, int max_n) {
+    return env_history_copy(s_h_hist, out, max_n);
 }
 
 void env_state_get(env_reading_t *out) {
@@ -856,6 +983,7 @@ void app_main(void) {
     uart_print(  "====================================\r\n");
 
     hex_init();
+    atom_led_init();      /* onboard single LED — WiFi status indicator */
     btn_init();
     s_tone_q = xQueueCreate(8, sizeof(tone_cmd_t));
     i2s_init();
@@ -906,6 +1034,7 @@ void app_main(void) {
     xTaskCreate(sensor_task,       "sense",4096, NULL, 3, NULL);
 
     xTaskCreate(ui_task,           "ui",   3072, NULL, 2, NULL);
+    xTaskCreate(atom_led_task,     "atom_led", 2048, NULL, 2, NULL);
     xTaskCreate(housekeeping_task, "keep", 4096, NULL, 3, NULL);
 
     /* Auto-connect if creds are stored */

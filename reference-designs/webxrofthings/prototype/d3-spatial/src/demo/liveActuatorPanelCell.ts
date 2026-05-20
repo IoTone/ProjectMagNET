@@ -60,6 +60,17 @@ async function postJSON(path: string, body: unknown): Promise<unknown | null> {
     return await r.json();
   } catch (e) { console.warn(`[actuator] POST ${path} failed:`, e); return null; }
 }
+/* Sensor reads come from a different base path (Vite proxy routes
+ * `/api/v1/sensor/*` to the AHT20 device, not the mock-join-server).
+ * Same fetch shape as getJSON but no API prefix munging. */
+async function getEnv(): Promise<any | null> {
+  try {
+    const r = await fetch('/api/v1/sensor/environment');
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
 async function getJSON(path: string): Promise<any | null> {
   try {
     const r = await fetch(`${API}${path}`);
@@ -542,8 +553,9 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
 
   // ── State refresh ──────────────────────────────────────────────────
   async function refreshStatus() {
-    const [light, thermo, strip] = await Promise.all([
+    const [light, thermo, strip, env] = await Promise.all([
       getJSON('/light'), getJSON('/thermostat'), getJSON('/neopixel'),
+      getEnv(),
     ]);
     if (disposed) return;
     const b: StateBundle = { light, thermo, strip };
@@ -566,7 +578,13 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
       setpointIdx = idxForTemp(Number(thermo.setpoint_c));
       paintCells();
       discMode = (thermo.mode === 'heat' || thermo.mode === 'cool') ? thermo.mode : 'off';
-      modeLbl.text = `${thermo.mode}  ${Number(thermo.current_c).toFixed(1)}°C`;
+      /* Prefer the real AHT20 reading over the mock thermostat's current_c
+       * when the env sensor is online and reporting valid data. Falls back
+       * to the mock value during bring-up / device offline. */
+      const liveC = (env?.valid && typeof env.temperature_c === 'number')
+                    ? env.temperature_c
+                    : Number(thermo.current_c);
+      modeLbl.text = `${thermo.mode}  ${liveC.toFixed(1)}°C`;
       modeLbl.sync();
       paintModes();   // reconcile the Heat/Cool/Off buttons to server truth
     }
@@ -583,6 +601,7 @@ export function buildLiveActuatorPanelCell(opts: { title?: string } = {}): LiveA
     const parts: string[] = [];
     if (light) parts.push(`Light ${light.on ? `${light.brightness_pct}%` : 'off'}`);
     if (strip) parts.push(`Strip ${strip.on ? 'on' : 'off'}`);
+    if (env?.valid) parts.push(`${Number(env.temperature_c).toFixed(1)}°C / ${Number(env.humidity_pct).toFixed(0)}%RH`);
     setStatus(parts.join('   ·   ') || 'no actuator response');
   }
 

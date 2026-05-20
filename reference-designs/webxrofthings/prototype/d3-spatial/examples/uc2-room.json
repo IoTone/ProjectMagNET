@@ -41,7 +41,7 @@
       "udm_memory_volatile": "400KB SRAM",
       "udm_memory_non_volatile": "4MB Flash",
       "udm_sensors": ["esp32c3-internal-temp"],
-      "udm_services_link": ["temp-current", "temp-history"],
+      "udm_services_link": ["temp-current", "temp-history", "humidity-history"],
       "udm_tags": ["room", "lan-only"],
       "udm_spatial_anchor_x": { "x": -0.6, "y": 1.0, "z": -0.8 }
     },
@@ -172,7 +172,20 @@
       "usm_type": "timeseries",
       "usm_class": ["timeseries", "temperature"],
       "usm_service_endpoint": {
-        "GET": { "url": "http://magnet-stamp-c3u-a1b2.local/temperature/history", "content-type": "application/json" }
+        "GET": { "url": "/api/v1/sensor/temperature/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>" }
+      ]
+    },
+    {
+      "usm_key": "humidity-history",
+      "usm_uuid": "urn:service:humidity-series:aht20",
+      "usm_service_name": "Humidity history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "humidity"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/humidity/history", "content-type": "application/json" }
       },
       "characteristics": [
         { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>" }
@@ -404,15 +417,32 @@
       "id": "room-temp",
       "type": "line",
       "title": "Temperature · last 60 min",
-      "subtitle": "ESP32-C3 internal sensor",
+      "subtitle": "AHT20 on M5 Atom Echo",
       "data": {
         "source": "url",
-        "url": "/api/v1/sensors/temp/history",
+        "url": "/api/v1/sensor/temperature/history",
         "shape": "series",
         "refreshInterval": 5
       },
+      "config": { "vMin": 15, "vMax": 35, "color": 16753664 },
       "deviceRef": "magnet-stamp-c3u-a1b2",
       "serviceRef": "temp-history",
+      "hoverable": true
+    },
+    {
+      "id": "room-humidity",
+      "type": "line",
+      "title": "Humidity · last 60 min",
+      "subtitle": "AHT20 on M5 Atom Echo",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/humidity/history",
+        "shape": "series",
+        "refreshInterval": 5
+      },
+      "config": { "vMin": 0, "vMax": 100, "color": 5570559 },
+      "deviceRef": "magnet-stamp-c3u-a1b2",
+      "serviceRef": "humidity-history",
       "hoverable": true
     },
     {
