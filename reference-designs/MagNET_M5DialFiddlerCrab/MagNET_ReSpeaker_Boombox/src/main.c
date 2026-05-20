@@ -56,6 +56,7 @@
 #include "craw_hive.h"
 #include "craw_role_bundle.h"
 #include "craw_audio.h"
+#include "http_speaker.h"
 #include "../../include/magnet_gen.h"
 
 static const char *TAG = "boombox";
@@ -159,10 +160,15 @@ static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
             sntp_started = true;
             uprint("[SNTP] sync kicked off\r\n");
         }
+        /* UC2 speaker actuator API — independent of hive bringup, ready
+         * as soon as WiFi is up so the dataspace can ring chime/doorbell. */
+        if (http_speaker_start() == ESP_OK)
+            uprintf("[HTTP] http://%s/api/v1/actuator/speaker/play\r\n", ip_str);
         break;
     case CRAW_WIFI_EVENT_DISCONNECTED:
         uprint("\r\n[WiFi] disconnected\r\n");
         strncpy(ip_str, "N/A", sizeof(ip_str));
+        http_speaker_stop();
         if (!ble_torn_down) {
             craw_ble_provision_set_ip(ip_str);
             craw_ble_provision_advertise();
@@ -557,19 +563,26 @@ void app_main(void) {
     craw_nvs_migrate_wifi_profiles();
     boombox_nvs_load();    /* volume */
 
+    /* Forth FIRST: claim the dictionary heap while RAM is plentiful. Same
+     * lesson as XIAO_ESP32C3_IOT_LIGHTING — NimBLE + WiFi + httpd grab
+     * large internal buffers that fragment the heap and starve forth_init,
+     * silently truncating ESP32forth core + the bundle. */
+    forth_init(FORTH_HEAP_SIZE);
+    register_forth_words();
+    uprintf("Forth ready. Free heap: %lu bytes\r\n",
+            (unsigned long)esp_get_free_heap_size());
+
     craw_wifi_init("MagNET-biologic", on_wifi_event, NULL);
 
     craw_ble_provision_config_t pcfg = {
         .name_prefix = "MagNET-biologic",
         .role        = "boombox",
+        /* BT SIG Generic Audio Source — drives the speaker icon in BLE
+         * scanners (nRF Connect etc.). See specs/UDM-MagNET-v1.md §10.8. */
+        .appearance  = 0x0440,
     };
     craw_ble_provision_init(&pcfg, on_prov_event, NULL);
     uprintf("BLE: %s\r\n", craw_ble_provision_device_name());
-
-    forth_init(FORTH_HEAP_SIZE);
-    register_forth_words();
-    uprintf("Forth ready. Free heap: %lu bytes\r\n",
-            (unsigned long)esp_get_free_heap_size());
 
     craw_role_bundle_init();
     int reapplied = craw_role_bundle_apply_saved(NODE_CAPS, N_NODE_CAPS);

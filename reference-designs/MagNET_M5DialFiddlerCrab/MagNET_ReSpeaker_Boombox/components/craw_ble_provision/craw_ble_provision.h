@@ -42,6 +42,17 @@ typedef enum {
 typedef struct {
     const char *name_prefix;  // default "MagNET-biologic" when NULL
     const char *role;         // optional — appears in device_info JSON
+    // BLE GAP Appearance (16-bit, BT SIG assigned numbers). Controls the
+    // icon BLE scanners (nRF Connect etc.) show for this device, both in
+    // the scan list (advertisement, AD type 0x19) and after connect
+    // (Appearance characteristic 0x2A01 in the GAP service).
+    // 0 = unset (omitted from both). Examples (verify exact hex in the
+    // BT SIG Assigned Numbers PDF before non-Generic values):
+    //   0x0580  Generic Light Fixtures   (lighting node)
+    //   0x0341  Heart Rate Belt          (vitals node)
+    //   0x0840  Generic Camera           (camera node)
+    //   0x0440  Generic Audio Source     (speaker node)
+    uint16_t    appearance;
 } craw_ble_provision_config_t;
 
 typedef void (*craw_ble_provision_cb_t)(craw_ble_prov_state_t state,

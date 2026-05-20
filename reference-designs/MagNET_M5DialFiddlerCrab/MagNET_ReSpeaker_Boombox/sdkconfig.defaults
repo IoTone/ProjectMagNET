@@ -21,3 +21,7 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
 
 # Save RAM — IPv6 unused
 CONFIG_LWIP_IPV6=n
+
+# HTTP server (UC2 speaker actuator API) — same shape as the lighting node.
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
