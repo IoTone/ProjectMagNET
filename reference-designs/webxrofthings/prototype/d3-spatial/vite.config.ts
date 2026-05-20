@@ -45,6 +45,7 @@ const vitalsDiag = createProxyDiag('vitals', {
 });
 const cameraDiag = createProxyDiag('camera');
 const lightingDiag = createProxyDiag('lighting');
+const boomboxDiag = createProxyDiag('boombox');
 
 /**
  * Defensive normalizer for *_HOST env vars. http-proxy's URL parser yields
@@ -67,6 +68,19 @@ const cameraAgent = new http.Agent({ family: 4, keepAlive: false, timeout: 30000
  * even worse. Funnel the UC2 actuator panel through one connection.
  */
 const lightingAgent = new http.Agent({
+  family: 4,
+  keepAlive: false,
+  maxSockets: 1,
+  timeout: 15000,
+});
+
+/**
+ * Boombox device agent — XIAO ESP32-S3 running esp_http_server.
+ * Same single-socket, no-keep-alive, IPv4 pattern as the other ESP-IDF
+ * device agents — the speaker endpoint is invoked one chime at a time
+ * from the UC2 panel and never needs concurrency.
+ */
+const boomboxAgent = new http.Agent({
   family: 4,
   keepAlive: false,
   maxSockets: 1,
@@ -129,6 +143,32 @@ export default defineConfig({
             // ESP-IDF httpd's small header buffer can't hold full browser
             // headers; CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024 helps but stripping
             // the noisy headers is belt-and-braces.
+            if (proxyReq.headersSent) return;
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
+      } as any,
+      // MagNET_ReSpeaker_Boombox — UC2 speaker actuator (chime/doorbell).
+      // The boombox firmware exposes /api/v1/actuator/speaker/play directly,
+      // matching the in-XR panel's existing POST. mDNS hostname is
+      // magnet-boombox-<MAC4>.local but it's published from the hive flow
+      // (post-SNTP); set BOOMBOX_HOST to the IP for reliable bring-up.
+      //   BOOMBOX_HOST=http://10.0.0.55  npm run dev
+      // Must appear BEFORE the generic '/api/v1' entry.
+      '/api/v1/actuator/speaker': {
+        target: normalizeHost(process.env.BOOMBOX_HOST, 'http://magnet-boombox.local'),
+        changeOrigin: true,
+        agent: boomboxAgent,
+        configure: (proxy: any) => {
+          boomboxDiag.attachToProxy(proxy);
+          proxy.on('proxyReq', (proxyReq: any) => {
             if (proxyReq.headersSent) return;
             const drop = [
               'cookie', 'accept-language', 'referer', 'origin',
@@ -227,6 +267,7 @@ export default defineConfig({
         server.middlewares.use('/__diag/vitals', diagMiddleware(vitalsDiag));
         server.middlewares.use('/__diag/camera', diagMiddleware(cameraDiag));
         server.middlewares.use('/__diag/lighting', diagMiddleware(lightingDiag));
+        server.middlewares.use('/__diag/boombox', diagMiddleware(boomboxDiag));
       },
     },
   ],
