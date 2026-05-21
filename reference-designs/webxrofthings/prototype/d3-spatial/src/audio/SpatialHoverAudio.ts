@@ -19,6 +19,14 @@ export class SpatialHoverAudio {
   async init() {
     if (this.ready) return;
     this.ctx = this.listener.context as AudioContext;
+    /* Browsers create AudioContexts in 'suspended' state until the user
+     * gestures. Three.js doesn't auto-resume — we have to do it
+     * explicitly. Without this, uiSounds.getCtx() sees state !==
+     * 'running' and silently returns null, so playFocus / playClick
+     * fire on every keypad key but make no sound. */
+    if (this.ctx.state === 'suspended') {
+      try { await this.ctx.resume(); } catch { /* best-effort */ }
+    }
     this.buffer = tick(this.ctx, 660, 0.06);
     this.ready = true;
   }

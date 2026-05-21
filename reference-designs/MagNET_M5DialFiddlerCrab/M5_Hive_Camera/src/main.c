@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <time.h>
+#include <math.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -55,9 +56,19 @@ static const char *TAG = "m5cam_hive";
 #if defined(CAMERA_BOARD_M5CAMS3)
   #define BOARD_ENUM  CRAW_CAMERA_BOARD_M5CAMS3
   #define BOARD_SLUG  "cams3"
+  /* M5CamS3 has a small single-color status LED on GPIO14 (per
+   * components/craw_camera/pins_m5cams3.h). Drive it via LEDC PWM so
+   * we can encode the UDM §10.9 four-state provisioning UX as
+   * cadences (no RGB available — colors degrade to rhythm only). */
+  #define HAS_STATUS_LED 1
+  #include "driver/ledc.h"
+  #define STATUS_LED_GPIO  14
 #elif defined(CAMERA_BOARD_AI_THINKER)
   #define BOARD_ENUM  CRAW_CAMERA_BOARD_AI_THINKER
   #define BOARD_SLUG  "esp32cam"
+  /* AI-Thinker's only addressable LED is the blinding white flash on
+   * GPIO4 — not suitable for continuous status. Leave HAS_STATUS_LED
+   * undefined; the status_led_* helpers compile to nothing. */
 #else
   #error "Define CAMERA_BOARD_AI_THINKER or CAMERA_BOARD_M5CAMS3 via platformio.ini"
 #endif
@@ -152,10 +163,80 @@ static void mdns_publish(void) {
 }
 
 /* -------------------- WiFi / BLE provisioning --------- */
+/* ---- WiFi-state UI for the M5CamS3 status LED (single-color cadences) ----
+ *
+ * 0 = OFF / unconfigured  → slow blink ~1 Hz
+ * 1 = CONNECTING          → fast blink ~3 Hz
+ * 2 = CONNECTED           → smooth breath ~0.4 Hz
+ * 3 = FAILED              → strobe ~8 Hz
+ *
+ * Maps the UDM §10.9 four-state provisioning UX vocabulary to PWM duty
+ * (since the M5CamS3 has no RGB). status_led_task is a no-op build on
+ * AI-Thinker (HAS_STATUS_LED undefined there). */
+static volatile int s_wifi_state = 0;
+
+#if HAS_STATUS_LED
+static void status_led_init(void) {
+    ledc_timer_config_t t = {
+        .speed_mode      = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .timer_num       = LEDC_TIMER_0,
+        .freq_hz         = 5000,
+        .clk_cfg         = LEDC_AUTO_CLK,
+    };
+    ledc_timer_config(&t);
+    ledc_channel_config_t c = {
+        .gpio_num   = STATUS_LED_GPIO,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel    = LEDC_CHANNEL_0,
+        .timer_sel  = LEDC_TIMER_0,
+        .duty       = 0,
+        .hpoint     = 0,
+    };
+    ledc_channel_config(&c);
+}
+
+static inline void status_led_duty(uint8_t d) {
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, d);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
+#define STATUS_LED_CAP  200   /* 8-bit duty; cap below 255 to be eye-friendly */
+
+static void status_led_task(void *arg) {
+    (void)arg;
+    uint32_t f = 0;
+    while (1) {
+        uint8_t duty = 0;
+        switch (s_wifi_state) {
+        case 2: {  /* connected: breath ~0.4 Hz */
+            float ph = (float)f * 0.033f * 6.2832f * 0.4f;
+            float k  = 0.10f + 0.50f * (0.5f - 0.5f * cosf(ph));
+            duty = (uint8_t)(k * STATUS_LED_CAP);
+            break;
+        }
+        case 3:    /* failed: strobe 8 Hz */
+            if ((f / 2) & 1) duty = STATUS_LED_CAP;
+            break;
+        case 1:    /* connecting: fast blink ~3 Hz */
+            if ((f / 5) & 1) duty = STATUS_LED_CAP;
+            break;
+        default:   /* off / unconfigured: slow blink ~1 Hz */
+            if ((f / 15) & 1) duty = STATUS_LED_CAP;
+            break;
+        }
+        status_led_duty(duty);
+        f++;
+        vTaskDelay(pdMS_TO_TICKS(33));
+    }
+}
+#endif /* HAS_STATUS_LED */
+
 static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
     (void)ctx;
     switch (event) {
     case CRAW_WIFI_EVENT_CONNECTED:
+        s_wifi_state = 2;
         craw_wifi_get_ip_str(ip_str, sizeof(ip_str));
         uprintf("\r\n[WiFi] connected, IP: %s\r\n", ip_str);
         craw_ble_provision_set_ip(ip_str);
@@ -170,6 +251,7 @@ static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
         }
         break;
     case CRAW_WIFI_EVENT_DISCONNECTED:
+        s_wifi_state = 0;
         uprint("\r\n[WiFi] disconnected\r\n");
         strncpy(ip_str, "N/A", sizeof(ip_str));
         if (!ble_torn_down) {
@@ -178,6 +260,7 @@ static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
         }
         break;
     case CRAW_WIFI_EVENT_CONNECT_FAILED:
+        s_wifi_state = 3;
         uprint("\r\n[WiFi] failed\r\n");
         strncpy(ip_str, "N/A", sizeof(ip_str));
         if (!ble_torn_down) {
@@ -201,6 +284,7 @@ static void on_prov_event(craw_ble_prov_state_t state,
         uprintf("\r\n[PROV] commit -> '%s'\r\n", ssid);
         craw_nvs_save_wifi_creds(ssid, pass ? pass : "");
         craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
+        s_wifi_state = 1;
         craw_wifi_connect(ssid, pass ? pass : "");
         break;
     default: break;
@@ -529,11 +613,18 @@ void app_main(void) {
 
     xTaskCreate(housekeeping_task, "keep", 6144, NULL, 3, NULL);
 
+#if HAS_STATUS_LED
+    status_led_init();
+    xTaskCreate(status_led_task, "stled", 2048, NULL, 2, NULL);
+    uprintf("Status LED on GPIO %d (PWM cadence: WiFi state)\r\n", STATUS_LED_GPIO);
+#endif
+
     /* Auto-connect on reboot if creds exist */
     char ssid[33], pass[65];
     if (craw_nvs_load_wifi_creds(ssid, pass) && ssid[0]) {
         uprintf("Stored WiFi '%s' — auto-connect\r\n", ssid);
         craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
+        s_wifi_state = 1;
         craw_wifi_connect(ssid, pass);
     } else {
         uprint("No stored WiFi — provision via BLE.\r\n");

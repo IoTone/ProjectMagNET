@@ -71,7 +71,15 @@ export function renderManifestToScene(
   // Lay the sensor/data marks out in the grid, then drop any
   // actuator-panel mark into a dedicated band BELOW the grid so the
   // simulated data sits above the controls in Y, as requested.
-  const gridMarks = marks.filter(m => m.type !== 'actuator-panel');
+  //
+  // SELF_POSITIONED marks aren't grid-placeable at all — they author
+  // their own world placement (moon-phases-arc wraps the user from in
+  // front around to behind; can't be a 0.38 × 0.30 grid cell). They
+  // bypass both the grid loop and the per-cell wrapping group below.
+  const SELF_POSITIONED = new Set(['moon-phases-arc', 'owls-to-the-max', 'force-tree-3d']);
+  const gridMarks = marks.filter(m =>
+    m.type !== 'actuator-panel' && !SELF_POSITIONED.has(m.type),
+  );
 
   const cellW = 0.38;
   const cellH = 0.30;
@@ -93,64 +101,99 @@ export function renderManifestToScene(
   const panelX = gridLeftEdge - SIDE_GAP - PANEL_HALF_W;
 
   marks.forEach((mark) => {
-    const isPanel = mark.type === 'actuator-panel';
-    let x: number, y: number;
-    if (stageMode) {
-      x = 0; y = 0;
-    } else if (isPanel) {
-      x = panelX; y = 0;            // left of the grid, vertically centred
-    } else {
-      const gi = gridMarks.indexOf(mark);
-      const col = gi % cols;
-      const row = Math.floor(gi / cols);
-      x = (col - (cols - 1) / 2) * cellW;
-      y = ((rows - 1) / 2 - row) * rowPitch;   // centred grid — no lift
+    const isPanel        = mark.type === 'actuator-panel';
+    const isSelfPos      = SELF_POSITIONED.has(mark.type);
+
+    /* Self-positioned marks (moon-phases-arc / owls-to-the-max /
+     * force-tree-3d): attach the group directly to root with no cell
+     * wrapper, no title overlay, no positioning — the viz authors its
+     * own world placement. Note: we DO NOT early-return — the hoverable
+     * / getInteractables / clickTarget registration block further down
+     * applies just the same. A previous version `return`ed here, which
+     * silently dropped Interact registration for self-positioned marks
+     * (the tree's getInteractables was never wired → beam hit the orbs
+     * via the reticle raycast but Interact saw no hit, so hover/click
+     * were dead). */
+    if (isSelfPos) {
+      root.add(mark.group);
+      if (mark.defaultVisible === false) mark.group.visible = false;
     }
 
-    const cell = new THREE.Group();
-    cell.name = `cell-${mark.id}`;
-    cell.position.set(x, y, 0);
-    // Toe the side-mounted actuator panel in toward the viewer so it
-    // isn't edge-on. Sign chosen so a left-of-centre panel rotates its
-    // face back toward a centred user; flip the sign if it reads wrong.
-    if (isPanel && !stageMode) cell.rotation.y = ACTUATOR_ANGLE;
-    cell.add(mark.group);
-
-    // Manifest can author marks that start hidden — used by UC4 to switch
-    // between mutually-exclusive content modes via `show-only:<id>` HUD
-    // actions. The cell stays in the scene graph so the HUD handler can
-    // flip visibility back on without reloading data.
-    if (mark.defaultVisible === false) cell.visible = false;
-
-    // Title / subtitle — skipped for actuator-panel: that cell draws its
-    // own title at the correct spot for its tall panel, and the generic
-    // one (placed at cellH/2 above centre) would float mid-panel and
-    // read as a duplicate ("Room controls" twice).
-    if (!isPanel) {
-      const title = new Text();
-      title.text = mark.title;
-      title.fontSize = 0.018;
-      title.color = TEXT.primary;
-      title.anchorX = 'center';
-      title.anchorY = 'bottom';
-      title.position.set(0, cellH / 2 + 0.015, 0.03);
-      title.sync();
-      cell.add(title);
-
-      if (mark.subtitle) {
-        const sub = new Text();
-        sub.text = mark.subtitle;
-        sub.fontSize = 0.011;
-        sub.color = TEXT.muted;
-        sub.anchorX = 'center';
-        sub.anchorY = 'top';
-        sub.position.set(0, -cellH / 2 - 0.015, 0.03);
-        sub.sync();
-        cell.add(sub);
+    /* The cell-wrapping block below only applies to grid-placed marks.
+     * Self-positioned marks already attached their group to root above;
+     * if we ran through the cell-wrap path here too, mark.group would
+     * be re-parented into a positioned cell and end up at the wrong
+     * world location. Skip placement/title for those — but still fall
+     * through to the Interact registration block past the wrap. */
+    if (!isSelfPos) {
+      let x: number, y: number;
+      if (stageMode) {
+        x = 0; y = 0;
+      } else if (isPanel) {
+        x = panelX; y = 0;            // left of the grid, vertically centred
+      } else {
+        const gi = gridMarks.indexOf(mark);
+        const col = gi % cols;
+        const row = Math.floor(gi / cols);
+        x = (col - (cols - 1) / 2) * cellW;
+        y = ((rows - 1) / 2 - row) * rowPitch;   // centred grid — no lift
       }
-    }
 
-    root.add(cell);
+      const cell = new THREE.Group();
+      cell.name = `cell-${mark.id}`;
+      cell.position.set(x, y, 0);
+      // Toe the side-mounted actuator panel in toward the viewer so it
+      // isn't edge-on. Sign chosen so a left-of-centre panel rotates its
+      // face back toward a centred user; flip the sign if it reads wrong.
+      if (isPanel && !stageMode) cell.rotation.y = ACTUATOR_ANGLE;
+      cell.add(mark.group);
+
+      // Manifest can author marks that start hidden — used by UC4 to switch
+      // between mutually-exclusive content modes via `show-only:<id>` HUD
+      // actions. The cell stays in the scene graph so the HUD handler can
+      // flip visibility back on without reloading data.
+      if (mark.defaultVisible === false) cell.visible = false;
+
+      // Title / subtitle — skipped for actuator-panel: that cell draws its
+      // own title at the correct spot for its tall panel, and the generic
+      // one (placed at cellH/2 above centre) would float mid-panel and
+      // read as a duplicate ("Room controls" twice).
+      if (!isPanel) {
+        /* Use the mark's actual bounding box (not the fixed cellH/2) so
+         * a mark that's authored taller than the standard 0.30 m cell —
+         * voronoi-stippling at 0.64 m, the line charts at 0.16 m, etc. —
+         * gets its title above its own top edge, not mid-panel.
+         * Falls back to the legacy half-cell offset when the bbox is
+         * empty (no geometry yet — sankey/streamgraph build asynchronously). */
+        const bbox  = new THREE.Box3().setFromObject(mark.group);
+        const valid = isFinite(bbox.max.y) && bbox.max.y > -Infinity;
+        const topY  = valid ? bbox.max.y : cellH / 2;
+        const botY  = valid ? bbox.min.y : -cellH / 2;
+        const title = new Text();
+        title.text = mark.title;
+        title.fontSize = 0.018;
+        title.color = TEXT.primary;
+        title.anchorX = 'center';
+        title.anchorY = 'bottom';
+        title.position.set(0, topY + 0.015, 0.03);
+        title.sync();
+        cell.add(title);
+
+        if (mark.subtitle) {
+          const sub = new Text();
+          sub.text = mark.subtitle;
+          sub.fontSize = 0.011;
+          sub.color = TEXT.muted;
+          sub.anchorX = 'center';
+          sub.anchorY = 'top';
+          sub.position.set(0, botY - 0.015, 0.03);
+          sub.sync();
+          cell.add(sub);
+        }
+      }
+
+      root.add(cell);
+    }
 
     // Register hoverable marks with Interact
     if (mark.hoverable && mark.viz) {
@@ -159,6 +202,18 @@ export function renderManifestToScene(
 
       // Force graphs have nodeMesh
       if (viz.nodeMesh) {
+        /* Drag-state local to this Interact item. Per-hand because XR
+         * controllers + hand tracking can both have a grab in flight
+         * simultaneously (left + right). Indices 0/1 are XR hands;
+         * 2 is the mouse fallback. */
+        const dragNodeIds: (number | null)[] = [null, null, null];
+        /* Only register drag callbacks when the viz actually supports
+         * grab-and-move (pinNode/unpinNode). Other "viz.nodeMesh"
+         * marks — sankey, treemap, etc. — don't need this, and giving
+         * Interact a no-op onDragStart would still consume the
+         * controller-trigger and break their click handlers. */
+        const supportsGrab =
+          typeof viz.pinNode === 'function' && typeof viz.unpinNode === 'function';
         reg({
           id: `manifest:${mark.id}:nodes`,
           object: viz.nodeMesh,
@@ -186,6 +241,30 @@ export function renderManifestToScene(
               fx.show(tmpVec, viz.getNodeLabel(instanceId));
             }
           },
+          ...(supportsGrab ? {
+            onDragStart: (ctx: { instanceId?: number; handIndex?: number }) => {
+              if (ctx.instanceId === undefined) return false;
+              const hi = ctx.handIndex ?? 2;
+              dragNodeIds[hi] = ctx.instanceId;
+              viz.reheat?.(0.5);
+              return true;
+            },
+            onDragMove: (worldPoint: THREE.Vector3, handIndex?: number) => {
+              const hi = handIndex ?? 2;
+              const nodeId = dragNodeIds[hi];
+              if (nodeId !== null && nodeId !== undefined) {
+                viz.pinNode(nodeId, worldPoint);
+                const fx = nodeHoverFxs[hi] ?? nodeHoverFxs[2];
+                if (fx) fx.updatePosition(worldPoint);
+              }
+            },
+            onDragEnd: (ctx?: { handIndex?: number }) => {
+              const hi = ctx?.handIndex ?? 2;
+              const nodeId = dragNodeIds[hi];
+              if (nodeId !== null && nodeId !== undefined) viz.unpinNode(nodeId);
+              dragNodeIds[hi] = null;
+            },
+          } : {}),
         });
       }
 

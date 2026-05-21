@@ -125,6 +125,18 @@ Seven spatial marks implemented as a gallery scene accessible via toolbar or `G`
 - Gallery expanded from 7 cells to 4x3 (12 cells) including morph demo.
 - Sample data generators: `sampleTangles()` and `sampleParallel()` added to `sampleHierarchy.ts`.
 
+### UC3 "XRt Exhibit" closed (M21) — 2026-05-21
+
+Curated mini-exhibit dataspace built around generative-art / data-art marks. Manifest: `examples/uc3-poster.json`. Per-mark doc: `examples/uc3-poster.md`.
+
+- **Voronoi stippling** (`src/viz/voronoiStippling.ts`) — Bostock's weighted Lloyd-relaxation against an image's luminance grid. Source: `public/spatial/_DSC7796.jpeg`. Downsampled to a 256-px luminance grid (per-iteration walk was 2.5M pixels at native res → 8 FPS for 10 s; 256 keeps it under 5 ms/iter). White stipples (`invert: true`) on a dark panel. `mirrorBack: true` adds a back-facing plane showing the raw photograph at `z=-0.003`, rotated π around Y with `scale.x=-1` to undo the texture mirror — exhibit-walk-around: stippling one side, photograph the other.
+- **Moon-phases arc** (`src/viz/moonPhasesArc.ts`) — 29 procedural moons on a 300° arc at radius 2.6 m, height 1.6 m. Custom shader: directional sun vector rotated around the moon's local Y axis by per-moon phase; smoothstep terminator with subtle rim glow on the dark limb. Self-positioned (in `SELF_POSITIONED` set in renderManifest).
+- **Force-directed tree** (`src/viz/forceTree3d.ts`) — d3-force-3d, 1 root + 5 clusters + 25 leaves, organic blob layout (no depth-Y bias). Exposes the same `ForceViz`-shaped surface as `force.ts` (`nodeMesh`, `nodes`, `tick`, `pinNode`, `unpinNode`, `reheat`) so renderManifest's nodeMesh registration wires up controller-drag without special-casing. Sim self-ticks via `nodeMesh.onBeforeRender`, alpha-gated so a settled tree costs nothing.
+  - **Raycast fixes that landed with the rewrite**: geometry baked at `radius` (was unit-sphere + per-instance scale — the InstancedMesh first-pass cull was rejecting small-scaled instances); `frustumCulled = false`; `boundingSphere.radius *= 2.5` after each recompute so the cull never drops the mesh before per-instance tests run.
+- **Owls-to-the-max** (`src/viz/owlsToTheMax.ts`) — canvas-drawn cartoon owl grid, transparent background, mapped to a 2.5 × 1.875 m ceiling plane at world Y 3.2 with one-shot anchor compensation (parent's world Y subtracted on first render so the plane lands at the intended world height regardless of the vizAnchor's per-session position).
+  - **Spatial owl hoots**: fetches `public/spatial/268667__depwl9992__owls.mp3` (~30 s field recording), decodes once, and on each scheduled play picks a random 1.0–2.5 s chop at a random offset (`audio.offset` + `audio.duration` passed to `AudioBufferSourceNode.start`). Pool of 4 `PositionalAudio` emitters parented to the cell; each hoot repositions one emitter to a random azimuth at 3–5 m radius with ±0.7 m height jitter, ±12% playback-rate jitter. 2.0–5.0 s gaps between hoots. `dispose()` clears the timer, stops every PositionalAudio and disconnects from the listener graph — leaving the dataspace fully unloads the sound.
+- **Manifest pipeline gains**: `loader.ts` parallelised pre-fetches via `Promise.allSettled` with a 5-s `AbortController` timeout and now builds a placeholder mark on failure rather than skipping it (UC2 used to render blank when ENV_HOST was offline; UC3's stippling-from-static-image path is hardened the same way). `renderManifest.ts` wires `onDragStart`/`onDragMove`/`onDragEnd` for any mark whose `viz` exposes `pinNode`/`unpinNode` — the manifest pipeline now supports per-node grab without main.ts special-casing.
+
 ---
 
 ## Tooling

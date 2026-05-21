@@ -18,6 +18,10 @@ import { buildRidgeline } from '../viz/ridgeline';
 import { buildSankey } from '../viz/sankey';
 import { buildStreamgraph } from '../viz/streamgraph';
 import { buildVideoPanel } from '../viz/videoPanel';
+import { buildVoronoiStippling } from '../viz/voronoiStippling';
+import { buildMoonPhasesArc } from '../viz/moonPhasesArc';
+import { buildOwlsToTheMax } from '../viz/owlsToTheMax';
+import { buildForceTree3d } from '../viz/forceTree3d';
 import { buildLiveImuCell } from '../demo/liveImuCell';
 import { buildLiveSpatialAudioCell } from '../demo/liveSpatialAudioCell';
 import { buildLiveSplatGalleryCell, type SplatPhoto } from '../demo/liveSplatGalleryCell';
@@ -382,6 +386,14 @@ export function registerAllBuilders() {
       // manifest path drops it.
       autoplay: (cfg.autoplay as boolean) ?? true,
       muted: (cfg.muted as boolean) ?? true,
+      /* For 'frames' mode, the manifest authors the poll cadence as
+       * `frameIntervalMs`. Forwarding was missing — the cell silently
+       * fell back to the videoPanel default (300 ms ≈ 3 fps), which
+       * overloads small-chip cameras like the ESP32-CAM behind the
+       * single-socket Vite proxy and the <img> errors to a black panel.
+       * The demo-gallery videoPanel passes this explicitly; the manifest
+       * path must too. */
+      frameIntervalMs: (cfg.frameIntervalMs as number) ?? undefined,
     });
     return makeMark(spec, viz.group, viz);
   });
@@ -484,5 +496,94 @@ export function registerAllBuilders() {
   registerMarkBuilder('actuator-panel', (spec) => {
     const cell = buildLiveActuatorPanelCell({ title: spec.title });
     return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
+  });
+
+  // ─── voronoi-stippling mark — UC3 XRt Exhibit (flat panel) ─────────
+  //
+  // Loads an image from spec.data.url and renders Bostock-style weighted
+  // Voronoi stippling onto a panel-plane. Iterates per-frame; converges
+  // visibly over the first second or two then settles. Stays in the
+  // standard grid placement — it's a regular wall panel.
+  registerMarkBuilder('voronoi-stippling', (spec) => {
+    if (spec.data.source !== 'url') return null;
+    const url = (spec.data as any).url as string;
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const viz = buildVoronoiStippling({
+      imageUrl:      url,
+      samples:       (cfg.samples       as number)  ?? 4000,
+      width:         (cfg.width         as number)  ?? 0.36,
+      height:        (cfg.height        as number)  ?? 0.28,
+      stepsPerFrame: (cfg.stepsPerFrame as number)  ?? 1,
+      maxSteps:      (cfg.maxSteps      as number)  ?? 120,
+      dotSize:       (cfg.dotSize       as number)  ?? 1.6,
+      mirrorBack:    (cfg.mirrorBack    as boolean) ?? false,
+    });
+    return makeMark(spec, viz.group, viz);
+  });
+
+  // ─── moon-phases-arc mark — UC3 XRt Exhibit (self-positioned) ──────
+  //
+  // The arc wraps the user from front to behind — NOT a grid cell. The
+  // cell self-positions in world coordinates around origin; renderManifest
+  // detects the type and skips its standard grid placement (see
+  // SELF_POSITIONED in renderManifest.ts).
+  registerMarkBuilder('moon-phases-arc', (spec) => {
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const viz = buildMoonPhasesArc({
+      count:       (cfg.count       as number) ?? 29,
+      arcDegrees:  (cfg.arcDegrees  as number) ?? 300,
+      radius:      (cfg.radius      as number) ?? 2.6,
+      moonSize:    (cfg.moonSize    as number) ?? 0.30,
+      height:      (cfg.height      as number) ?? 1.6,
+      rolldegrees: (cfg.rolldegrees as number) ?? 0,
+    });
+    return makeMark(spec, viz.group, viz);
+  });
+
+  // ─── owls-to-the-max — UC3 XRt Exhibit (floor-positioned) ───────────
+  //
+  // Procedural cartoon-owl grid drawn into a canvas, mapped to a plane
+  // laid flat on the floor in front of the user. Self-positioned (it
+  // owns its world placement on the floor) — added to SELF_POSITIONED
+  // in renderManifest.ts to bypass the grid loop.
+  registerMarkBuilder('owls-to-the-max', (spec) => {
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const ceiling = (cfg.ceiling as boolean) ?? false;
+    const viz = buildOwlsToTheMax({
+      cols:      (cfg.cols      as number)  ?? 8,
+      rows:      (cfg.rows      as number)  ?? 6,
+      width:     (cfg.width     as number)  ?? 1.4,
+      height:    (cfg.height    as number)  ?? 1.05,
+      distance:  (cfg.distance  as number)  ?? 1.2,
+      ceiling,
+      /* floorY defaults handled in the cell (0.02 floor / 3.2 ceiling). */
+      floorY:    (cfg.floorY    as number)  ?? undefined,
+      pixelSize: (cfg.pixelSize as number)  ?? 1024,
+    });
+    return makeMark(spec, viz.group, viz);
+  });
+
+  // ─── force-tree-3d — UC3 XRt Exhibit (self-positioned overlay) ──────
+  //
+  // d3-force-3d hierarchical tree with cluster sub-trees. Behaves like
+  // the gallery's force-directed graph: per-node grab/drag, organic
+  // cluster blob. Self-positioned (in SELF_POSITIONED) so the
+  // manifest's `config.position` is honoured verbatim.
+  registerMarkBuilder('force-tree-3d', (spec) => {
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const viz = buildForceTree3d({
+      clusters:         (cfg.clusters         as number) ?? 5,
+      leavesPerCluster: (cfg.leavesPerCluster as number) ?? 5,
+      size:             (cfg.size             as number) ?? 0.40,
+      radius:           (cfg.radius           as number) ?? 0.012,
+      ticks:            (cfg.ticks            as number) ?? 160,
+    });
+    /* Position the cell's group in vizAnchor-local coords. Defaults
+     * place the tree's centre at y = 0.55 (above the 0.64-tall
+     * stippling panel, whose top is at y ≈ 0.32). Authors can override
+     * via config.position = {x,y,z}. */
+    const pos = (cfg.position as { x?: number; y?: number; z?: number } | undefined);
+    viz.group.position.set(pos?.x ?? 0, pos?.y ?? 0.55, pos?.z ?? 0.02);
+    return makeMark(spec, viz.group, viz);
   });
 }

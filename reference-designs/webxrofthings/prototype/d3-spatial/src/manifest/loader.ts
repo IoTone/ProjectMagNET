@@ -59,12 +59,18 @@ export async function loadManifest(manifest: DataspaceManifest, token?: string):
   const intervals: Array<ReturnType<typeof setInterval>> = [];
 
   /** Re-fetch a URL data source and mutate spec.data with the new inline data.
-   *  Returns true on success. */
+   *  Returns true on success. Bounded by a 5 s AbortController timeout so an
+   *  offline / hung device endpoint can't block the rest of the manifest
+   *  load — without this, a single unreachable URL stalls the for-loop in
+   *  loadManifest indefinitely and the scene never renders ("blank, no
+   *  error" because failures are logged to console, not visible UI). */
   async function fetchInto(spec: MarkSpec, url: string, shape: string): Promise<boolean> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
     try {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
-      const resp = await fetch(url, { headers });
+      const resp = await fetch(url, { headers, signal: controller.signal });
       if (!resp.ok) {
         console.warn(`[manifest] ${url} → ${resp.status}`);
         return false;
@@ -75,39 +81,41 @@ export async function loadManifest(manifest: DataspaceManifest, token?: string):
     } catch (e) {
       console.warn(`[manifest] failed to fetch ${url}:`, e);
       return false;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
+  /* Pre-fetch every URL-source mark IN PARALLEL via Promise.allSettled,
+   * so one offline endpoint doesn't gate the others. Each individual
+   * fetchInto already has a 5 s timeout, so the worst-case wait for the
+   * whole manifest is ~5 s regardless of how many marks are unreachable.
+   * (Sequentially this was N×5 s — e.g. env down → temp + humidity =
+   * 10 s before the camera mark even got a chance to render.) */
+  const SELF_FETCHING_SHAPES = new Set(['video', 'imu']);
+  const urlSpecs = new Map<MarkSpec, { url: string; shape: string; refreshInterval: number }>();
+  const prefetchJobs: Promise<unknown>[] = [];
   for (const spec of manifest.marks) {
-    let urlSpec: { url: string; shape: string; refreshInterval: number } | null = null;
+    if (spec.data.source !== 'url') continue;
+    const urlData = spec.data;
+    const url = urlData.url;
+    if (url.startsWith('wss://') || url.startsWith('ws://')) continue;
+    urlSpecs.set(spec, {
+      url, shape: urlData.shape, refreshInterval: urlData.refreshInterval ?? 0,
+    });
+    if (!SELF_FETCHING_SHAPES.has(urlData.shape))
+      prefetchJobs.push(fetchInto(spec, url, urlData.shape));
+  }
+  await Promise.allSettled(prefetchJobs);
 
-    if (spec.data.source === 'url') {
-      const urlData = spec.data;
-      const url = urlData.url;
-
-      // Handle WebSocket data sources (wss:// or ws://)
-      if (url.startsWith('wss://') || url.startsWith('ws://')) {
-        console.warn(`[manifest] skipping WebSocket source ${url} (not yet connected)`);
-        continue;
-      }
-
-      urlSpec = { url, shape: urlData.shape, refreshInterval: urlData.refreshInterval ?? 0 };
-
-      // Builders that own their own URL fetch (binary streams, opaque
-      // formats — hls.js for video, spark for splat-gallery) need the URL
-      // passed through `spec.data.url` unchanged, NOT pre-fetched and
-      // parsed as JSON. Skipping the pre-fetch here keeps those builders
-      // wired to the manifest's URL while still recording urlSpec so the
-      // refresh-interval scheduler below remains correct for any future
-      // builder that wants it.
-      const SELF_FETCHING_SHAPES = new Set(['video', 'imu']);
-      if (SELF_FETCHING_SHAPES.has(urlData.shape)) {
-        // Skip the pre-fetch — the builder will consume the URL directly.
-      } else {
-        const ok = await fetchInto(spec, url, urlData.shape);
-        if (!ok) continue;
-      }
+  for (const spec of manifest.marks) {
+    /* WebSocket sources noted in the original loop — preserve the warn. */
+    if (spec.data.source === 'url' &&
+        (spec.data.url.startsWith('wss://') || spec.data.url.startsWith('ws://'))) {
+      console.warn(`[manifest] skipping WebSocket source ${spec.data.url} (not yet connected)`);
+      continue;
     }
+    const urlSpec = urlSpecs.get(spec) ?? null;
 
     const builder = builders.get(spec.type);
     if (!builder) {

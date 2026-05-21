@@ -112,7 +112,12 @@ describe('loadManifest — initial URL fetch', () => {
     expect((seenSpec.data as any).source).toBe('inline');
     expect((seenSpec.data as any).series).toEqual(series);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/test', { headers: {} });
+    /* fetchInto now wraps every request in an AbortController (5 s timeout)
+     * so unreachable URLs can't stall the manifest load forever — see the
+     * "blank scene when device offline" fix. The signal is opaque from the
+     * test's perspective; just match any AbortSignal. */
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/test',
+      expect.objectContaining({ headers: {}, signal: expect.any(AbortSignal) }));
 
     result.dispose();
   });
@@ -145,13 +150,23 @@ describe('loadManifest — initial URL fetch', () => {
       'tok-123',
     );
 
-    expect(fetchMock).toHaveBeenCalledWith('/api', {
-      headers: { Authorization: 'Bearer tok-123' },
-    });
+    expect(fetchMock).toHaveBeenCalledWith('/api',
+      expect.objectContaining({
+        headers: { Authorization: 'Bearer tok-123' },
+        signal: expect.any(AbortSignal),
+      }));
     result.dispose();
   });
 
-  it('skips a mark whose URL returns non-OK', async () => {
+  /* Previously: on non-OK / network error, the mark was skipped entirely
+   * (`continue` in the for-loop). That made charts vanish whenever the
+   * device endpoint was temporarily down — worse, a hanging fetch stalled
+   * the whole sequential await loop and the scene stayed blank.
+   *
+   * Now: the mark is built anyway (data stays in url-source form, builder
+   * gets a chance to render a placeholder), and the refresh-interval
+   * scheduler will populate it once the device is back. */
+  it('builds a placeholder mark when URL returns non-OK', async () => {
     const rec = makeRecordingBuilder();
     registerMarkBuilder(TEST_TYPE, rec.builder);
     mockFetchOnce({}, false);
@@ -161,12 +176,14 @@ describe('loadManifest — initial URL fetch', () => {
       data: { source: 'url', url: '/oops', shape: 'series' },
     } as MarkSpec]));
 
-    expect(result.marks).toHaveLength(0);
-    expect(rec.initialCalls).toHaveLength(0);
+    expect(result.marks).toHaveLength(1);
+    expect(rec.initialCalls).toHaveLength(1);
+    /* fetch failed → spec.data stays in its original url-source form */
+    expect((rec.initialCalls[0]!.data as any).source).toBe('url');
     result.dispose();
   });
 
-  it('skips a mark whose URL fetch rejects (network error)', async () => {
+  it('builds a placeholder mark when URL fetch rejects (network error)', async () => {
     const rec = makeRecordingBuilder();
     registerMarkBuilder(TEST_TYPE, rec.builder);
     mockFetchRejectOnce(new Error('ECONNREFUSED'));
@@ -176,8 +193,9 @@ describe('loadManifest — initial URL fetch', () => {
       data: { source: 'url', url: '/down', shape: 'series' },
     } as MarkSpec]));
 
-    expect(result.marks).toHaveLength(0);
-    expect(rec.initialCalls).toHaveLength(0);
+    expect(result.marks).toHaveLength(1);
+    expect(rec.initialCalls).toHaveLength(1);
+    expect((rec.initialCalls[0]!.data as any).source).toBe('url');
     result.dispose();
   });
 

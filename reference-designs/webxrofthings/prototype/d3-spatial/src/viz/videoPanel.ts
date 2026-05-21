@@ -107,6 +107,14 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
     mjpegImg.onload = () => {
       playing = true;
       updateStatus(type === 'frames' ? '▶ polling' : '▶ streaming', TEXT.accent);
+      /* Mark the texture dirty on every fresh JPEG so GL re-uploads —
+       * load-event-driven instead of render-driven so it works
+       * regardless of whether the cell is being ticked (gallery) or
+       * not (manifest pipeline). The earlier onBeforeRender path only
+       * fires when the mesh is actually being rendered, which depends
+       * on group visibility / scene-graph attachment in ways the
+       * manifest pipeline doesn't always guarantee. */
+      if (imgTexture) imgTexture.needsUpdate = true;
     };
     mjpegImg.onerror = () => {
       updateStatus('camera offline', TEXT.error);
@@ -202,6 +210,20 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
       // visible distortion.
       blitCtx.drawImage(video, 0, 0, blitCanvas.width, blitCanvas.height);
       canvasTexture.needsUpdate = true;
+    };
+  } else if (imgTexture && mjpegImg) {
+    /* Frames / MJPEG mode: the texture wraps the <img> directly. The
+     * manifest pipeline never calls the cell's tick() (it has no per-
+     * frame ticker — same blind spot that black-panelled HLS until the
+     * canvas-blit onBeforeRender fix). Mark the texture dirty whenever
+     * the img has any rasterized content; the upload itself is fast and
+     * the browser only repaints the img on actual reload. The demo
+     * gallery's tick() also sets needsUpdate, so it's idempotent there. */
+    mesh.onBeforeRender = () => {
+      if (!mjpegImg || !imgTexture) return;
+      if (mjpegImg.complete && mjpegImg.naturalWidth > 0) {
+        imgTexture.needsUpdate = true;
+      }
     };
   }
 

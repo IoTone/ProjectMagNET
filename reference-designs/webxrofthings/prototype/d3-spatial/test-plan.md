@@ -308,7 +308,7 @@ The mock-join-server resolves `DEMO01–04` to per-use-case manifests. Quick che
 | ------ | ------------------ | ----------------------- | ------------------------------------------------------------------ |
 | DEMO01 | UC1 vitals         | `uc1-vitals.json`       | Vitals device + 5 marks (HR/BR/phases/targets/body-temp) — body-temp is simulated; rest needs real device |
 | DEMO02 | UC2 home auto.     | `uc2-room.json`         | Camera + room temp + AQI/baro/pollen sensors + lighting/thermostat/speaker actuators (state mutable via curl; in-XR controls deferred to P4c) |
-| DEMO03 | UC3 poster session | `uc3-poster.json`       | Tree/treemap/sankey marks — pending P2 curated content             |
+| DEMO03 | UC3 XRt Exhibit    | `uc3-poster.json`       | Generative-art exhibit — voronoi stippling (with mirror-back photo) + 300° moon-phases arc + force-directed tree (grabbable nodes) + ceiling owl tile with spatial mp3 hoots. See `examples/uc3-poster.md`. |
 | DEMO04 | UC4 airplane       | `uc4-airplane.json`     | Airplane attitude (P5a IMU sim) + cabin boombox (P5b procedural-music PositionalAudio) + cabin display (P5c HLS video, Big Buck Bunny test stream from Mux) + spatial-photo gallery (P5d, 3× Gaussian-splat photos under `public/spatial/*.compressed.ply` — converted from `.sog` via `npm run convert:spatial`; ArrowL/R navigation, 15-s auto-advance). |
 
 Run `npm run server` (the join server) in a second terminal, then `npm run dev`. From the join panel, type each code in turn and verify:

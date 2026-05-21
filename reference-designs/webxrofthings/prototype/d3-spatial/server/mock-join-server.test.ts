@@ -218,7 +218,7 @@ describe('mock-join-server — fixed UC codes', () => {
       .get('/api/v1/manifest')
       .set('Authorization', `Bearer ${j3.body.token}`);
     expect(m3.status).toBe(200);
-    expect(m3.body.name).toBe('uc3-poster-session');
+    expect(m3.body.name).toBe('uc3-xrt-exhibit');
     expect(Array.isArray(m3.body.marks)).toBe(true);
 
     s.stopRotationTimer();

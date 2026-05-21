@@ -339,7 +339,7 @@ function showVizGallery(show: boolean) {
 const registry = new DataspaceRegistry();
 registry.add({ id: 'UC1', name: 'wrist',   scaleTag: 'personal', color: 0xff5577, glyph: '👤' });
 registry.add({ id: 'UC2', name: 'room',    scaleTag: 'room',     color: 0x66ccff, glyph: '🏠' });
-registry.add({ id: 'UC3', name: 'poster',  scaleTag: 'hall',     color: 0xffcc66, glyph: '🏛' });
+registry.add({ id: 'UC3', name: 'exhibit', scaleTag: 'hall',     color: 0xffcc66, glyph: '🏛' });
 
 const markDataspace: Record<string, string> = {
   line: 'UC1', bar: 'UC2', scatter: 'UC3', arc: 'UC3',
@@ -853,7 +853,17 @@ const packEntry = setupHierarchyUI('pack', packViz, packCell);
 
 const audio = new SpatialHoverAudio(camera);
 
-const initAudioOnce = () => { audio.init(); };
+const initAudioOnce = () => {
+  /* Fire-and-forget: audio.init() now resumes the AudioContext, but
+   * its resume() Promise hasn't necessarily resolved by the time the
+   * user's first click also triggers the keypad's playClick() in the
+   * same tick. Kicking resume() synchronously here on the listener's
+   * context — outside the await chain — gets the FIRST sound to play
+   * instead of going silent until the second keypress. */
+  const ctx = audio.listener.context as AudioContext | undefined;
+  if (ctx && ctx.state === 'suspended') { void ctx.resume(); }
+  audio.init();
+};
 window.addEventListener('pointerdown', initAudioOnce, { once: true });
 window.addEventListener('keydown', initAudioOnce, { once: true });
 
@@ -1025,12 +1035,14 @@ function placeDataspaceInFrontOfUser() {
   // Title sits clearly ABOVE the top row of the data dashboards. The
   // sensor grid's top row + its per-cell title reach ~camY+0.17 (grid
   // is centred at vizAnchor.y = camY-0.20, row pitch 0.40, cell title
-  // +0.165), so +0.50 leaves a clean gap instead of overlapping
-  // "Room devices" as it did before. Still inside a comfortable upward
-  // glance on Spectacles' FOV.
+  // +0.165). +0.50 was a UC2-conservative gap but read as "title floating
+  // in the sky" on UC3 (single tall panel + self-positioned art —
+  // smaller upper bound). +0.32 keeps ~15 cm clearance over UC2 cell
+  // tops and ~20 cm over UC3's stippling panel top; comfortable
+  // upward-glance on Spectacles' FOV.
   dataspaceTitle.position.set(
     pos.x + fwd.x * 1.35,
-    pos.y + 0.50,
+    pos.y + 0.32,
     pos.z + fwd.z * 1.35,
   );
   dataspaceTitle.lookAt(pos.x, dataspaceTitle.position.y, pos.z);

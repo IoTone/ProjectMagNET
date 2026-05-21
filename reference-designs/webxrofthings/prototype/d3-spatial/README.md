@@ -100,3 +100,7 @@ First mark: `line` as a `TubeGeometry` along a `d3-shape.line()` polyline — th
 
 - Proposal: `../../XR_UX-proposal1.md`
 - XR UX best practices: https://github.com/IoTone/AwesomeSpatialDesign/issues/7
+
+## Attributions
+
+- https://freesound.org/people/depwl9992/sounds/268667/

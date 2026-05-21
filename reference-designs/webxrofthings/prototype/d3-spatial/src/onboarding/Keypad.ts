@@ -60,10 +60,17 @@ export function createKeypad(): KeypadResult {
   const g = new THREE.Group();
   g.name = 'keypad';
   g.visible = false;
-  /* +10% over the original 0.022-key sizing so it reads bigger on the
-   * dataspace-login screen without re-tuning every constant below.
-   * Uniform scale also expands hit targets — good for XR raycast dwell. */
-  g.scale.setScalar(1.1);
+
+  /* +10% scale factor applied to every geometry constant below.
+   *
+   * Previously this lived as `g.scale.setScalar(1.1)` on the group, but
+   * that broke both press-sounds and input focus on the dataspace
+   * sign-in: ThreeMeshUI Blocks maintain their own bounds for hit
+   * targeting that don't always pick up a parent-group scale, so
+   * Interact's raycast hits stopped firing on any key. Multiplying the
+   * leaf constants instead keeps the geometry truly +10% in world
+   * space — no parent-scale propagation needed. */
+  const SCALE = 1.1;
 
   // ─── Geometry constants ────────────────────────────────────────────
   //
@@ -71,8 +78,8 @@ export function createKeypad(): KeypadResult {
   // come to 0.286 world units — comfortably narrower than the 0.4-wide
   // join panel above it. Stays large enough to hit-target in XR
   // (Quest controller dwell-select needs ~2 cm; 0.022 ≈ 2.2 cm).
-  const KEY_SIZE = 0.022;
-  const KEY_GAP = 0.003;
+  const KEY_SIZE = 0.022 * SCALE;
+  const KEY_GAP = 0.003 * SCALE;
   const ROW_GAP = KEY_SIZE + KEY_GAP;
 
   const ROW_TOP    = 'ABCDEFGHIJKLM';
@@ -121,15 +128,15 @@ export function createKeypad(): KeypadResult {
   // Slightly wider/taller than the key grid so each key sits in a clear
   // padded "tray." The same colour palette as the slot blocks in the
   // join panel keeps the popup visually anchored to the parent.
-  const bgWidth  = ROW_TOP.length * KEY_SIZE + (ROW_TOP.length - 1) * KEY_GAP + 0.02;
-  const bgHeight = 4 * KEY_SIZE + 3 * KEY_GAP + 0.025;
+  const bgWidth  = ROW_TOP.length * KEY_SIZE + (ROW_TOP.length - 1) * KEY_GAP + 0.02 * SCALE;
+  const bgHeight = 4 * KEY_SIZE + 3 * KEY_GAP + 0.025 * SCALE;
   const bgBlock = new ThreeMeshUI.Block({
     width: bgWidth,
     height: bgHeight,
     backgroundOpacity: 0.95,
     backgroundColor: new THREE.Color(0x1a1815),
-    borderRadius: 0.006,
-    borderWidth: 0.001,
+    borderRadius: 0.006 * SCALE,
+    borderWidth: 0.001 * SCALE,
     borderColor: new THREE.Color(0xb8a380),
     borderOpacity: 0.85,
   } as any);
@@ -149,8 +156,8 @@ export function createKeypad(): KeypadResult {
         height: KEY_SIZE,
         backgroundOpacity: 0.92,
         backgroundColor: new THREE.Color(0x3a3530),
-        borderRadius: 0.003,
-        borderWidth: 0.0006,
+        borderRadius: 0.003 * SCALE,
+        borderWidth: 0.0006 * SCALE,
         borderColor: new THREE.Color(TEXT.muted),
         borderOpacity: 0.55,
         justifyContent: 'center',
@@ -162,7 +169,7 @@ export function createKeypad(): KeypadResult {
 
       const label = new Text();
       label.text = ch;
-      label.fontSize = 0.013;
+      label.fontSize = 0.013 * SCALE;
       label.color = TEXT.primary;
       label.anchorX = 'center';
       label.anchorY = 'middle';
@@ -199,8 +206,8 @@ export function createKeypad(): KeypadResult {
       height: KEY_SIZE,
       backgroundOpacity: 0.94,
       backgroundColor: new THREE.Color(opts.bg),
-      borderRadius: 0.004,
-      borderWidth: 0.0006,
+      borderRadius: 0.004 * SCALE,
+      borderWidth: 0.0006 * SCALE,
       borderColor: new THREE.Color(opts.color),
       borderOpacity: 0.6,
       justifyContent: 'center',
@@ -212,7 +219,7 @@ export function createKeypad(): KeypadResult {
 
     const text = new Text();
     text.text = opts.label;
-    text.fontSize = 0.011;
+    text.fontSize = 0.011 * SCALE;
     text.color = opts.color;
     text.anchorX = 'center';
     text.anchorY = 'middle';
@@ -228,8 +235,8 @@ export function createKeypad(): KeypadResult {
   // warm-red to read as a destructive-ish action.
   buildActionKey({
     label: '⌫ Back',
-    x: -0.07,
-    width: 0.07,
+    x: -0.07 * SCALE,
+    width: 0.07 * SCALE,
     bg: 0x4a2520,
     color: 0xe6a070,
     char: 'BACK',
@@ -241,8 +248,8 @@ export function createKeypad(): KeypadResult {
   // the main Submit. Coloured green to match the Submit button.
   buildActionKey({
     label: '✓ Done',
-    x:  0.07,
-    width: 0.07,
+    x:  0.07 * SCALE,
+    width: 0.07 * SCALE,
     bg: 0x2a4a2a,
     color: 0xc0e0a0,
     char: 'DONE',

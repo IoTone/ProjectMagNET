@@ -19,10 +19,24 @@ function getCtx(): AudioContext | null {
   if (typeof window === 'undefined') return null;
   const l = (window as unknown as { __demo?: { audioListener?: { context?: AudioContext } } }).__demo;
   const ctx = l?.audioListener?.context ?? null;
-  // Only play once the context is actually running — calling start() on a
-  // suspended context queues sounds that fire in a confusing burst when
-  // it later resumes.
-  return ctx && ctx.state === 'running' ? ctx : null;
+  if (!ctx) return null;
+  /* Previously: returned null whenever state !== 'running' to avoid the
+   * "burst of queued sounds when the context finally resumes." That
+   * silenced the keypad on every user gesture, because in XR the only
+   * gestures are controller-select / hand-pinch events — these don't
+   * fire DOM-level `pointerdown` reliably, so the `initAudioOnce`
+   * listener never resumes the context. The first (and second, and
+   * fiftieth) keystroke saw state='suspended' and went silent.
+   *
+   * Now: if suspended, KICK resume() (fire-and-forget) AND return the
+   * ctx anyway. The oscillator gets scheduled; the context resumes a
+   * few ms later; the sound plays with a tiny startup delay instead of
+   * being swallowed. Spaced-out keystrokes won't queue dangerously —
+   * by the second press the context is running. */
+  if (ctx.state === 'suspended') {
+    void ctx.resume().catch(() => {});
+  }
+  return ctx;
 }
 
 /** Soft rising sine, ~90 ms. Plays on hover/focus of a control. */
