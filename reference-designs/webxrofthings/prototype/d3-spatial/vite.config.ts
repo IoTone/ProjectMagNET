@@ -101,6 +101,22 @@ const envAgent = new http.Agent({
 });
 
 /**
+ * IMU device agent — M5Capsule (ESP32-S3) running esp_http_server.
+ *
+ * Same single-socket / no-keep-alive / IPv4 pattern as the other ESP-IDF
+ * device agents. The Capsule serves at 50 Hz internally but the cell
+ * polls at 5 Hz (0.2 s `refreshInterval` in the UC4 manifest), so a
+ * single socket has plenty of headroom even at sustained load.
+ */
+const imuAgent = new http.Agent({
+  family: 4,
+  keepAlive: false,
+  maxSockets: 1,
+  timeout: 15000,
+});
+const imuDiag = createProxyDiag('imu');
+
+/**
  * Vitals device agent — XIAO ESP32-C6 running esp_http_server.
  *
  * `maxSockets: 1` is the load-bearing setting. Without it, four cells
@@ -163,6 +179,49 @@ export default defineConfig({
               'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
               'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
               'upgrade-insecure-requests',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
+      } as any,
+      // M5Capsule_Hive_Scribe_Redis — UC4 airplane IMU (BMI270, no magnetometer).
+      // The Capsule firmware exposes /api/v1/sensor/imu directly (Forth
+      // `imu-on` must be called once to bring up the sampler + httpd).
+      // mDNS hostname is magnet-scribe-<MAC4>.local — set IMU_HOST to the
+      // device IP or hostname:
+      //   IMU_HOST=http://magnet-scribe-a1b2.local  npm run dev
+      //   IMU_HOST=http://10.0.0.77                  npm run dev
+      // Must appear BEFORE the generic '/api/v1/sensor' entry — that rule
+      // catches /api/v1/sensor/imu otherwise and routes the IMU poll at
+      // the UC2 environment sensor (Atom Echo), which doesn't have this
+      // endpoint and silently returns nothing → UC4's altitude/airspeed/
+      // heading labels stay at '---'. See [project_uc4_capsule_imu] memo.
+      '/api/v1/sensor/imu': {
+        target: normalizeHost(process.env.IMU_HOST, 'http://magnet-scribe.local'),
+        changeOrigin: true,
+        agent: imuAgent,
+        configure: (proxy: any) => {
+          imuDiag.attachToProxy(proxy);
+          proxy.on('proxyReq', (proxyReq: any) => {
+            if (proxyReq.headersSent) return;
+            /* Extended drop list vs the other proxies — when the
+             * dataspace is served behind a cloudflared tunnel, the
+             * tunnel injects Cf-* / X-Forwarded-* / Cdn-Loop headers
+             * on top of the usual browser noise. The Capsule's
+             * esp_http_server (CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
+             * after sdkconfig bump) survives them, but stripping
+             * them here keeps a re-flash optional and matches what
+             * the firmware actually needs. */
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+              'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor',
+              'cf-warp-tag-id', 'cf-ew-via', 'cf-worker',
+              'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto',
+              'x-forwarded-port', 'x-real-ip', 'cdn-loop',
             ];
             for (const h of drop) proxyReq.removeHeader(h);
           });

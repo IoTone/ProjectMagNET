@@ -14,17 +14,17 @@
   "udm_devices": [
     {
       "udm_key":   "airplane-imu-001",
-      "udm_uuid":  "urn:device:imu:airplane-001",
-      "_comment":  "Simulated airplane IMU. Backed by mock-join-server for the demo; the real-device swap is a single URL change in the manifest below.",
-      "udm_model_name":   "Airplane IMU (sim)",
-      "udm_vendor":       "MagNET (sim)",
+      "udm_uuid":  "urn:device:imu:m5capsule-001",
+      "_comment":  "M5Capsule (ESP32-S3 + Bosch BMI270 6-DoF on I2C G8/G40), firmware M5Capsule_Hive_Scribe_Redis with the craw_imu component. Madgwick AHRS in firmware produces orientation; HTTP at /api/v1/sensor/imu. No magnetometer on the BMI270 — yaw is gyro-integrated and drifts ~1–2°/min. Forth `imu-zero` on the Capsule resets the heading datum when the user is facing 'forward' in the scene. Bring the sensor up explicitly: connect to the Capsule's USB console and run `imu-on`. To fall back to the mock-join-server simulation, unset IMU_HOST and the rule order is bypassed.",
+      "udm_model_name":   "M5Capsule (BMI270)",
+      "udm_vendor":       "M5Stack / Bosch Sensortec",
       "udm_mktg_name":    "Airplane IMU",
       "udm_type":         "motion-sensor",
       "udm_class":        ["motion-sensor", "imu", "vehicle"],
-      "udm_capabilities": ["orientation-euler", "angular-velocity", "linear-acceleration", "json-http"],
+      "udm_capabilities": ["orientation-euler", "angular-velocity", "linear-acceleration", "json-http", "madgwick-ahrs"],
       "udm_sensors":      ["accelerometer", "gyroscope"],
       "udm_services_link": ["imu-snapshot"],
-      "udm_tags":         ["vehicle", "simulated"],
+      "udm_tags":         ["vehicle", "real-hardware", "bmi270"],
       "udm_spatial_anchor_x": { "x": 0.0, "y": 1.2, "z": -0.6 }
     },
     {
