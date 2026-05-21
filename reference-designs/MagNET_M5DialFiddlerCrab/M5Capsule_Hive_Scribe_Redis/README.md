@@ -1,8 +1,8 @@
 # M5Capsule Hive Scribe + Redis (Role 4 variant)
 
-Same hardware as `M5Capsule_Hive_Scribe`, plus a RESP2-compatible TCP server so a laptop `redis-cli` (or any Redis client library) can read/write a key-value store backed by the same NVS partition the scribe already manages.
+Same hardware as `M5Capsule_Hive_Scribe`, plus a RESP2-compatible TCP server so a laptop `redis-cli` (or any Redis client library) can read/write a key-value store backed by the same NVS partition the scribe already manages. **Also**: a BMI270-backed IMU service (`craw_imu` component) that exposes a Madgwick-fused orientation + raw accel/gyro at `GET /api/v1/sensor/imu`, used by the d3-spatial UC4 airplane dataspace as the real-hardware swap for the mock-join-server's simulated stream.
 
-The Redis server is a sidecar — every existing scribe behavior (BLE provisioning, hive node join, role-bundle install, MQTT bridge) still works. The Redis surface is **off by default** at boot; bring it up explicitly with `redis-on`.
+The Redis server and the IMU service are both sidecars — every existing scribe behavior (BLE provisioning, hive node join, role-bundle install, MQTT bridge) still works. **Both surfaces are off by default at boot**; bring them up explicitly with `redis-on` / `imu-on`.
 
 ## Hardware
 
@@ -117,6 +117,67 @@ Cleartext TCP, dev-only. Profile defaults to `lan` (0.0.0.0). Every server start
 7. Reboot. `redis-on`. `GET foo` should still return `bar` (NVS persistence).
 8. On the Dial: `ruler-status` lists this Capsule with `bridge:status` / `redis:status` round-tripped. The Dial's main display shows the orange Redis dot next to the bridge dot.
 9. `redis-do` from the Capsule REPL — confirms loopback path works without needing the laptop.
+
+## IMU (`craw_imu`) — UC4 airplane data source
+
+The Capsule carries a Bosch BMI270 6-DoF IMU (3-axis accel + 3-axis gyro) on the internal I2C bus (G8=SDA, G40=SCL). The `craw_imu` component samples it at 50 Hz, runs a 6-DoF Madgwick AHRS to fuse roll/pitch/yaw, and exposes the result over HTTP for the d3-spatial UC4 airplane dataspace.
+
+### Why the BMI270 driver is vendored, not managed
+
+The Espressif-maintained `espressif/bmi270` registry component transitively depends on `espressif/sensor_hub` → `espressif/i2c_bus`. The latter's v2 backend (`i2c_bus_v2.c`) calls `i2c_master_get_bus_handle()` which was added in ESP-IDF **v5.4**. Our platform pin `espressif32@6.9.0` ships ESP-IDF v5.3.1, so the managed-component build fails with `implicit declaration of function 'i2c_master_get_bus_handle'`. The bmi270 driver itself uses only v5.3-compatible I2C APIs and has no internal i2c_bus dep, so we vendor it under `components/craw_imu/vendor/bmi270/` (Apache-2.0, original from `espressif/bmi270` 1.0.1~1) and skip the transitive entirely. If the platform bumps to `espressif32@6.10+`, the vendor copy can be deleted and the managed dep restored — see `components/craw_imu/idf_component.yml` for the restore recipe.
+
+### What's served
+
+```
+GET /api/v1/sensor/imu
+{
+  "orientation":      { "roll_rad": ..., "pitch_rad": ..., "yaw_rad": ... },
+  "angular_velocity": { "x": ..., "y": ..., "z": ... },   // rad/s
+  "acceleration":     { "x": ..., "y": ..., "z": ... },   // m/s² (gravity included)
+  "timestamp_us":     ...
+}
+```
+
+Same shape as the mock-join-server's simulated stream — swap is via the dataspace's Vite proxy (`/api/v1/sensor/imu` → `IMU_HOST=...` env var).
+
+### Heading caveat — no magnetometer
+
+The BMI270 does **not** include a magnetometer. Yaw is integrated from the gyro's Z-axis through Madgwick's IMU-only path and drifts at roughly 1–2°/min once the sensor is thermally stable. There is no "north" — only "where you said zero was."
+
+`imu-zero` snaps the current yaw as the heading 0 datum, which is the user-controlled equivalent of magnetic-north calibration. The exposed `yaw_rad` is always `wrap_pi(raw_yaw - zero_datum)`.
+
+### Forth surface
+
+```
+imu-on                start I2C + BMI270 + sample task + httpd + mDNS
+imu-off               stop httpd + mDNS + sample task (driver stays alive)
+imu-status            sampler state, sample count, current orientation + raw
+imu-zero              set current yaw as heading 0 datum
+```
+
+Sample is held off boot — call `imu-on` once after WiFi is up. State doesn't persist across reboots (unlike the Redis profile NVS).
+
+### Smoke test
+
+1. Provision WiFi via BLE (same flow as the base scribe).
+2. `imu-on` → boot banner shows `[imu] up on http://magnet-scribe-XXXX.local/api/v1/sensor/imu`.
+3. From a laptop on the same LAN: `curl http://magnet-scribe-XXXX.local/api/v1/sensor/imu | jq .`
+4. Lay the Capsule flat panel-up — `accel.z` should read ~+9.8 m/s², `roll`/`pitch` ~0°.
+5. Tilt it 30° on the long axis — `roll` should track within ~1° of the eyeball estimate.
+6. Spin it on a turntable — `yaw_rad` should rotate linearly, but expect drift over minutes (no magnetometer).
+7. `imu-zero` to reset the datum, then the UC4 airplane in the d3-spatial dataspace should read HDG 000° regardless of physical pose.
+
+### Wiring d3-spatial UC4 to this device
+
+The dataspace's proxy table catches `/api/v1/sensor/imu` BEFORE the generic `/api/v1/sensor` rule (which targets the UC2 AHT20 env sensor — without the more-specific rule, UC4 polls UC2's Atom Echo and the airplane labels stay at `---`):
+
+```bash
+IMU_HOST=http://magnet-scribe-XXXX.local  npm run dev
+# or by IP
+IMU_HOST=http://10.0.0.77  npm run dev
+```
+
+The UC4 manifest's `airplane-imu-001` device entry already references this Capsule (see `examples/uc4-airplane.json`).
 
 ## Related work
 

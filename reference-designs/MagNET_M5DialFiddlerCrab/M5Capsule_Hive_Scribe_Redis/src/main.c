@@ -58,6 +58,7 @@
 #include "craw_role_bundle.h"
 #include "craw_mqtt.h"
 #include "craw_redis.h"
+#include "craw_imu.h"
 #include "../../include/magnet_gen.h"
 
 static const char *TAG = "scribe";
@@ -1078,6 +1079,105 @@ static void w_redis_do(void) {
     craw_redis_pretty_print(reply, strlen(reply), redis_print_sink, NULL);
 }
 
+/* ----------------------------------------------------------------------
+ *  IMU Forth surface
+ *
+ *  The BMI270 driver + httpd are off by default at boot (same pattern as
+ *  Redis). `imu-on` starts the sample task and brings up the HTTP
+ *  endpoint on :80; `imu-off` reverses both. mDNS service is advertised
+ *  while the IMU is up so dataspace clients can find it on the LAN.
+ * --------------------------------------------------------------------*/
+
+static bool s_imu_mdns_published = false;
+
+static void w_imu_on(void) {
+    /* Init is idempotent — first call brings up I2C + BMI270, later
+     * calls return ESP_OK. We init lazily here (rather than at boot)
+     * so the I2C bus stays asleep until the user opts in. */
+    esp_err_t rc = craw_imu_init(NULL);
+    if (rc != ESP_OK) {
+        uprintf("\r\n[imu] init failed rc=%d\r\n", rc);
+        return;
+    }
+    rc = craw_imu_start();
+    if (rc != ESP_OK) {
+        uprintf("\r\n[imu] start failed rc=%d\r\n", rc);
+        return;
+    }
+    rc = craw_imu_http_start();
+    if (rc != ESP_OK) {
+        /* Sampler is running but the HTTP endpoint isn't reachable —
+         * surface clearly so the user doesn't think the LAN URL works. */
+        uprintf("\r\n[imu] httpd start failed rc=%d (sampler still running)\r\n", rc);
+        return;
+    }
+    if (!s_imu_mdns_published && mdns_published) {
+        mdns_txt_item_t txt[] = {
+            { "path",  "/api/v1/sensor/imu" },
+            { "shape", "imu" },
+            { "ver",   "1" },
+        };
+        mdns_service_add(NULL, "_magnet-imu", "_tcp", 80, txt,
+                         sizeof(txt)/sizeof(txt[0]));
+        s_imu_mdns_published = true;
+    }
+    uprintf("\r\n[imu] up on http://%s.local/api/v1/sensor/imu\r\n", hostname);
+}
+
+static void w_imu_off(void) {
+    craw_imu_http_stop();
+    craw_imu_stop();
+    if (s_imu_mdns_published) {
+        mdns_service_remove("_magnet-imu", "_tcp");
+        s_imu_mdns_published = false;
+    }
+    uprint("\r\n[imu] stopped\r\n");
+}
+
+static void w_imu_status(void) {
+    craw_imu_stats_t st;
+    craw_imu_stats(&st);
+    craw_imu_snapshot_t s;
+    craw_imu_snapshot(&s);
+    uprintf("\r\ninitialized:  %s\r\n", st.initialized ? "yes" : "no");
+    uprintf("sampler:      %s @ %d Hz\r\n",
+            st.running ? "running" : "stopped", st.sample_hz);
+    uprintf("httpd:        %s\r\n", craw_imu_http_running() ? "running" : "stopped");
+    uprintf("samples:      %llu\r\n", (unsigned long long)st.samples);
+    uprintf("yaw zero:     %.3f rad (%.1f°)\r\n",
+            st.yaw_zero_rad, st.yaw_zero_rad * 57.29578f);
+    uprintf("orientation:  roll=%.2f° pitch=%.2f° yaw=%.2f°\r\n",
+            s.roll_rad  * 57.29578f,
+            s.pitch_rad * 57.29578f,
+            s.yaw_rad   * 57.29578f);
+    uprintf("accel (m/s²): x=%.2f y=%.2f z=%.2f\r\n",
+            s.accel_x, s.accel_y, s.accel_z);
+    uprintf("gyro (rad/s): x=%.3f y=%.3f z=%.3f\r\n",
+            s.gyro_x, s.gyro_y, s.gyro_z);
+}
+
+static void w_imu_zero(void) {
+    craw_imu_zero();
+    uprint("\r\n[imu] yaw zeroed\r\n");
+}
+
+/* ( sda scl -- ) Linux-style i2cdetect on the given pins.
+ * Quick recipe for the M5Capsule:
+ *   8 10 imu-scan      → internal bus (BMI270 + RTC)
+ *   13 15 imu-scan     → external Grove bus
+ * Prints a 16x8 grid of responding addresses. Useful when `imu-on`
+ * NACKs and we need to distinguish "wrong pin map" from "wrong
+ * address" from "dead chip". */
+static void w_imu_scan(void) {
+    int scl = (int)forth_pop();
+    int sda = (int)forth_pop();
+    uprintf("\r\nscanning sda=%d scl=%d ...\r\n", sda, scl);
+    esp_err_t rc = craw_imu_bus_scan(sda, scl);
+    if (rc != ESP_OK) {
+        uprintf("[imu-scan] failed rc=%d\r\n", rc);
+    }
+}
+
 static void register_forth_words(void) {
     forth_register_word("scribe-store",  w_scribe_store);
     forth_register_word("scribe-recall", w_scribe_recall);
@@ -1112,6 +1212,11 @@ static void register_forth_words(void) {
     forth_register_word("redis-port",        w_redis_port);
     forth_register_word("redis-flush",       w_redis_flush);
     forth_register_word("redis-do",          w_redis_do);
+    forth_register_word("imu-on",            w_imu_on);
+    forth_register_word("imu-off",           w_imu_off);
+    forth_register_word("imu-status",        w_imu_status);
+    forth_register_word("imu-zero",          w_imu_zero);
+    forth_register_word("imu-scan",          w_imu_scan);
 }
 
 /* ---------- app_main ---------- */

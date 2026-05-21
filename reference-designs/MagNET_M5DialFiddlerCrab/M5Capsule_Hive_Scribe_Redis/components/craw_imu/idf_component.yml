@@ -1,0 +1,25 @@
+# Intentionally empty — no managed-component dependencies.
+#
+# We previously depended on `espressif/bmi270`, but that pulled in
+# `espressif/sensor_hub` → `espressif/i2c_bus`, and i2c_bus's v2 backend
+# calls `i2c_master_get_bus_handle()` which only exists in ESP-IDF
+# v5.4+. The PlatformIO platform `espressif32@6.9.0` ships ESP-IDF
+# v5.3.1, so the build fails:
+#
+#   managed_components/espressif__i2c_bus/i2c_bus_v2.c:104:9: error:
+#   implicit declaration of function 'i2c_master_get_bus_handle'
+#
+# Instead, the BMI270 driver sources from espressif/bmi270 1.0.1~1 are
+# vendored into `vendor/bmi270/` (Apache-2.0). They use only ESP-IDF
+# v5.3-compatible I2C APIs and have no transitive dependencies.
+#
+# If a future bump to espressif32@6.10+ (IDF v5.4+) happens and we
+# want to switch back to the managed component, this file becomes:
+#
+#   dependencies:
+#     espressif/bmi270:
+#       version: ">=1.0.1"
+#
+# …and the vendor/ directory + CMakeLists vendor entries can be
+# removed.
+dependencies: {}
