@@ -184,31 +184,32 @@
       "title": "Travel Destinations",
       "subtitle": "3D Gaussian splats  -  ArrowL / ArrowR to navigate",
       "data": { "source": "inline" },
+      "_comment_photos": "Travel-poster captions in the 'Visit [Destination]' style. Auto-advance order: Kyoto → Cannon Beach → Banff. The .ply files keep their original DSC* basenames — DSC2913 is the Kyoto temple-garden splat, DSC8994 is the Cannon Beach / Haystack Rock splat, DSC1624 is the Banff camping splat.",
       "config": {
         "photos": [
           {
-            "url": "/spatial/_DSC1624.compressed.ply",
-            "imageUrl": "/spatial/_DSC1624.webp",
-            "title": "DSC 1624",
+            "url": "/spatial/_DSC2913.compressed.ply",
+            "imageUrl": "/spatial/_DSC2913.jpg",
+            "title": "Visit Kyoto",
             "location": "Kyoto, Japan",
-            "description": "Walking through a moss-covered temple garden in late autumn. The stone path winds between cedar trunks centuries older than the shrine itself, with a small koi pond just out of frame to the right. Captured with a hand-held photogrammetry sweep at golden hour."
+            "description": "A moss-covered temple garden in late autumn. Stone paths thread between cedar trunks centuries older than the shrine itself; a koi pond just out of frame. Slip your shoes off at the gate, take the unhurried tour, leave with rain in your hair."
           },
           {
             "url": "/spatial/_DSC8994.compressed.ply",
             "imageUrl": "/spatial/_DSC8994.webp",
-            "title": "DSC 8994",
-            "location": "Banff National Park, Canada",
-            "description": "A glacial-fed lake at first light, the surface a perfect mirror of the limestone ridge above. A pair of canoes are pulled up on the gravel shore. The mountain reflection makes the splat feel taller than it is — the algorithm captured both above and below the waterline."
+            "title": "Visit Haystack Rock",
+            "location": "Cannon Beach, Oregon, USA",
+            "description": "Two hundred thirty-five feet of basalt sea stack at the Pacific's edge — tide pools at its base, tufted puffins nesting on its shoulders, a long beach to walk the cold sand at low water. Stand close enough to feel the spray, but only at low tide; the Pacific takes the shore back twice a day."
           },
           {
-            "url": "/spatial/_DSC2913.compressed.ply",
-            "imageUrl": "/spatial/_DSC2913.jpg",
-            "title": "DSC 2913",
-            "location": "Marrakech, Morocco",
-            "description": "Late-afternoon souk light filters through woven palm-frond awnings onto stacks of spice cones — saffron yellow, paprika red, dried-rose pink. The narrow passage and overhead awning make the splat reconstruction read almost like a tunnel, with the spice colours saturating warmly along both walls."
+            "url": "/spatial/_DSC1624.compressed.ply",
+            "imageUrl": "/spatial/_DSC1624.webp",
+            "title": "Visit Banff",
+            "location": "Banff National Park, Alberta, Canada",
+            "description": "Pitch the tent under the larches as they go gold, brew coffee on the camp stove at first light, listen for elk in the meadow at dusk. Banff is wild edges and big silence — pack warm, pack curious, leave time for a paddle on the lake."
           }
         ],
-        "autoAdvanceMs": 30000,
+        "autoAdvanceMs": 18000,
         "splatY": 0,
         "_comment_alpha_threshold": "Climbed 5 → 20 → 35 → 60 as Photos-mode stayed fragment-bound. [perf] showed 2.33M tris/frame even at 35 — roughly ~1.1M splats per scene, which exceeds Quest 3's per-frame triangle budget at 90 Hz. 60 keeps only splats with alpha ≥ ~24% (60/255), expected to drop another 30-40% of splats. Visible quality cost: faint translucent splats (mist, hair, foliage edges) thin out; solid-surface fidelity unchanged. If Quest still struggles after this, the next lever is splatRenderMode:TWO_D in liveSplatGalleryCell.ts (2D billboards, 2-3× faster fragment shading, loses parallax-correct depth — fine for a stationary photo gallery). The clean-quality path is re-converting source .ply with splat-transform decimation flags.",
         "splatAlphaRemovalThreshold": 60,

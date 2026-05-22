@@ -1074,12 +1074,14 @@ function repositionDataspaceMenu() {
   } else {
     // Default ('bottom'): was dead-centre in front of the user, which on
     // Spectacles' narrow FOV landed right on top of the join keypad
-    // ("Reset/Recenter/Leave panel hanging around"). Shift it LEFT by
-    // ~0.30 m at 0.9 m forward ≈ 18° off the forward axis, raised a
+    // ("Reset/Recenter/Leave panel hanging around"). Shifted LEFT by
+    // 0.55 m at 0.9 m forward ≈ 31° off the forward axis, raised a
     // touch (-0.22 vs -0.30). Kept facing the user (lookAt below) so
-    // it's still readable head-on with a glance left, but it's out of
-    // the central interaction path / keypad.
-    const LEFT = 0.30;
+    // it's still readable head-on with a glance left, but it's well
+    // out of the central interaction path / keypad. Previously 0.30 m
+    // (18°), which still overlapped UC4's centered photo gallery + the
+    // airplane attitude's wing extent on Quest 3's wider FOV.
+    const LEFT = 0.55;
     dataspaceMenuAnchor.position.set(
       camPos.x - right.x * LEFT + fwd.x * 0.9,
       camPos.y - 0.22,
