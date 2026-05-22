@@ -1,106 +1,162 @@
-# d3-spatial — Milestone 0
+# d3-spatial
 
-WebXR scaffold for the spatial D3 prototype described in `../../XR_UX-proposal1.md` §5.
+A spatial-D3 prototype for the WebXR-of-Things proposal: a manifest-driven dataspace renderer that loads in a WebXR headset (Quest 3, Snap Spectacles), instantiates 24+ mark types from JSON, and wires live data from real IoT devices (or simulated stand-ins) into the visualisation. Implementation of `../../XR_UX-proposal1.md` §5.
 
-## What's here (M0)
+Current state: **M22 (2026-05-21)** — four end-to-end use cases shipping, ~244 unit tests, fully documented per-UC manifests under `examples/`.
 
-- Vite + TypeScript + three.js + three-mesh-ui + troika-three-text + d3 core modules (deps declared, not all wired yet).
-- WebXR `immersive-ar` session with `local-floor` reference space.
-- Passthrough clear color (`alpha = 0`) per the best-practices issue.
-- UI anchor group that is re-positioned ~500 ms *after* session start, relative to the user's headset — not at world origin.
-- Controller raycaster with a world-space reticle (12 mm sphere, `depthTest:false`, `renderOrder:999`) — the pattern recommended for hand-tracked devices.
-- Placeholder cube + troika label attached to the anchor as proof-of-life.
+## Use cases
 
-## What's NOT here yet
+| | Code | Theme | Notes |
+|---|---|---|---|
+| **UC1** | `DEMO01` | Personal vitals dataspace | mmWave HR/BR + simulated body-temp; ECG-style line + arc + streamgraph + body-temp line. |
+| **UC2** | `DEMO02` | Room dataspace | Live ESP32-CAM, AHT20 temp/humidity, simulated AQI/baro/pollen, in-XR actuator panel for light + strip + thermostat + speaker. |
+| **UC3** | `DEMO03` | XRt Exhibit (curated art-data exhibit) | Voronoi stippling (triangular prism), 300° moon-phase arc, force-directed tree (grabbable), ceiling owl tile with spatial mp3 hoots. |
+| **UC4** | `DEMO04` | Airplane in-flight experience | Live BMI270 attitude (M5Capsule + Madgwick AHRS + gyro dead-reckoning), procedural cabin music, HLS cabin display, 3-scene Gaussian-splat travel-photo gallery. Mutually-exclusive content modes via show-only HUD. |
 
-- The `Chart` primitive (M1).
-- `three-mesh-ui` panel integration (M3) — the dep is installed but no Block is mounted yet.
-- Hover / brush / inspector interactions (M2).
-- Any real d3 scale binding — those modules are declared deps so M1 can begin immediately.
+Per-UC walkthroughs with device wiring + smoke tests are under `examples/<uc>.md`.
 
-## Running
+## Documentation
 
-WebXR requires a secure context. Options:
+| | When to read it |
+|---|---|
+| [`DEVELOPER_GUIDE.md`](./DEVELOPER_GUIDE.md) | **Start here** if you want to *create your own dataspace* — manifest authoring, mark types, device wiring, custom builders, deployment. |
+| [`API.md`](./API.md) | Full class-by-class library reference. The 1000-line "lookup" doc. |
+| [`STATUS.md`](./STATUS.md) | Current implementation status, known issues, **deferred capabilities** (everything the spec set proposes but we haven't built yet). |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | How to *extend d3-spatial itself* — adding mark types, palette rules, code style. |
+| [`test-plan.md`](./test-plan.md) | Manual on-device walkthrough scripts (5–15 min per UC). |
+| [`DESIGN_NOTES.md`](./DESIGN_NOTES.md) | History of key design decisions and their tradeoffs. |
+| [`examples/*.md`](./examples/) | Per-use-case walkthroughs (`uc2-room.md`, `uc3-poster.md`, `uc4-airplane.md`). |
+| [`XR_UX_BEST_PRACTICES.md`](./XR_UX_BEST_PRACTICES.md) | Lessons learned from on-device testing (Quest 3, Spectacles). |
+| `../*.md` (repo root) | The original spec set — `PROPOSAL.md`, `XR_UX-proposal1.md`, `USECASE_SPECS.md`. |
+
+## Quick start
+
+Prerequisites: Node 20+, npm. (Quest 3 or Snap Spectacles for on-device testing; desktop preview works too.)
 
 ```bash
+git clone <repo>
+cd reference-designs/webxrofthings/prototype/d3-spatial
 npm install
-npm run dev        # http://localhost:5173 on desktop for quick checks
 ```
 
-### On-device testing (Quest, Wolvic, Pico, Spectacles)
-
-WebXR requires a secure context. The HMD will refuse to start an AR session over plain HTTP. Pick one of these paths.
-
-**Option A — `cloudflared` (fastest, no account).**
+Two processes run in parallel during dev:
 
 ```bash
-brew install cloudflared          # or equivalent for your OS
-npm run dev                       # in one terminal
-cloudflared tunnel --url http://localhost:5173   # in another
+# Terminal 1 — the join-code server (default port 3001)
+npm run server
+
+# Terminal 2 — the Vite dev server (port 5173)
+npm run dev
 ```
 
-`cloudflared` prints an `https://*.trycloudflare.com` URL. Open it in the HMD browser, tap **Start AR**. No signup; the URL is ephemeral and rotates per invocation.
+If port 3001 is taken (e.g., by another NestJS project), override on both ends:
 
-**Option B — `ngrok` (requires free account).**
+```bash
+JOIN_SERVER_PORT=3101 npm run server
+JOIN_SERVER_PORT=3101 npm run dev
+```
 
+Open in the browser:
+- `http://localhost:5173/` → join keypad. Type `DEMO01`–`DEMO04` for the four use cases.
+- `http://localhost:5173/?manifest=/examples/uc1-vitals.json` → direct manifest load (skips the keypad).
+- `http://localhost:5173/?scene=charts` → demo gallery (renderer-development view).
+
+## On-device testing (WebXR)
+
+WebXR requires HTTPS. The headset's browser refuses `immersive-ar` over plain HTTP.
+
+**Recommended: `cloudflared` tunnel (no signup).**
+```bash
+brew install cloudflared
+cloudflared tunnel --url http://localhost:5173
+```
+Open the resulting `https://*.trycloudflare.com` URL on the HMD; tap **Start AR**. The URL is ephemeral; rotates per invocation.
+
+**Alternative: `ngrok` (free tier, requires account).**
 ```bash
 brew install ngrok/ngrok/ngrok
 ngrok config add-authtoken <YOUR_TOKEN>
-npm run dev
 ngrok http 5173
 ```
 
-Use the `https://*.ngrok-free.app` URL.
+**Alternative: `mkcert` + local HTTPS (repeatable, no tunnel).** See `examples/uc2-room.md` for the full recipe — needed when you want sub-100 ms LAN latency to a device on the same network as the headset.
 
-**Option C — `mkcert` + local HTTPS (best for repeatable testing).**
+## Platform notes
 
-```bash
-brew install mkcert
-mkcert -install
-mkcert localhost 192.168.x.x <your-lan-ip>
-```
+**Meta Quest 3 (primary).** Chromium-based Meta Browser, `immersive-ar` + passthrough out of the box, `local-floor` reference space works. `chrome://inspect` over USB for live debugging.
 
-Then edit `vite.config.ts` to point at the generated `.pem` files and set `server.https = { key, cert }`. HMD must be on the same LAN; reach the dev server at `https://<your-lan-ip>:5173/`. Root CA must be trusted by the HMD browser — on Quest this usually means sideloading, which is why A/B are preferred for quick iteration.
+**Snap Spectacles '24 (secondary).** Optical waveguide, narrow FOV, `local-floor` unreliable (we have a `cam.y − 1.55` fallback + a "Set Floor" toolbar button). Blue text is unreadable through the waveguide — the warm palette in `src/ui/palette.ts` is tuned for this.
 
-### Platform-specific notes
+**Wolvic (Quest / Pico / Huawei).** Same input model as Quest 3. Hand-tracking varies by host device.
 
-**Meta Quest 3 (most reliable).** Meta Browser (Chromium-based) handles `immersive-ar` with passthrough out of the box. `local-floor` is honored — floor grid lands correctly without needing the "Set Floor" button. Controllers and hand tracking both fire standard `selectstart`/`selectend`. **Best debugging path:** enable Developer Mode on the Quest, connect USB, open `chrome://inspect` in desktop Chromium → live page inspection with console, breakpoints, and DOM view while you wear the headset. Pair a Bluetooth keyboard to use the `G` key gallery/charts toggle and to type into the browser console. System-level screen recording captures the passthrough + XR composite for sharing.
+## Using d3-spatial as a library
 
-**Snap Spectacles '24.** Optical waveguide with narrow FOV. `local-floor` reference space behavior is unreliable — the `cam.y − 1.55` fallback and "Set Floor" button exist for this device. No keyboard pairing, so scene switching goes through the toolbar only (or the `?scene=charts` URL query). Blue text is unreadable through the waveguide — the warm palette in `src/ui/palette.ts` is tuned for this device and matters here more than on Quest.
-
-**Wolvic (Quest / Pico / Huawei).** Same `selectstart`/`selectend` model as Quest 3. Hand tracking support varies by host device.
-
-### Troubleshooting
-
-- **"AR NOT SUPPORTED" button on HMD** — the device didn't advertise `immersive-ar`. Quest needs OS-level passthrough permission for the browser; Wolvic needs `navigator.xr`. Verify in the HMD browser's console.
-- **Blank scene inside XR** — `local-floor` reference space may not be available. Fall back to `local`. Our code requests `local-floor` as required; soften to optional if needed.
-- **Audio silent** — WebAudio won't start until a user gesture. Tap once inside the XR session (the controller trigger counts).
-- **Hand-tracked pinch not registering** — Wolvic hand tracking currently routes pinch through `selectstart`. If this changes, the XRRig wires the same event. On Quest, both hands AND Touch Plus controllers emit `selectstart`; the controller path is more precise for pointing.
-- **`ctrls=0` in debug HUD** — means no XR input sources are routed as `XRController` instances. Quest 3 should report 2 immediately when hands or controllers are active. Spectacles may route through `inputsourceschange` only; that path is not yet wired.
-- **Node drag on force graph doesn't follow the hand** — verify the reticle lands on a node first (yellow sphere on the node surface). Pinching without a hovered node triggers recenter, not grab.
-
-Desktop preview shows a 2D camera view with the grid + anchor so you can verify scene assembly without a headset.
-
-## Next step (M1)
-
-Add `src/chart/Chart.ts` exposing:
+If you want to consume d3-spatial's primitives (mark builders, Interact system, audio, manifest loader) in your own three.js / WebXR app rather than fork the renderer, the entry points are:
 
 ```ts
-const chart = new Chart()
-  .x(scaleTime().domain([t0, t1]).range([0, 0.4]))
-  .y(scaleLinear().domain([0, 200]).range([0, 0.1]))
-  .mark('line')
-  .data(series);
-uiAnchor.add(chart.object3D);
+// Manifest pipeline — the "I have a JSON, give me a scene" path.
+import { loadManifest, registerMarkBuilder } from 'd3-spatial/manifest/loader';
+import { renderManifestToScene }              from 'd3-spatial/manifest/renderManifest';
+
+// Individual viz primitives — the "I want a 3D streamgraph mesh" path.
+import { buildSankey, buildTree, buildForceGraph, buildStreamgraph,
+         buildLineMark, buildArcGauge, buildVideoPanel /* … */ } from 'd3-spatial/viz';
+
+// Interaction system — Interact registers any THREE.Object3D as hover/drag-pickable.
+import { Interact } from 'd3-spatial/interact/Interact';
+
+// UI chrome — NodeHoverFx (label + halo), VizHud, Breadcrumb, InspectorCard, Toolbar.
+import { buildOfflineSensorsHud, buildDemoModeHud } from 'd3-spatial/manifest';
+
+// Audio — spatial hover sounds, procedural music, ambient bed.
+import { SpatialHoverAudio } from 'd3-spatial/audio/SpatialHoverAudio';
+import { AmbientBed }        from 'd3-spatial/audio/AmbientBed';
 ```
 
-First mark: `line` as a `TubeGeometry` along a `d3-shape.line()` polyline — the UC1 wrist heart-rate ribbon.
+The project isn't published to npm yet; integration today is by git-submodule or by copying the relevant files into your own project. Full method/class signatures and config options for every primitive are in [`API.md`](./API.md).
+
+The cleanest integration story is **manifest-driven**: write a manifest JSON, hand it to `loadManifest`, attach the result to your scene anchor. That's how all four use cases are built. See [`DEVELOPER_GUIDE.md`](./DEVELOPER_GUIDE.md) for the full walkthrough.
+
+## Project structure
+
+```
+src/
+  audio/           AudioListener-backed spatial sound + procedural music
+  chart/           Chart primitive (line / bar / arc / scatter marks)
+  demo/            Reference cells (live HR/BR/IMU/spatial-audio/splat-gallery/actuator-panel)
+  interact/        Interact, FingertipGrab, XRBrush, DragBrush
+  manifest/        loader, schema, renderManifest, builders, healthMonitor, fakeData, HUDs
+  onboarding/      JoinPanel, Keypad, SlotWheel, splashLogo
+  ui/              palette, Toolbar, Breadcrumb, NodeHoverFx, InspectorCard, VizHud, DataspaceHud, DataspaceMenu
+  util/            tween, easings
+  viz/             standalone viz builders — force, tree, treemap, sunburst, pack, sankey, ridgeline, streamgraph, parallel, edgeBundle, tidyTree, tangledTree, voronoiStippling, moonPhasesArc, owlsToTheMax, forceTree3d, videoPanel, glitchTextureShader, globeWidget
+  xrRig.ts         WebXR controller + hand-tracking abstraction
+  main.ts          App composition
+
+server/            mock-join-server (rotating + fixed DEMO codes), proxy-diag
+
+examples/          The four canonical manifests + per-UC docs
+tools/             discover-magnet-devices.mjs (mDNS auto-discovery, see DEVELOPER_GUIDE)
+public/            Static assets (Gaussian splats, mp3, jpegs)
+```
+
+## Troubleshooting
+
+- **"Code not recognized" on DEMO01-04** — check that `npm run server` is actually bound to its port (a different project on 3001 will intercept silently; we now fail loudly on `EADDRINUSE`). `lsof -i :3001` confirms.
+- **Blank scene inside XR** — `local-floor` reference space unavailable; we request `local-floor` as required but soften to optional if needed. Check the HMD's developer console.
+- **Audio silent** — WebAudio won't start until a user gesture. Tap once inside the XR session.
+- **Camera offline panel** — UC2 falls back to a still image (`fallbackImageUrl` config); if you see the mountain placeholder, the ESP32-CAM isn't reachable. Check `CAMERA_HOST` env / mDNS.
+- **DEMO MODE pulsing yellow** — at least one URL-source mark is offline and serving fake data. Hover the red OFFLINE SENSORS card to see which.
+- **macOS `.local` resolution issues** — Local Network permission for your terminal app, iCloud Private Relay off, Private Wi-Fi MAC off. See `docs/macOS-LAN-networking.md`.
 
 ## References
 
-- Proposal: `../../XR_UX-proposal1.md`
+- Original proposal: [`../XR_UX-proposal1.md`](../XR_UX-proposal1.md)
 - XR UX best practices: https://github.com/IoTone/AwesomeSpatialDesign/issues/7
+- IoTone UDM/USM spec: `../../specs/UDM-MagNET-v1.md`
 
 ## Attributions
 
-- https://freesound.org/people/depwl9992/sounds/268667/
+- Owl field recording: https://freesound.org/people/depwl9992/sounds/268667/
+- Photographic source images (`public/spatial/`): Vincent Foster (Sony A6)
+- Stranger Things "neon outline" splash-logo styling, after the Netflix series logo
