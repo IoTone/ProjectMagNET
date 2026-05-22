@@ -83,6 +83,10 @@ export interface LiveImuCell {
   setActive(active: boolean): void;
   dispose(): void;
   getStatus(): LiveCellStatus;
+  /** True after AUTONOMOUS_AFTER_OFFLINE_MS of failed polls — the cell
+   *  is painting synthesised orientation. renderManifest reads this
+   *  to gate the DEMO MODE HUD so a short outage doesn't flash it. */
+  isAutonomous(): boolean;
 }
 
 /** Module-level instance counter — same idea as liveSplatGalleryCell: a
@@ -348,10 +352,79 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
   const dreckEuler = new THREE.Euler(0, 0, 0, 'YXZ');
   const dreckQuat  = new THREE.Quaternion();
 
+  /* Autonomous mode: when the IMU device has been unreachable for
+   * 10 s, the cell stops waiting for real data and starts
+   * synthesising orientation from a slow sine — same idea as the
+   * mock-join-server's `imuAt` simulator, but driven by the
+   * browser clock so it works even when the join server is also
+   * down. The instrument labels (HDG / KT / FT) advance from the
+   * same synthesised time, and the dead-reckoning gyro cache is
+   * fed too so the 60 fps smoothing pipeline doesn't stall. Live
+   * data takes over the moment the device comes back. */
+  const AUTONOMOUS_AFTER_OFFLINE_MS = 10_000;
+  let firstOfflineMs: number | null = null;
+  let autonomousMode = false;
+
+  function applyAutonomousFrame() {
+    const sec = Date.now() / 1000;
+    /* Slow gentle motion — feels like cruise flight on a calm day.
+     * Periods chosen to be mutually prime so the composite never
+     * repeats exactly. */
+    const roll  = 0.20 * Math.sin(sec / 17);
+    const pitch = 0.10 * Math.sin(sec / 23);
+    const yaw   = 0.50 * Math.sin(sec / 41);
+    scratchEuler.set(pitch, yaw, roll, 'YXZ');
+    scratchQuat.setFromEuler(scratchEuler);
+    targetQuat.copy(scratchQuat);
+    currentYawRad = yaw;
+    if (!smooth) airplane.quaternion.copy(targetQuat);
+
+    /* Synthesise the gyro derivatives so dead-reckoning stays
+     * coherent with the synthesised target orientation. */
+    liveGyroX = (0.20 / 17) * Math.cos(sec / 17);
+    liveGyroY = (0.10 / 23) * Math.cos(sec / 23);
+    liveGyroZ = (0.50 / 41) * Math.cos(sec / 41);
+    lastGyroAtMs = performance.now();
+
+    /* Match the live-path label updates. */
+    const hdgDeg = Math.round(((yaw * 180 / Math.PI) % 360 + 360) % 360);
+    headingLabel.text = `HDG ${hdgDeg.toString().padStart(3, '0')}°`;
+    headingLabel.sync();
+    airspeedLabel.text = `${Math.round(airspeedAt(Date.now()))} KT`;
+    airspeedLabel.sync();
+    const altFt = Math.round(altitudeAt(Date.now()) / 100) * 100;
+    altitudeLabel.text = `${altFt.toLocaleString()} FT`;
+    altitudeLabel.sync();
+  }
+
+  function onFetchFail(): boolean {
+    /* Walk the autonomous-mode state machine. First failure stamps
+     * firstOfflineMs; after AUTONOMOUS_AFTER_OFFLINE_MS the cell
+     * starts painting synthesised orientation every refresh tick.
+     * Returns the polling-layer result (false = error, so the
+     * shared status tracker counts this as a failed cycle). */
+    if (firstOfflineMs == null) firstOfflineMs = Date.now();
+    if (!autonomousMode && (Date.now() - firstOfflineMs) >= AUTONOMOUS_AFTER_OFFLINE_MS) {
+      autonomousMode = true;
+      console.info(`[liveImuCell] device unreachable ${AUTONOMOUS_AFTER_OFFLINE_MS / 1000}s — entering autonomous mode`);
+    }
+    if (autonomousMode) applyAutonomousFrame();
+    return false;
+  }
+
   async function refresh(): Promise<boolean> {
+    /* 2 s AbortController timeout. Without this, a Vite proxy that
+     * can't reach the IMU device holds the fetch open for ~30 s
+     * (proxy agent timeout) before erroring — during which our
+     * self-rescheduling polling stalls and the autonomous-timer
+     * sees zero failure events. With a 2 s cap, failures fire every
+     * ~2.2 s and the 10 s autonomous threshold is reached on
+     * schedule (~5 failed polls in). */
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
     try {
-      const resp = await fetch(url);
-      if (!resp.ok) return false;
+      const resp = await fetch(url, { signal: controller.signal });
+      if (!resp.ok) return onFetchFail();
       const json = await resp.json() as Partial<ImuSnapshot>;
       const o = json?.orientation;
       if (!o || typeof o.roll_rad !== 'number'
@@ -361,6 +434,14 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
         // don't move the airplane. Matches the "no data yet" behaviour in
         // the vitals cells.
         return true;
+      }
+      /* Real data is back. Drop autonomous mode + clear the
+       * offline timer so the next outage starts its 10 s
+       * countdown fresh. */
+      firstOfflineMs = null;
+      if (autonomousMode) {
+        autonomousMode = false;
+        console.info('[liveImuCell] device back online — leaving autonomous mode');
       }
       // YXZ Euler order: yaw applied first (heading), then pitch (nose),
       // then roll (bank). Matches the way pilots think about attitude.
@@ -396,8 +477,11 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
       altitudeLabel.sync();
       return true;
     } catch {
-      /* leave airplane at last known orientation */
-      return false;
+      /* network error, abort (2 s timeout), or JSON parse failure —
+       * count as a failed poll so the autonomous-mode timer advances. */
+      return onFetchFail();
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -488,5 +572,12 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
       globeWidget?.dispose();
     },
     getStatus: () => poller?.getStatus() ?? { state: 'offline' as const, lastSuccessAgoMs: null },
+    /* True while the cell has been polling but failing for at least
+     * AUTONOMOUS_AFTER_OFFLINE_MS, and is now painting synthesised
+     * orientation each tick. Distinct from `getStatus().state ==
+     * 'offline'` (which fires after ~400 ms of failure) so the
+     * manifest's DEMO HUD only lights up once the user is actually
+     * looking at fake data, not for the first transient hiccup. */
+    isAutonomous: () => autonomousMode,
   };
 }

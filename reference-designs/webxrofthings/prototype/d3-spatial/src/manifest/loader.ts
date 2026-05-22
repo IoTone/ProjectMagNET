@@ -10,6 +10,8 @@
 import * as THREE from 'three';
 import type { DataspaceManifest, MarkSpec, MarkType } from './schema';
 import type { HNode } from '../demo/sampleHierarchy';
+import { createHealthMonitor, type HealthMonitor } from './healthMonitor';
+import { generateFakePayload } from './fakeData';
 
 export interface LoadedMark {
   id: string;
@@ -37,6 +39,11 @@ export interface LoadResult {
   name: string;
   scaleTag: string;
   marks: LoadedMark[];
+  /** Per-mark fetch health. renderManifest reads this to build the
+   *  offline-sensors + DEMO-mode HUDs; the loader's setInterval body
+   *  pushes fake data into offline marks. Always present, even for
+   *  manifests with no URL marks (just stays empty). */
+  health: HealthMonitor;
   /**
    * Stop all scheduled refresh intervals. Call on dataspace teardown to avoid
    * stranded setInterval()s polling forever.
@@ -53,10 +60,20 @@ export function registerMarkBuilder(type: MarkType, builder: Builder) {
   builders.set(type, builder);
 }
 
-/** Load a manifest and instantiate all its marks. */
-export async function loadManifest(manifest: DataspaceManifest, token?: string): Promise<LoadResult> {
+/** Load a manifest and instantiate all its marks. Always creates a
+ *  HealthMonitor (returned on LoadResult) — the monitor receives
+ *  per-mark fetch outcomes on every initial + periodic refresh and
+ *  gets queried to decide whether the next setInterval tick should
+ *  hand fake data into the builder's refresh callback (offline →
+ *  DEMO MODE; back to real data on recovery). renderManifest
+ *  subscribes to it to drive the offline-sensors + DEMO HUDs. */
+export async function loadManifest(
+  manifest: DataspaceManifest,
+  token?: string,
+): Promise<LoadResult> {
   const marks: LoadedMark[] = [];
   const intervals: Array<ReturnType<typeof setInterval>> = [];
+  const health = createHealthMonitor();
 
   /** Re-fetch a URL data source and mutate spec.data with the new inline data.
    *  Returns true on success. Bounded by a 5 s AbortController timeout so an
@@ -64,6 +81,17 @@ export async function loadManifest(manifest: DataspaceManifest, token?: string):
    *  load — without this, a single unreachable URL stalls the for-loop in
    *  loadManifest indefinitely and the scene never renders ("blank, no
    *  error" because failures are logged to console, not visible UI). */
+  /** Stamp a fake payload into `spec.data` if `fakeData.ts` knows how to
+   *  synthesise this shape. Returns true if the spec was mutated (the
+   *  caller should re-run the builder's refresh callback). Keeps the
+   *  refresh-loop body small + readable. */
+  function seedFakeIfPossible(spec: MarkSpec, shape: string): boolean {
+    const fake = generateFakePayload(spec, shape);
+    if (fake == null) return false;
+    (spec.data as any) = { source: 'inline', ...shapeToField(shape, fake) };
+    return true;
+  }
+
   async function fetchInto(spec: MarkSpec, url: string, shape: string): Promise<boolean> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
@@ -103,8 +131,23 @@ export async function loadManifest(manifest: DataspaceManifest, token?: string):
     urlSpecs.set(spec, {
       url, shape: urlData.shape, refreshInterval: urlData.refreshInterval ?? 0,
     });
-    if (!SELF_FETCHING_SHAPES.has(urlData.shape))
-      prefetchJobs.push(fetchInto(spec, url, urlData.shape));
+    /* Register with the health monitor up front. The refreshInterval
+     * drives the staleness window; if the manifest didn't specify one
+     * use a conservative 30 s default so the offline-detection clock
+     * doesn't fire too eagerly. */
+    health.register(spec.id, urlData.refreshInterval ?? 30);
+    if (!SELF_FETCHING_SHAPES.has(urlData.shape)) {
+      prefetchJobs.push(
+        fetchInto(spec, url, urlData.shape).then((ok) => {
+          health.recordFetch(spec.id, ok);
+          /* Pre-fetch failure: seed the spec with a fake payload so the
+           * builder still has something to render. The user sees the
+           * DEMO HUD light up almost immediately on a cold-start when
+           * the device is unreachable. */
+          if (!ok) seedFakeIfPossible(spec, urlData.shape);
+        })
+      );
+    }
   }
   await Promise.allSettled(prefetchJobs);
 
@@ -128,11 +171,21 @@ export async function loadManifest(manifest: DataspaceManifest, token?: string):
     marks.push(loaded);
 
     /* If the mark has a URL source with a positive refreshInterval AND the
-     * builder produced a `refresh` callback, schedule periodic re-fetches. */
+     * builder produced a `refresh` callback, schedule periodic re-fetches.
+     * Each tick: try the real URL first; if it succeeds the builder gets
+     * the real payload. If it fails and the health monitor has flagged
+     * this mark offline, seed the spec with a fake payload so the chart
+     * keeps moving — the matching DEMO HUD (wired in renderManifest)
+     * tells the user the data isn't real. */
     if (urlSpec && urlSpec.refreshInterval > 0 && loaded.refresh) {
       const handle = setInterval(async () => {
         const ok = await fetchInto(spec, urlSpec!.url, urlSpec!.shape);
-        if (ok) loaded.refresh!(spec);
+        health.recordFetch(spec.id, ok);
+        if (ok) {
+          loaded.refresh!(spec);
+        } else if (health.stateOf(spec.id) === 'offline') {
+          if (seedFakeIfPossible(spec, urlSpec!.shape)) loaded.refresh!(spec);
+        }
       }, urlSpec.refreshInterval * 1000);
       intervals.push(handle);
     }
@@ -167,6 +220,7 @@ export async function loadManifest(manifest: DataspaceManifest, token?: string):
     name: manifest.name,
     scaleTag: manifest.scaleTag,
     marks,
+    health,
     dispose,
   };
 }

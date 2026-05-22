@@ -17,6 +17,12 @@ export interface VideoPanelOptions {
   muted?: boolean;
   /** For 'frames' mode: ms between captures. Default 300. */
   frameIntervalMs?: number;
+  /** Static image to fall back to when the live source can't be
+   *  reached (mjpeg/frames onerror, or hls.js fatal). Same-origin URL
+   *  preferred — a CORS failure on the fallback would mask the real
+   *  outage. When omitted, the panel just shows the last successful
+   *  frame (or stays blank if none ever loaded). */
+  fallbackImageUrl?: string;
 }
 
 export interface VideoPanelViz {
@@ -39,6 +45,7 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
     autoplay = true,
     muted = true,
     frameIntervalMs = 300,
+    fallbackImageUrl,
   } = opts;
 
   // Build marker — confirms in the (in-headset) debug console exactly
@@ -68,6 +75,16 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
   // MJPEG uses <img> directly as a texture source (no canvas — avoids tainted-canvas WebGL issue)
   let mjpegImg: HTMLImageElement | null = null;
   let imgTexture: THREE.Texture | null = null;
+
+  /* Fallback image + texture (mjpeg/frames mode only). Pre-loaded
+   * via a separate <img> with no crossOrigin (fallback is same-
+   * origin so no CORS needed). When the live source fails we swap
+   * the panel material's `map` to fallbackTexture; on the first
+   * successful live frame after that we swap back to imgTexture.
+   * `fallbackActive` tracks which texture is currently bound. */
+  let fallbackImgEl:   HTMLImageElement | null = null;
+  let fallbackTexture: THREE.Texture    | null = null;
+  let fallbackActive  = false;
 
   // Frames mode: poll a single-JPEG endpoint periodically
   let framesTimer: number | null = null;
@@ -100,6 +117,36 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
     }, { once: true });
     if (autoplay) doPlay();
   } else if (type === 'mjpeg' || type === 'frames') {
+    /* Build the fallback BEFORE the live <img>. This means the panel
+     * has *something* to paint at construction time, without waiting
+     * for the live fetch to fail (which can take 30 s through the
+     * Vite proxy + agent timeout). The handlers on the live <img>
+     * reference fallbackTexture/fallbackActive directly. */
+    if (fallbackImageUrl) {
+      fallbackImgEl = document.createElement('img');
+      fallbackImgEl.style.display = 'none';
+      document.body.appendChild(fallbackImgEl);
+      fallbackTexture = new THREE.Texture(fallbackImgEl);
+      fallbackTexture.minFilter = THREE.LinearFilter;
+      fallbackTexture.magFilter = THREE.LinearFilter;
+      fallbackTexture.colorSpace = THREE.SRGBColorSpace;
+      fallbackImgEl.onload = () => {
+        console.info(`[videoPanel] fallback loaded ok: ${fallbackImageUrl} `
+                   + `(${fallbackImgEl?.naturalWidth}×${fallbackImgEl?.naturalHeight})`);
+        if (fallbackTexture) fallbackTexture.needsUpdate = true;
+      };
+      fallbackImgEl.onerror = (e) => {
+        console.warn(`[videoPanel] fallback image failed to load: ${fallbackImageUrl}`, e);
+      };
+      console.info(`[videoPanel] requesting fallback image: ${fallbackImageUrl}`);
+      fallbackImgEl.src = fallbackImageUrl;
+      /* Start the panel on the fallback. The mjpegImg.onload handler
+       * below swaps to the live texture on the first successful
+       * frame; if the camera never recovers we just keep showing
+       * the mountain. */
+      fallbackActive = true;
+    }
+
     mjpegImg = document.createElement('img');
     mjpegImg.crossOrigin = 'anonymous';
     mjpegImg.style.display = 'none';
@@ -115,8 +162,34 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
        * on group visibility / scene-graph attachment in ways the
        * manifest pipeline doesn't always guarantee. */
       if (imgTexture) imgTexture.needsUpdate = true;
+      /* Live frame just landed → swap the panel back from the fallback
+       * to the live texture. This is what makes "camera recovers"
+       * automatic: even if we'd painted the fallback while the
+       * device was unreachable, the next successful poll wins. */
+      if (fallbackActive && imgTexture && panelMat.map !== imgTexture) {
+        fallbackActive = false;
+        panelMat.map = imgTexture;
+        panelMat.needsUpdate = true;
+      }
     };
     mjpegImg.onerror = () => {
+      if (fallbackTexture && !fallbackActive) {
+        /* First fail with a fallback configured: stop polling the
+         * dead endpoint and swap the panel's texture to the
+         * pre-loaded fallback texture. Done at the material level
+         * (not by reassigning mjpegImg.src) because reusing the same
+         * <img> with crossOrigin='anonymous' was fighting the
+         * browser's CORS state for static assets. A separate <img>
+         * and a separate THREE.Texture, prepared at construction,
+         * sidesteps that entirely. */
+        fallbackActive = true;
+        if (framesTimer != null) { window.clearInterval(framesTimer); framesTimer = null; }
+        panelMat.map = fallbackTexture;
+        panelMat.needsUpdate = true;
+        fallbackTexture.needsUpdate = true;
+        updateStatus('camera offline · fallback', TEXT.warn);
+        return;
+      }
       updateStatus('camera offline', TEXT.error);
     };
     if (type === 'frames') {
@@ -181,10 +254,18 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
     imgTexture.colorSpace = THREE.SRGBColorSpace;
   }
 
-  // Panel mesh
+  // Panel mesh. Default map picks the fallback first (mjpeg/frames
+  // mode with a configured fallback URL) so the panel paints SOMETHING
+  // at construction time — without this the user stares at a black
+  // square for up to 30 s while the Vite proxy times out the dead
+  // camera. First successful live frame swaps map to imgTexture; an
+  // onerror swaps it back to fallbackTexture.
   const panelGeo = new THREE.PlaneGeometry(width, height);
   const panelMat = new THREE.MeshBasicMaterial({
-    map: ((type === 'mjpeg' || type === 'frames') ? imgTexture : canvasTexture) ?? undefined,
+    map: (
+      fallbackTexture
+      ?? ((type === 'mjpeg' || type === 'frames') ? imgTexture : canvasTexture)
+    ) ?? undefined,
     side: THREE.FrontSide,
   });
   const mesh = new THREE.Mesh(panelGeo, panelMat);
@@ -324,10 +405,12 @@ export function buildVideoPanel(opts: VideoPanelOptions): VideoPanelViz {
       video.src = '';
       if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
       if (video.parentElement) document.body.removeChild(video);
-      if (mjpegImg?.parentElement) document.body.removeChild(mjpegImg);
+      if (mjpegImg?.parentElement)      document.body.removeChild(mjpegImg);
+      if (fallbackImgEl?.parentElement) document.body.removeChild(fallbackImgEl);
       mesh.onBeforeRender = () => {};
       canvasTexture?.dispose();
       imgTexture?.dispose();
+      fallbackTexture?.dispose();
       panelGeo.dispose();
       panelMat.dispose();
       borderGeo.dispose();

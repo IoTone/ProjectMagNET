@@ -394,6 +394,12 @@ export function registerAllBuilders() {
        * The demo-gallery videoPanel passes this explicitly; the manifest
        * path must too. */
       frameIntervalMs: (cfg.frameIntervalMs as number) ?? undefined,
+      /* Optional same-origin still image displayed when the live
+       * source can't be reached (mjpeg/frames onerror, or hls.js
+       * fatal). UC2's camera mark uses this to show a mountain
+       * still when the ESP32-CAM is offline — pairs with the
+       * offline-sensors + DEMO HUDs from the manifest layer. */
+      fallbackImageUrl: (cfg.fallbackImageUrl as string) ?? undefined,
     });
     return makeMark(spec, viz.group, viz);
   });

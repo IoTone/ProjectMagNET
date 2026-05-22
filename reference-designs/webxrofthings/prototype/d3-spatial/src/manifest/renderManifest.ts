@@ -12,6 +12,8 @@ import type { LoadResult, LoadedMark } from './loader';
 import type { Interact } from '../interact/Interact';
 import type { NodeHoverFx } from '../ui/NodeHoverFx';
 import { TEXT } from '../ui/palette';
+import { buildOfflineSensorsHud } from './offlineSensorsHud';
+import { buildDemoModeHud }       from './demoModeHud';
 
 export interface ManifestSceneResult {
   root: THREE.Group;
@@ -43,10 +45,17 @@ export function renderManifestToScene(
     registeredIds.push(h.id);
     interact.add(h);
   };
+  /* Collected per-frame disposables (HUD widgets — see end of this
+   * function). makeDispose runs them in dispose() so the offline-
+   * sensors + DEMO HUDs free their geometry/material + unsubscribe
+   * their health-monitor listener on dataspace teardown. */
+  const cleanupTasks: Array<() => void> = [];
   const makeDispose = () => () => {
     if (root.parent) root.parent.remove(root);
     for (const id of registeredIds) interact.remove(id);
     registeredIds.length = 0;
+    for (const t of cleanupTasks) { try { t(); } catch { /* swallow */ } }
+    cleanupTasks.length = 0;
   };
 
   const marks = loadResult.marks;
@@ -331,6 +340,89 @@ export function renderManifestToScene(
       }
     }
   });
+
+  /* ─── Offline-sensors + DEMO HUDs ───────────────────────────────
+   *
+   * Both HUDs hang off `root` so they share the dataspace's lookAt
+   * orientation but ride above the cell-grid top edge. Positioned
+   * top-center, side-by-side: offline-card on the left, DEMO badge
+   * on the right.
+   *
+   * The cell grid's top edge sits at +((rows-1)/2)*rowPitch + cellH/2.
+   * For UC1 (5 marks → 4 cols × 2 rows, rowPitch ≈ 0.40, cellH ≈ 0.30)
+   * that's ~+0.35. Add a 0.05 m chrome gap and another half the HUD
+   * card height; ~+0.48 lands the cards in clear space between the
+   * marks and the dataspace title (which sits at +0.32 in cell coords
+   * — set by setDataspaceTitle in main.ts).
+   *
+   * The offline-sensors card stays hidden until any mark goes offline;
+   * the DEMO badge mirrors visibility. So a healthy dataspace shows
+   * neither and the chrome is invisible. */
+  const offlineHud = buildOfflineSensorsHud();
+  const demoHud    = buildDemoModeHud();
+  offlineHud.group.position.set(-0.20, 0.55, 0.01);
+  demoHud.group.position.set    ( 0.20, 0.55, 0.01);
+  root.add(offlineHud.group);
+  root.add(demoHud.group);
+  const unsubHealth = loadResult.health.onChange((offlineIds) => {
+    offlineHud.setOfflineIds(offlineIds);
+    demoHud.setVisible(offlineIds.length > 0);
+    if (offlineIds.length > 0) {
+      const total = marks.length;
+      demoHud.setLabel(offlineIds.length === total
+        ? 'DEMO MODE'
+        : `DEMO MODE · ${offlineIds.length}/${total}`);
+    }
+  });
+  /* Apply the initial state — if any mark already failed during the
+   * loader's pre-fetch phase, the HUDs need to reflect it on the
+   * very first render rather than waiting for the next health event. */
+  const initialOffline = loadResult.health.offlineMarkIds();
+  if (initialOffline.length > 0) {
+    offlineHud.setOfflineIds(initialOffline);
+    demoHud.setVisible(true);
+    const total = marks.length;
+    demoHud.setLabel(initialOffline.length === total
+      ? 'DEMO MODE'
+      : `DEMO MODE · ${initialOffline.length}/${total}`);
+  }
+  cleanupTasks.push(() => { unsubHealth(); offlineHud.dispose(); demoHud.dispose(); });
+
+  /* Self-fetching cells (UC4 imu, UC2 video) bypass the loader's
+   * URL-fetch + recordFetch path and run their own polling
+   * internally. Mirror their state into the global health monitor
+   * so the offline-sensors HUD + DEMO badge cover them too.
+   *
+   * Cells can additionally expose `isAutonomous()` (UC4 imu) — when
+   * true, the cell has been failing for long enough that it's now
+   * painting synthesised data. THAT is the trigger for the DEMO HUD,
+   * not raw `state==='offline'` (which fires within a second of a
+   * transient outage and would flicker the HUD on every blip).
+   * Cells that don't expose isAutonomous fall back to the raw state. */
+  const selfPolling = marks.filter(m => {
+    const v = m.viz as { getStatus?: () => { state: 'live' | 'stale' | 'offline' } } | null;
+    return typeof v?.getStatus === 'function';
+  });
+  if (selfPolling.length > 0) {
+    const handle = setInterval(() => {
+      for (const m of selfPolling) {
+        const v = m.viz as {
+          getStatus: () => { state: 'live' | 'stale' | 'offline' };
+          isAutonomous?: () => boolean;
+        };
+        const rawState   = v.getStatus().state;
+        const autonomous = v.isAutonomous?.() ?? false;
+        if (autonomous) {
+          loadResult.health.forceState(m.id, 'offline');
+        } else if (rawState === 'live') {
+          loadResult.health.forceState(m.id, 'live');
+        }
+        /* Else (cell offline but pre-autonomous): leave manifest
+         * state alone — the user shouldn't see DEMO yet. */
+      }
+    }, 1000);
+    cleanupTasks.push(() => clearInterval(handle));
+  }
 
   parent.add(root);
   return { root, marks, dispose: makeDispose() };

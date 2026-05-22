@@ -25,6 +25,7 @@ import { DataspaceRegistry, DataspaceHud, applyFocusDim } from './dataspace/Data
 import { syntheticHR } from './demo/heartRate';
 import { createJoinPanel } from './onboarding/JoinPanel';
 import { JoinState } from './onboarding/types';
+import { buildSplashLogo } from './onboarding/splashLogo';
 import { registerAllBuilders } from './manifest/builders';
 import { createManifestController, type ManifestController } from './manifest/manifestController';
 import { renderManifestToScene } from './manifest/renderManifest';
@@ -1447,6 +1448,17 @@ const joinPanelAnchor = new THREE.Group();
 joinPanelAnchor.name = 'joinPanelAnchor';
 scene.add(joinPanelAnchor);
 
+/* Stranger-Things-style "THE WEBXR OF THINGS" splash emblem. Lives
+ * directly on the scene (NOT the joinPanelAnchor — the panel's
+ * lookAt tilt dragged the logo below eye level during the approach
+ * animation). The logo computes its own world position each frame
+ * from the camera + horizontal forward direction, so it always
+ * tracks the user's sight-line at a fixed height above the panel
+ * regardless of head pose. Shown on splash entry + after
+ * leave-dataspace; hidden while a dataspace is loaded. */
+const splashLogo = buildSplashLogo();
+scene.add(splashLogo.group);
+
 const joinPanel = createJoinPanel({
   onAccepted: async (_code: string, token?: string, manifestUrl?: string, _dataspace?: string) => {
     if (token && manifestUrl) {
@@ -1523,6 +1535,11 @@ function showJoinPanel() {
   vizAnchor.visible = false;
   uiAnchor.visible = false;
   stopMorphMode();
+
+  /* Fade the Stranger-Things splash emblem in. show() is idempotent
+   * — calling it during the initial splash + every leave-dataspace
+   * re-entry both end up here without double-ramps. */
+  splashLogo.show();
 
   placeJoinPanelInFrontOfUser();
 
@@ -1621,6 +1638,16 @@ const manifestController: ManifestController = createManifestController({
     // gallery only — hide it inside a real dataspace so it doesn't float
     // over the content (it was overlapping UC2). Re-shown on leave.
     toolbar.group.visible = false;
+    /* Stop the demo gallery's video panel from polling /camera/capture
+     * in the background. galleryRoot.visible=false hides it from
+     * rendering but the cell's framesTimer keeps firing — and on a
+     * dataspace WITHOUT a camera (UC1, UC3, UC4) that produces a
+     * steady stream of failed /camera/capture requests in the console.
+     * Mirror the same pause we do in URL-manifest mode (line ~1861). */
+    videoPanelViz.pause();
+    /* Fade the splash logo out — the dataspace owns the view from
+     * here. It'll fade back in if the user leaves the dataspace. */
+    splashLogo.hide();
     placeDataspaceInFrontOfUser();
 
     // Initial activation. Cells now construct in the inactive state
@@ -1884,6 +1911,14 @@ renderer.setAnimationLoop((time, frame) => {
   if (vizAnchor.visible) {
     fingertipGrab.update();
   }
+
+  /* Splash logo fade + pulse + horizon approach. The logo computes
+   * its own world position from the camera each frame (independent
+   * of joinPanelAnchor's tilt) so the cinematic approach travels
+   * along the eye-level plane. Use the XR camera under presenting
+   * mode so the logo tracks the real HMD pose. */
+  const splashCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  splashLogo.tick(splashCam);
 
   // P1.3: Update hand menu (wrist-anchored dataspace menu)
   if (handMenu && dataspaceMenuAnchor.visible) {

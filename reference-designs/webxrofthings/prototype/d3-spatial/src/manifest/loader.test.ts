@@ -163,10 +163,14 @@ describe('loadManifest — initial URL fetch', () => {
    * device endpoint was temporarily down — worse, a hanging fetch stalled
    * the whole sequential await loop and the scene stayed blank.
    *
-   * Now: the mark is built anyway (data stays in url-source form, builder
-   * gets a chance to render a placeholder), and the refresh-interval
-   * scheduler will populate it once the device is back. */
-  it('builds a placeholder mark when URL returns non-OK', async () => {
+   * Now: the mark is built anyway (the health monitor flips it to
+   * `offline` on the first failure when there's been no prior success,
+   * and the loader seeds `spec.data` with a fake payload for shapes
+   * known to fakeData.ts). The user perceives this as the chart
+   * "running on DEMO mode" with the offline-sensors HUD visible.
+   * Unknown shapes (graph, hierarchy, …) still leave spec.data in its
+   * url-source form — no fake generator means no placeholder data. */
+  it('builds a mark + seeds fake data when URL returns non-OK', async () => {
     const rec = makeRecordingBuilder();
     registerMarkBuilder(TEST_TYPE, rec.builder);
     mockFetchOnce({}, false);
@@ -178,12 +182,14 @@ describe('loadManifest — initial URL fetch', () => {
 
     expect(result.marks).toHaveLength(1);
     expect(rec.initialCalls).toHaveLength(1);
-    /* fetch failed → spec.data stays in its original url-source form */
-    expect((rec.initialCalls[0]!.data as any).source).toBe('url');
+    /* shape='series' is supported by fakeData.ts → spec.data was
+     * mutated to the fake inline form before the builder ran. */
+    expect((rec.initialCalls[0]!.data as any).source).toBe('inline');
+    expect(result.health.stateOf('m1')).toBe('offline');
     result.dispose();
   });
 
-  it('builds a placeholder mark when URL fetch rejects (network error)', async () => {
+  it('builds a mark + seeds fake data when URL fetch rejects (network error)', async () => {
     const rec = makeRecordingBuilder();
     registerMarkBuilder(TEST_TYPE, rec.builder);
     mockFetchRejectOnce(new Error('ECONNREFUSED'));
@@ -195,7 +201,8 @@ describe('loadManifest — initial URL fetch', () => {
 
     expect(result.marks).toHaveLength(1);
     expect(rec.initialCalls).toHaveLength(1);
-    expect((rec.initialCalls[0]!.data as any).source).toBe('url');
+    expect((rec.initialCalls[0]!.data as any).source).toBe('inline');
+    expect(result.health.stateOf('m1')).toBe('offline');
     result.dispose();
   });
 

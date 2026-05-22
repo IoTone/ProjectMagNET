@@ -407,7 +407,9 @@
         "type": "frames",
         "width": 0.4,
         "aspectRatio": 1.333,
-        "frameIntervalMs": 1000
+        "frameIntervalMs": 1000,
+        "_comment_fallback": "Shown when the ESP32-CAM can't be reached. Vincent Foster (Sony A6) — same source library as the UC3 stippling image. Triggered by the videoPanel's onerror handler; the panel stops polling once the fallback is in place to keep onerror from firing again on every dead poll.",
+        "fallbackImageUrl": "/spatial/_DSC9751.jpeg"
       },
       "deviceRef": "magnet-cam-80e4",
       "serviceRef": "cam-capture",
