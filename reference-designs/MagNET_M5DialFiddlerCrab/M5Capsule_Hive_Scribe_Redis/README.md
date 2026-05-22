@@ -153,9 +153,36 @@ imu-on                start I2C + BMI270 + sample task + httpd + mDNS
 imu-off               stop httpd + mDNS + sample task (driver stays alive)
 imu-status            sampler state, sample count, current orientation + raw
 imu-zero              set current yaw as heading 0 datum
+sda scl imu-scan      i2cdetect-style probe of the bus (sda+scl as ints)
 ```
 
-Sample is held off boot — call `imu-on` once after WiFi is up. State doesn't persist across reboots (unlike the Redis profile NVS).
+### Auto-boot ritual
+
+At boot the firmware runs a 5-step ritual automatically — no need to type `imu-on` after every flash:
+
+1. Wait ~2 s for early-boot logs to settle.
+2. Five rising-pitch reminder pings, 1 s apart (1200 → 2200 Hz). User reads this as a countdown to "lay the device flat now."
+3. Init I2C, bring up the BMI270 + Madgwick sampler + HTTP endpoint.
+4. Wait 1.5 s for Madgwick to converge.
+5. Auto-zero the heading datum (sets the user's current pose as HDG 000°), and chime a two-ping success tone.
+
+If IMU init fails, a triple low buzz (400 Hz × 200 ms × 3) plays and the user can retry with `imu-on` manually.
+
+### WiFi-down chirp
+
+A monitor task polls `craw_wifi_is_connected()` every 10 s. While WiFi is down (unconfigured, AP unreachable, or just disconnected), a single quiet low-pitch chirp (600 Hz × 120 ms at half default volume) plays so the user knows what's wrong without checking the serial console. Silent while connected.
+
+### Buzzer volume
+
+The piezo buzzer is driven by 8-bit LEDC PWM (0..255 duty). Volume scales roughly linearly with duty from ~5 % to 50 % (= 128) — past 50 % the wave inverts and gets quieter again, so the firmware caps duty at 128.
+
+```
+hz dur buzz                  one-shot tone at default volume
+hz dur duty buzz-v           one-shot at explicit volume (0..128)
+duty buzz-vol                set default volume for `buzz` + boot ritual
+```
+
+Default duty is 64 (50 % of max, audible at arm's length but not abusive in a quiet room).
 
 ### Smoke test
 

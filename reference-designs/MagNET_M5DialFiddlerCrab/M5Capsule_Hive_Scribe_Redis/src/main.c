@@ -98,8 +98,24 @@ static void console_putchar(int c) {
     usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(100));
 }
 
-/* ---------- Buzzer (LEDC PWM tone) ---------- */
+/* ---------- Buzzer (LEDC PWM tone) ----------
+ *
+ * Volume on a piezo buzzer is controlled by PWM duty cycle, not by
+ * amplitude. 50% duty (= 128 at 8-bit resolution) is the maximum
+ * loudness — a true square wave delivers the most fundamental energy
+ * to the piezo. Lower duty cycles attenuate the perceived volume
+ * roughly linearly from ~5% (very quiet) up to 50% (full). Above 50%
+ * the wave becomes a mirror image and gets quieter again — there's
+ * no point going past 128.
+ *
+ * `buzz_v(freq, dur, duty)` is the full form; `buzz(freq, dur)` is
+ * a convenience wrapper using `s_buzz_default_duty`. Forth word
+ * `buzz-vol` re-tunes the default at runtime.
+ */
 static bool s_buzzer_ready = false;
+/* Default duty = 64/255 = 25% — moderate, audible at arm's length but
+ * not abusive in a quiet room. Boot chirps + UX events use this. */
+static uint8_t s_buzz_default_duty = 64;
 
 static void buzzer_init(void) {
     ledc_timer_config_t t = {
@@ -123,14 +139,21 @@ static void buzzer_init(void) {
     s_buzzer_ready = true;
 }
 
-static void buzz(uint16_t freq_hz, uint16_t duration_ms) {
+static void buzz_v(uint16_t freq_hz, uint16_t duration_ms, uint8_t duty) {
     if (!s_buzzer_ready) return;
+    /* Cap duty at 128 — past 50% the wave inverts and gets quieter
+     * again, so accepting values up to 255 would be a footgun. */
+    if (duty > 128) duty = 128;
     ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, freq_hz);
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 64);  /* ~25% duty */
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
     vTaskDelay(pdMS_TO_TICKS(duration_ms));
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
+static void buzz(uint16_t freq_hz, uint16_t duration_ms) {
+    buzz_v(freq_hz, duration_ms, s_buzz_default_duty);
 }
 
 /* ---------- Scribe KV store (NVS, string values) ---------- */
@@ -734,6 +757,31 @@ static void w_buzz(void) {
     buzz((uint16_t)hz, (uint16_t)dur);
 }
 
+/* ( freq dur duty -- ) one-shot tone with explicit volume.
+ * duty 0..128; values above 128 are clamped (the wave inverts past
+ * 50% so there's no point allowing them). */
+static void w_buzz_v(void) {
+    int duty = (int)forth_pop();
+    int dur  = (int)forth_pop();
+    int hz   = (int)forth_pop();
+    if (hz <= 0)  return;
+    if (dur < 1)  dur = 1;
+    if (dur > 2000) dur = 2000;
+    if (duty < 0) duty = 0;
+    if (duty > 128) duty = 128;
+    buzz_v((uint16_t)hz, (uint16_t)dur, (uint8_t)duty);
+}
+
+/* ( duty -- ) set the default buzzer volume for `buzz` + boot ritual. */
+static void w_buzz_vol(void) {
+    int duty = (int)forth_pop();
+    if (duty < 0) duty = 0;
+    if (duty > 128) duty = 128;
+    s_buzz_default_duty = (uint8_t)duty;
+    uprintf("\r\n[buzz] default duty = %d (%.0f%% of max)\r\n",
+            duty, (float)duty * 100.0f / 128.0f);
+}
+
 /* Hive KV REPL helpers — distinct from `scribe-*` words which hit the
  * local NVS namespace. These ride the existing hive session to the ruler.
  * In Milestone C step 2, the Scribe's on_kv_get callback will let it serve
@@ -1217,6 +1265,121 @@ static void register_forth_words(void) {
     forth_register_word("imu-status",        w_imu_status);
     forth_register_word("imu-zero",          w_imu_zero);
     forth_register_word("imu-scan",          w_imu_scan);
+    forth_register_word("buzz-v",            w_buzz_v);
+    forth_register_word("buzz-vol",          w_buzz_vol);
+}
+
+/* ---------- Boot ritual + WiFi-down chirp ----------
+ *
+ * Auto-IMU bringup with a buzzer countdown so the user knows to lay
+ * the device flat. The IMU itself doesn't need 30 seconds to settle —
+ * Madgwick converges in ~1 s and the gyro has no meaningful warmup —
+ * but five 1-Hz pings give the user a clear window to set the
+ * Capsule down without watching for a visual cue.
+ *
+ * Sequence (boot_ritual_task):
+ *   t+0.0  task starts, ~2 s after boot so early logs are out of the way
+ *   t+2.0  first reminder ping (rising pitch as a countdown)
+ *   t+3.0  second ping
+ *   t+4.0  third ping
+ *   t+5.0  fourth ping
+ *   t+6.0  fifth ping
+ *   t+6.5  IMU init + sampler + httpd + (mDNS if WiFi up)
+ *   t+8.0  Madgwick has converged → auto craw_imu_zero
+ *   t+8.2  success chime (two quick pings)
+ *
+ * WiFi-down monitor (wifi_monitor_task):
+ *   - Polls craw_wifi_is_connected() every 10 s.
+ *   - Single chirp (lower pitch, half default volume so it doesn't
+ *     overshadow the IMU boot ritual) when disconnected.
+ *   - Silent while connected — no nagging when things are working.
+ */
+
+/* Forward-shared with the `imu-on`/`imu-off` Forth words above —
+ * `s_imu_mdns_published` is the same file-scope static the user-
+ * triggered path uses. Defining the publish helper down here (next
+ * to the boot ritual that needs it) keeps the wifi-came-up retry
+ * path colocated with the boot ritual it backstops. */
+static void publish_imu_mdns_if_ready(void) {
+    if (s_imu_mdns_published) return;
+    if (!mdns_published)      return;
+    mdns_txt_item_t txt[] = {
+        { "path",  "/api/v1/sensor/imu" },
+        { "shape", "imu" },
+        { "ver",   "1" },
+    };
+    mdns_service_add(NULL, "_magnet-imu", "_tcp", 80, txt,
+                     sizeof(txt)/sizeof(txt[0]));
+    s_imu_mdns_published = true;
+}
+
+static void boot_ritual_task(void *arg) {
+    (void)arg;
+    /* Let the early-boot log spam (BLE prov, NVS migrate, etc.) settle
+     * so the user actually hears the pings instead of missing them
+     * under the log flood. */
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    uprint("\r\n[boot-ritual] 5 pings then IMU on — lay the device flat NOW.\r\n");
+
+    /* Ascending pitch reads as a countdown — the human ear naturally
+     * interprets "rising = building toward something." */
+    const uint16_t pings_hz[5] = { 1200, 1400, 1600, 1800, 2200 };
+    for (int i = 0; i < 5; i++) {
+        buzz(pings_hz[i], 80);                       /* short ping at default vol */
+        vTaskDelay(pdMS_TO_TICKS(920));              /* gap to make a 1-Hz cadence */
+    }
+
+    uprint("[boot-ritual] starting IMU...\r\n");
+    esp_err_t rc = craw_imu_init(NULL);
+    if (rc == ESP_OK) rc = craw_imu_start();
+    if (rc == ESP_OK) rc = craw_imu_http_start();
+
+    if (rc != ESP_OK) {
+        /* Failure tone: three low buzzes, slightly louder so the user
+         * notices the boot didn't complete the auto-IMU step. */
+        for (int i = 0; i < 3; i++) {
+            buzz_v(400, 200, 96);
+            vTaskDelay(pdMS_TO_TICKS(150));
+        }
+        uprintf("[boot-ritual] IMU init failed rc=%d — try `imu-on` manually.\r\n", rc);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* Let Madgwick converge — gyro + accel feed the filter for ~1 s
+     * before the orientation is meaningful. After that, snap the
+     * heading datum to zero so the user's "set flat, USB-C forward"
+     * pose reads as HDG 000°. */
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    craw_imu_zero();
+    publish_imu_mdns_if_ready();
+
+    /* Success chime: two quick high pings. */
+    buzz(2400,  60);
+    vTaskDelay(pdMS_TO_TICKS(80));
+    buzz(2800, 100);
+    uprint("[boot-ritual] IMU up. heading zeroed.\r\n");
+
+    vTaskDelete(NULL);
+}
+
+static void wifi_monitor_task(void *arg) {
+    (void)arg;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        if (!craw_wifi_is_connected()) {
+            /* Lower-pitch, half-volume chirp. Distinct from the boot
+             * ritual pings so the user knows what it means without
+             * looking — "WiFi's down" not "IMU did something." */
+            buzz_v(600, 120, 32);
+        } else {
+            /* WiFi came up since the last loss — try to publish the
+             * IMU mDNS service if we missed the window on first boot
+             * (IMU ritual finishes BEFORE WiFi connects on cold start). */
+            publish_imu_mdns_if_ready();
+        }
+    }
 }
 
 /* ---------- app_main ---------- */
@@ -1279,10 +1442,21 @@ void app_main(void) {
     uprint("  scribe-store / scribe-recall / scribe-list\r\n");
     uprint("  scribe-erase / scribe-count\r\n");
     uprint("  prov-status / prov-reset / hive-status\r\n");
-    uprint("  HZ DUR_MS buzz\r\n");
+    uprint("  HZ DUR_MS buzz   /   HZ DUR_MS DUTY buzz-v   /   DUTY buzz-vol\r\n");
+    uprint("  imu-on / imu-off / imu-status / imu-zero / imu-scan\r\n");
     uprint("  redis-on / redis-off / redis-status / redis-do\r\n");
     uprint("  N redis-profile! (0=local 1=lan 2=quiet 3=custom)\r\n");
     uprint("  N redis-port  /  redis-bind  /  redis-flush\r\n\r\n");
+
+    /* Boot ritual: 5 reminder pings then auto-IMU. Runs once and
+     * self-deletes — no need to wait for it from here, FreeRTOS
+     * scheduling handles it in parallel with the Forth REPL. */
+    xTaskCreate(boot_ritual_task,  "boot_rit", 4096, NULL, 4, NULL);
+
+    /* WiFi-down chirp: low-pitch ping every 10 s while disconnected.
+     * Long-running — never self-deletes. Low priority since it does
+     * essentially nothing 99 % of the time. */
+    xTaskCreate(wifi_monitor_task, "wifi_mon", 3072, NULL, 2, NULL);
 
     forth_repl(console_getchar, console_putchar);
     forth_deinit();

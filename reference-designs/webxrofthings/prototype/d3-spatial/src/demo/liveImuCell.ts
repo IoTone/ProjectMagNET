@@ -308,13 +308,35 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
   const targetQuat = new THREE.Quaternion();
   // Latest yaw for heading display.
   let currentYawRad = 0;
-  // Slerp rate per tick (60Hz tick × 0.12 ≈ ~80 ms half-life — fast enough
-  // to track real IMU at 10–50 Hz, slow enough to hide sample jitter).
-  const SLERP_RATE = 0.12;
+  // Slerp rate per tick. 0.25/frame ≈ 35 ms half-life at 60 fps — snappy
+  // enough that the dead-reckoning predicted state stays close to the
+  // latest authoritative poll, slow enough to hide the per-poll snap
+  // when a network burst delivers a delayed sample.
+  const SLERP_RATE = 0.25;
+
+  // Dead-reckoning state. The real device samples + fuses internally at
+  // 50 Hz, but the cell polls over HTTP (~5 Hz nominally, ~2–3 Hz
+  // effective through a cloudflared tunnel) — left alone, the airplane
+  // visibly "chases" each new sample for 30+ frames. To get fluid motion
+  // we integrate `angular_velocity` from each snapshot at 60 fps between
+  // polls (dead reckoning), then snap `targetQuat` to the freshly-polled
+  // authoritative orientation each time a new sample lands. The polled
+  // value is the absolute-truth correction; the gyro extrapolation is
+  // what the user perceives as smooth motion.
+  let liveGyroX = 0, liveGyroY = 0, liveGyroZ = 0;
+  let lastFrameMs = performance.now();
+  // Gyro readings older than this are ignored (the device stalled / went
+  // offline; don't keep spinning the airplane forever based on the last
+  // sample). 2 s is comfortably longer than the worst-case backoff.
+  const GYRO_FRESH_MS = 2000;
+  let lastGyroAtMs = 0;
 
   // Scratch Euler so we don't allocate per tick.
   const scratchEuler = new THREE.Euler(0, 0, 0, 'YXZ');
   const scratchQuat = new THREE.Quaternion();
+  // Scratch for the per-frame angular-velocity rotation delta.
+  const dreckEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  const dreckQuat  = new THREE.Quaternion();
 
   async function refresh(): Promise<boolean> {
     try {
@@ -337,6 +359,21 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
       targetQuat.copy(scratchQuat);
       currentYawRad = o.yaw_rad;
       if (!smooth) airplane.quaternion.copy(targetQuat);
+
+      /* Cache the latest angular velocity for between-poll dead
+       * reckoning. Body-frame axes: x=roll-rate, y=pitch-rate,
+       * z=yaw-rate (rad/s). Treated as truth for the ~200–500 ms
+       * until the next poll lands. */
+      const w = json.angular_velocity;
+      if (w && typeof w.x === 'number' && typeof w.y === 'number' && typeof w.z === 'number') {
+        liveGyroX  = w.x;
+        liveGyroY  = w.y;
+        liveGyroZ  = w.z;
+        lastGyroAtMs = performance.now();
+      } else {
+        /* Sample missing the velocity field — stop extrapolating. */
+        liveGyroX = liveGyroY = liveGyroZ = 0;
+      }
       // Update the instrument labels from the same stream. Heading is the
       // yaw mapped to 0–359° magnetic; airspeed is the time-based fake.
       const hdgDeg = Math.round(((currentYawRad * 180 / Math.PI) % 360 + 360) % 360);
@@ -383,7 +420,32 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
   // method on this interface is kept for parity with the vitals cells
   // but isn't load-bearing.
   fuselage.onBeforeRender = () => {
+    const now = performance.now();
+    const dt  = Math.min(0.05, Math.max(0, (now - lastFrameMs) / 1000));
+    lastFrameMs = now;
+
+    /* Dead-reckon: between polls, integrate the last cached angular
+     * velocity into targetQuat so the visible attitude advances at 60
+     * Hz even though the network only delivers fused snapshots at
+     * 2–3 Hz. Skip if the cached gyro is stale or we never received
+     * one (don't rotate forever on the last sample if the device
+     * went offline).
+     *
+     * Order: yaw (Z, world up after the YXZ Euler convention used by
+     * the snapshot) → pitch (X) → roll (Y). For small dt this is
+     * effectively `q' = q ⊗ Δ` regardless of axis order so the
+     * specific composition order is not load-bearing. */
+    if (smooth && dt > 0
+                && lastGyroAtMs > 0
+                && (now - lastGyroAtMs) < GYRO_FRESH_MS
+                && (liveGyroX !== 0 || liveGyroY !== 0 || liveGyroZ !== 0)) {
+      dreckEuler.set(liveGyroY * dt, liveGyroZ * dt, liveGyroX * dt, 'YXZ');
+      dreckQuat.setFromEuler(dreckEuler);
+      targetQuat.multiply(dreckQuat);
+    }
+
     if (smooth) airplane.quaternion.slerp(targetQuat, SLERP_RATE);
+
     // Slow eastward globe rotation, applied via the widget so the
     // rotation-per-frame stays colocated with the globe construction.
     globeWidget?.update();
