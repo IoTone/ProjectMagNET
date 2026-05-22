@@ -127,7 +127,8 @@
         "refreshInterval": 0.2
       },
       "config": {
-        "size": 0.12,
+        "_comment_size": "0.162 = 0.12 × 1.35 — user wanted the airplane + globe + instrument labels 35% larger so the UC4 dataspace reads more like a cockpit and less like a desktop widget. Buffer between the wing tip and the KT/HDG labels was widened in liveImuCell.ts (offset multiplier 1.3 → 1.5) so the proportionally larger size doesn't push the labels into the wing's swept volume.",
+        "size": 0.162,
         "_comment_color": "0x4ec5ff — bright cyan-blue, matches boombox accentColor + globe atmosphereColor. Pairs with wireframe:true in liveImuCell.ts.",
         "color": 5161471,
         "smooth": true

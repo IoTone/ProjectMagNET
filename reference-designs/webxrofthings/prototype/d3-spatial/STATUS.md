@@ -137,6 +137,24 @@ Curated mini-exhibit dataspace built around generative-art / data-art marks. Man
   - **Spatial owl hoots**: fetches `public/spatial/268667__depwl9992__owls.mp3` (~30 s field recording), decodes once, and on each scheduled play picks a random 1.0–2.5 s chop at a random offset (`audio.offset` + `audio.duration` passed to `AudioBufferSourceNode.start`). Pool of 4 `PositionalAudio` emitters parented to the cell; each hoot repositions one emitter to a random azimuth at 3–5 m radius with ±0.7 m height jitter, ±12% playback-rate jitter. 2.0–5.0 s gaps between hoots. `dispose()` clears the timer, stops every PositionalAudio and disconnects from the listener graph — leaving the dataspace fully unloads the sound.
 - **Manifest pipeline gains**: `loader.ts` parallelised pre-fetches via `Promise.allSettled` with a 5-s `AbortController` timeout and now builds a placeholder mark on failure rather than skipping it (UC2 used to render blank when ENV_HOST was offline; UC3's stippling-from-static-image path is hardened the same way). `renderManifest.ts` wires `onDragStart`/`onDragMove`/`onDragEnd` for any mark whose `viz` exposes `pinNode`/`unpinNode` — the manifest pipeline now supports per-node grab without main.ts special-casing.
 
+### UC4 "Airplane" closed (M22) — 2026-05-21
+
+Real-hardware airplane attitude + cabin music + cabin display + spatial photo gallery. Manifest: `examples/uc4-airplane.json`. Per-mark doc: `examples/uc4-airplane.md`.
+
+- **Airplane attitude (`airplane-imu`)** sourced from a real M5Capsule (ESP32-S3 + Bosch BMI270 6-DoF IMU on I2C G8/G10 at addr 0x69). New firmware: `MagNET_M5DialFiddlerCrab/M5Capsule_Hive_Scribe_Redis/components/craw_imu/` — Madgwick 6-DoF AHRS at 50 Hz, `GET /api/v1/sensor/imu` over `esp_http_server` returning the same JSON shape `liveImuCell.ts` previously polled from `mock-join-server.ts` (so no cell changes were needed for the swap). The bmi270 source is vendored from `espressif/bmi270` 1.0.1~1 (Apache-2.0) — going through the registry transitively pulled in `espressif/sensor_hub` → `espressif/i2c_bus`, and the latter calls `i2c_master_get_bus_handle()` which is ESP-IDF v5.4-only; we're on v5.3.1 via `espressif32@6.9.0`.
+  - **`craw_imu` Forth surface**: `imu-on / imu-off / imu-status / imu-zero / imu-scan` (and the i2cdetect-like `sda scl imu-scan` for bus probing — the M5Capsule's BMI270 turned out to be at 0x69 not 0x68, and on G8/G10 not G8/G40 as the original comment had it). `imu-zero` snaps the current pose as HDG 000° (no magnetometer = drifting yaw, this is the user-controlled equivalent of north calibration).
+  - **Boot ritual**: 5 ascending buzzer pings 1 s apart as a "lay it flat" reminder, then auto-init IMU + auto-zero after Madgwick converges + two-ping success chime. Triple-low buzz on init failure. Volume controllable via `buzz-v` (one-shot) or `buzz-vol` (default) — piezo duty cycle, max at 50 % (= 128/255). A wifi-monitor task chirps once every 10 s while WiFi is down.
+  - **Gyro-driven dead reckoning in `liveImuCell.ts`**: the BMI270 samples at 50 Hz internally but HTTP polling through a cloudflared tunnel is ~2–3 Hz effective. The cell now integrates `angular_velocity` at 60 fps between authoritative polls and snaps to the firmware's fused orientation on each poll. Decouples perceived motion from network latency.
+- **Cabin boombox (`cabin-boombox`)**: spatial-audio mark, procedural music generated client-side, looped through `THREE.PositionalAudio` on the scene's listener. Pinch-cycle to advance music theme.
+- **Cabin display (`cabin-display`)**: HLS video panel via hls.js, Mux test stream ("Big Buck Bunny"). 720p ABR cap so Spectacles' decoder doesn't choke on 1080p+.
+- **Spatial photo gallery (`cabin-spatial-gallery`)**: 3 × Gaussian-splat scenes (compressed.ply, converted from .sog via `npm run convert:spatial`). ArrowL/R navigates, auto-advance every 30 s, splatAlphaRemovalThreshold 60 to fit Quest 3's per-frame triangle budget.
+- **HUD switching**: four `show-only:<id>` actions on the bottom HUD — Flight Info / Music / Video / Photos — switch mutually-exclusive content modes. Cells stay loaded but hidden + paused; switching back is instant.
+
+**Wiring details that bit us during bringup** (memos for future-me):
+- ESP-IDF httpd's `CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048` is the firmware-side fix for HTTP 431 behind cloudflared (the tunnel injects ~6–10 Cf-*/X-Forwarded-* headers that blow the 512-byte default).
+- Vite proxy `/api/v1/sensor/imu` rule MUST sit BEFORE `/api/v1/sensor` — otherwise the UC2 Atom Echo (which has `/api/v1/sensor/environment` but no `/api/v1/sensor/imu`) silently catches the UC4 poll.
+- M5Capsule pin map: internal I2C SDA=8 SCL=**10** (not 40 — that's the PDM mic WS), BMI270 at **0x69**, GPIO 46 latches battery power.
+
 ---
 
 ## Tooling

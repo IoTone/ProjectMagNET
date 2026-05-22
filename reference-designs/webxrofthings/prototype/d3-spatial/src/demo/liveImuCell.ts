@@ -121,8 +121,18 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
   // labels overlapping the continents. Side-by-side reads cleaner and
   // lets us shrink the globe back to a sensible standalone size.
   const PANEL_X = -size * 1.5;      // airplane + instruments offset
-  const GLOBE_X =  size * 1.8;      // globe offset
+  /* Pushed out from 1.8 → 2.3 to clear the heading label after the
+   * label X-offset multiplier grew (1.3 → 1.5). Without this the
+   * "HDG XXX°" text right edge would land inside the globe's left
+   * hemisphere at the new spacing. */
+  const GLOBE_X =  size * 2.3;      // globe offset
   const GLOBE_WORLD_RADIUS = size * 1.1;
+  /* Airspeed (left) + heading (right) labels offset from the airplane
+   * mesh's centre, panel-local. Wings span ±size×0.8; this multiplier
+   * sets how much breathing room sits between the wing tip and the
+   * label's near edge. 1.5 gives ~0.7×size of gap (was 1.3 = ~0.5×size,
+   * which read as cramped when the plane scaled up 35% per UC4 config). */
+  const INSTRUMENT_LABEL_X = size * 1.5;
 
   const panel = new THREE.Group();
   panel.name = 'instrument-panel';
@@ -185,7 +195,7 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
   airspeedLabel.color = TEXT.body;
   airspeedLabel.anchorX = 'right';
   airspeedLabel.anchorY = 'middle';
-  airspeedLabel.position.set(-size * 1.3, 0, 0);
+  airspeedLabel.position.set(-INSTRUMENT_LABEL_X, 0, 0);
   airspeedLabel.sync();
   panel.add(airspeedLabel);
 
@@ -195,7 +205,7 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
   airspeedSubLabel.color = TEXT.muted;
   airspeedSubLabel.anchorX = 'right';
   airspeedSubLabel.anchorY = 'middle';
-  airspeedSubLabel.position.set(-size * 1.3, -size * 0.18, 0);
+  airspeedSubLabel.position.set(-INSTRUMENT_LABEL_X, -size * 0.18, 0);
   airspeedSubLabel.sync();
   panel.add(airspeedSubLabel);
 
@@ -205,7 +215,7 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
   headingLabel.color = TEXT.body;
   headingLabel.anchorX = 'left';
   headingLabel.anchorY = 'middle';
-  headingLabel.position.set(size * 1.3, 0, 0);
+  headingLabel.position.set(INSTRUMENT_LABEL_X, 0, 0);
   headingLabel.sync();
   panel.add(headingLabel);
 
@@ -215,7 +225,7 @@ export function buildLiveImuCell(opts: LiveImuOpts): LiveImuCell {
   headingSubLabel.color = TEXT.muted;
   headingSubLabel.anchorX = 'left';
   headingSubLabel.anchorY = 'middle';
-  headingSubLabel.position.set(size * 1.3, -size * 0.18, 0);
+  headingSubLabel.position.set(INSTRUMENT_LABEL_X, -size * 0.18, 0);
   headingSubLabel.sync();
   panel.add(headingSubLabel);
 
