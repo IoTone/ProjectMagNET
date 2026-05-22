@@ -1,5 +1,8 @@
 import { defineConfig } from 'vite';
 import http from 'http';
+import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve as pathResolve } from 'node:path';
 import { createProxyDiag, diagMiddleware } from './server/proxy-diag';
 
 // One collector per device. Both attach to their respective proxy entries
@@ -58,6 +61,118 @@ const envDiag = createProxyDiag('env');
 const normalizeHost = (h: string | undefined, fallback: string): string => {
   const s = (h && h.trim()) || fallback;
   return /^https?:\/\//.test(s) ? s : `http://${s}`;
+};
+
+/* ─── mDNS device discovery (additive) ────────────────────────────────
+ *
+ * Run `tools/discover-magnet-devices.mjs` once at dev-server startup
+ * to find every MagNET device on the LAN by browsing Bonjour. Each
+ * device's mDNS TXT records (`role=…`, `caps=…`) get mapped onto the
+ * `*_HOST` env-var slots below.
+ *
+ * Precedence per slot:
+ *   1. process.env[X_HOST]  — explicit operator override, ALWAYS WINS.
+ *                              Preserves the long-standing workflow of
+ *                              `IMU_HOST=http://10.0.0.119 npm run dev`
+ *                              and keeps the join-server path stable.
+ *   2. discovered (mDNS)    — automatic fill-in when no env override.
+ *   3. .local fallback      — hardcoded mDNS hostname as last resort.
+ *
+ * Earlier iteration of this block had (discovered > env > fallback) —
+ * "mDNS wins over env." That broke a pinned-IP workflow in the field
+ * (user reported broken DEMO01-04 sign-in after the flip — symptom was
+ * unclear, but reverting to env-first restored it). Keeping
+ * `discovered` strictly additive is the safer default.
+ *
+ * Kill switch: `MAGNET_DISCOVERY=0 npm run dev` skips the scan
+ * entirely if you want a clean baseline.
+ *
+ * Discovery is best-effort — if the script fails, times out, or
+ * returns no devices, the cascade drops to env/fallback exactly as
+ * before. Only macOS is supported for v1 (dns-sd); other platforms
+ * get an empty map. */
+type DiscoveredDevice = {
+  hostname: string;
+  host:     string;
+  ip:       string;
+  port:     number;
+  services: string[];
+  txt:      Record<string, string>;
+};
+
+function discoverHostsSync(): Record<string, string> {
+  if (process.platform !== 'darwin') {
+    /* Linux equivalent (avahi-browse) is out of scope for v1; fall
+     * through to env-var + .local cascade silently rather than warn
+     * on every dev-server start. */
+    return {};
+  }
+  /* Kill switch — `MAGNET_DISCOVERY=0` skips the mDNS scan entirely. */
+  const flag = (process.env.MAGNET_DISCOVERY ?? '').toLowerCase();
+  if (flag === '0' || flag === 'false' || flag === 'no' || flag === 'off') {
+    console.log('[vite] mDNS discovery disabled by MAGNET_DISCOVERY env var');
+    return {};
+  }
+  try {
+    const here   = dirname(fileURLToPath(import.meta.url));
+    const script = pathResolve(here, 'tools/discover-magnet-devices.mjs');
+    const out    = execSync(`node "${script}" --json --timeout 3`, {
+      timeout:  8000,
+      encoding: 'utf8',
+      stdio:    ['ignore', 'pipe', 'pipe'],   // suppress script's stderr
+    });
+    const devs: DiscoveredDevice[] = JSON.parse(out);
+    const map: Record<string, string> = {};
+    /* TXT role + caps disambiguate which device fills which env-var
+     * slot. The Capsule advertises _magnet-imu._tcp ONLY when
+     * `imu-on` has been run — its `caps` TXT picks up "imu" then,
+     * so we key off caps rather than hostname-prefix-only. */
+    for (const d of devs) {
+      const url  = `http://${d.ip}`;
+      const role = (d.txt.role ?? '').toLowerCase();
+      const cap  = (d.txt.caps ?? '').toLowerCase();
+      if (role === 'spy'        || cap.includes('camera'))   map.CAMERA_HOST   = url;
+      if (role === 'boombox'    || cap.includes('speaker'))  map.BOOMBOX_HOST  = url;
+      if (role === 'lighting'   || cap.includes('neopixel') || cap.includes('ws2813'))
+                                                             map.LIGHTING_HOST = url;
+      if (role === 'vitals'     || cap.includes('heart'))    map.VITALS_HOST   = url;
+      if (role === 'env-sensor' || cap.includes('aht')    || cap.includes('environment'))
+                                                             map.ENV_HOST      = url;
+      if (cap.includes('imu')   || d.services.includes('_magnet-imu._tcp'))
+                                                             map.IMU_HOST      = url;
+    }
+    const found = Object.keys(map);
+    if (found.length > 0) {
+      console.log(`[vite] mDNS discovery: ${devs.length} device(s) found, mapped ${found.length} host slot(s) → ${found.join(', ')}`);
+    } else if (devs.length > 0) {
+      console.log(`[vite] mDNS discovery: ${devs.length} device(s) found but none matched a known host slot.`);
+    }
+    return map;
+  } catch (e) {
+    console.warn(`[vite] mDNS discovery skipped: ${(e as Error).message}`);
+    return {};
+  }
+}
+
+const discovered = discoverHostsSync();
+
+/** Pick the best host for a `*_HOST` slot.
+ *  Precedence:
+ *    1. process.env[envKey] — operator override always wins.
+ *    2. discovered (mDNS)   — automatic fill-in for unset env vars.
+ *    3. fallback            — hardcoded `.local` hostname.
+ *  Also logs the chosen target so the startup banner shows exactly
+ *  where each device proxy is pointed — invaluable when a `npm run dev`
+ *  + DEMO sign-in flow misbehaves and you need to triage which proxy
+ *  rule is misdirected. */
+const pickHost = (envKey: string, fallback: string): string => {
+  const fromEnv  = (process.env[envKey] && process.env[envKey]!.trim()) || undefined;
+  const fromMdns = discovered[envKey];
+  const raw      = fromEnv ?? fromMdns ?? fallback;
+  const source   = fromEnv ? 'env' : fromMdns ? 'mdns' : 'fallback';
+  const url      = normalizeHost(raw, fallback);
+  console.log(`[vite]   ${envKey.padEnd(14)} → ${url}  (${source})`);
+  return url;
 };
 
 const cameraAgent = new http.Agent({ family: 4, keepAlive: false, timeout: 30000 });
@@ -162,7 +277,7 @@ export default defineConfig({
       // (/api/v1/actuator/neopixel) so no rewrite. The other actuator paths
       // (light, thermostat, speaker) fall through to the mock-join-server.
       '/api/v1/actuator/neopixel': {
-        target: normalizeHost(process.env.LIGHTING_HOST, 'http://magnet-lighting.local'),
+        target: pickHost('LIGHTING_HOST', 'http://magnet-lighting.local'),
         changeOrigin: true,
         agent: lightingAgent,
         configure: (proxy: any) => {
@@ -197,7 +312,7 @@ export default defineConfig({
       // endpoint and silently returns nothing → UC4's altitude/airspeed/
       // heading labels stay at '---'. See [project_uc4_capsule_imu] memo.
       '/api/v1/sensor/imu': {
-        target: normalizeHost(process.env.IMU_HOST, 'http://magnet-scribe.local'),
+        target: pickHost('IMU_HOST', 'http://magnet-scribe.local'),
         changeOrigin: true,
         agent: imuAgent,
         configure: (proxy: any) => {
@@ -234,7 +349,7 @@ export default defineConfig({
       //   ENV_HOST=http://10.0.0.55  npm run dev
       // Must appear BEFORE the generic '/api/v1' entry.
       '/api/v1/sensor': {
-        target: normalizeHost(process.env.ENV_HOST, 'http://magnet-atom-echo.local'),
+        target: pickHost('ENV_HOST', 'http://magnet-atom-echo.local'),
         changeOrigin: true,
         agent: envAgent,
         configure: (proxy: any) => {
@@ -260,7 +375,7 @@ export default defineConfig({
       //   BOOMBOX_HOST=http://10.0.0.55  npm run dev
       // Must appear BEFORE the generic '/api/v1' entry.
       '/api/v1/actuator/speaker': {
-        target: normalizeHost(process.env.BOOMBOX_HOST, 'http://magnet-boombox.local'),
+        target: pickHost('BOOMBOX_HOST', 'http://magnet-boombox.local'),
         changeOrigin: true,
         agent: boomboxAgent,
         configure: (proxy: any) => {
@@ -287,7 +402,7 @@ export default defineConfig({
       // esp_http_server's default 512-byte header buffer can't hold (cookies,
       // sec-ch-*, accept-language, referer) — same pattern as the camera proxy.
       '/api/v1/vitals': {
-        target: normalizeHost(process.env.VITALS_HOST, 'http://magnet-vitals.local'),
+        target: pickHost('VITALS_HOST', 'http://magnet-vitals.local'),
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/api\/v1\/vitals/, ''),
         agent: vitalsAgent,
@@ -313,7 +428,10 @@ export default defineConfig({
         },
       } as any,
       '/api/v1': {
-        target: 'http://localhost:3001',
+        /* Port can be overridden via JOIN_SERVER_PORT to sidestep a
+         * collision with an unrelated app on 3001. Run mock-join-server
+         * with the same env var and the two stay aligned. */
+        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
         changeOrigin: true,
       },
       // ESP32-CAM proxy. Override the host in your shell when DHCP shifts:
@@ -326,7 +444,7 @@ export default defineConfig({
       // - configure/proxyReq drops browser headers the camera's 512-byte header
       //   buffer can't hold; same pattern as /api/v1/vitals above
       '/camera': {
-        target: normalizeHost(process.env.CAMERA_HOST, 'http://magnet-cam-8610.local'),
+        target: pickHost('CAMERA_HOST', 'http://magnet-cam-8610.local'),
         changeOrigin: true,
         rewrite: (path: string) => path.replace(/^\/camera/, ''),
         agent: cameraAgent,

@@ -633,7 +633,13 @@ export function createJoinServer(opts: JoinServerOptions = {}): JoinServer {
 
 const isMain = process.argv[1] === __filename;
 if (isMain) {
-  const PORT = 3001;
+  /* Port is configurable so a developer who already has something on
+   * 3001 (NestJS app from another project, podman default, etc.) can
+   * sidestep the conflict without killing the squatter. Set the same
+   * value on the dev server (`JOIN_SERVER_PORT=3101 npm run server`)
+   * and Vite reads the same env var to target its `/api/v1` proxy
+   * rule at the matching port. */
+  const PORT = parseInt(process.env.JOIN_SERVER_PORT ?? '3001', 10);
   const ROTATION_SECONDS = parseInt(process.env.CODE_ROTATION_SECONDS ?? '300', 10);
   const server = createJoinServer({ rotationSeconds: ROTATION_SECONDS });
 
@@ -644,11 +650,33 @@ if (isMain) {
     console.log(`  ${code}  →  ${path}`);
   }
 
-  server.app.listen(PORT, () => {
+  /* Bind explicitly + register the `error` handler BEFORE the success
+   * banner. The previous form passed only the success callback, so an
+   * EADDRINUSE (port already held by another process) silently
+   * dropped the listener; the banner still printed because the bind
+   * call returned synchronously and the error fired async to nowhere.
+   * That presented as "server seems up but /api/v1/join 404s" because
+   * the squatter was the one actually answering. */
+  const httpServer = server.app.listen(PORT);
+  httpServer.on('listening', () => {
     console.log(`[join-server] Mock join server running on http://localhost:${PORT}`);
     console.log(`[join-server] Endpoints:`);
     console.log(`  POST /api/v1/join   — validate a join code`);
     console.log(`  GET  /api/v1/manifest — fetch manifest (requires JWT)`);
     console.log(`  GET  /api/v1/code   — get current code (dev only)`);
+  });
+  httpServer.on('error', (e: NodeJS.ErrnoException) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error(`\n[join-server] FATAL: port ${PORT} is already in use.`);
+      console.error(`[join-server]   Another process is bound to it. Identify it with:`);
+      console.error(`[join-server]     lsof -i :${PORT}`);
+      console.error(`[join-server]   Then either stop that process or run mock-join-server`);
+      console.error(`[join-server]   on a different port:`);
+      console.error(`[join-server]     JOIN_SERVER_PORT=3101 npm run server`);
+      console.error(`[join-server]   (set the same env var on Vite so its proxy hits the right port).`);
+      process.exit(2);
+    }
+    console.error(`[join-server] FATAL: listen failed —`, e);
+    process.exit(1);
   });
 }
