@@ -212,6 +212,76 @@ Real-hardware airplane attitude + cabin music + cabin display + spatial photo ga
 
 ---
 
+## Deferred capabilities
+
+Features that the spec set calls for but aren't built in the d3-spatial prototype yet. Captured here so they can be moved into a future phase plan without losing the cross-reference back to where the spec proposes them. (Cross-referenced against `PROPOSAL.md`, `XR_UX-proposal1.md`, `ROADMAP.md`, `USECASE_SPECS.md`.)
+
+### Multi-user / federation (deferred to V1.7 / Phase 2)
+
+- **Shared presence + avatars** — multiple peers in one dataspace, each with beam, reticle, and a soft-sphere-plus-name-tag avatar; interactions propagate via WebSocket signaling. `PROPOSAL.md` UI Spec V1.7, `ROADMAP.md` P2.1, `XR_UX-proposal1.md` §11.
+- **Coordination locks for shared controls** — last-writer-wins on most controls plus a coordination lock on critical ones (R31); needs the signaling channel first. `XR_UX-proposal1.md` §4.2 UC2.
+- **Presenter-mode private control dataspace** — poster owner spotlights an artifact for all current visitors simultaneously. `XR_UX-proposal1.md` §4.3 UC3.
+- **Data-layer isolation across joined dataspaces** — currently a visual dim only. `ROADMAP.md` P3.4.
+
+### Security / privacy
+
+- **PKI handshake for private dataspaces (R23)** — server returns a challenge after code submission, HMD signs with a WebCrypto session keypair. Mock server speaks JWT only today. `PROPOSAL.md` V1.1; `XR_UX-proposal1.md` §2.4; `ROADMAP.md` P3.4.
+- **Token refresh + client-side rate-limit enforcement.** `ROADMAP.md` P3.4.
+- **User-managed root CA store in the HMD browser** for self-hosted dev with private CAs. Lives in the proposed hlxr-browser fork. `XR_UX-proposal1.md` §7.3 Tier 1.
+
+### Persistence / portability
+
+- **"Take it with you" gesture (UC3)** — pinch an artifact's pocket icon to save a reference into the user's personal dataspace; technical realization open. `USECASE_SPECS.md` §UC3; `XR_UX-proposal1.md` §4.3.
+- **Offline manifest cache (UC4)** — pre-load on boarding, replay against intermittent aircraft Wi-Fi. `XR_UX-proposal1.md` §4.4, §7.3 Tier 3.
+- **Persistent user prefs** — volume, locale, reduced-motion are session-local only today. `STATUS.md` Known issues.
+- **Dataspace export / portability to alternate engines (R18).** `PROPOSAL.md` R18.
+
+### Interaction / control
+
+- **Pre-built device control pucks (V1.3)** — hue wheel, brightness slider, scene presets rendered from a device's self-described schema, not per-device code. UC2 actuator panel is bespoke today. `PROPOSAL.md` V1.3.
+- **Device pins anchored to room-scan world coordinates** — `udm_spatial_anchor` ships in the schema; renderer-side pin glyphs at those anchors aren't built. `PROPOSAL.md` V1.3.
+- **XR-controller chart brushing** — `DragBrush` is desktop-only. `STATUS.md` Known issues.
+- **Palm-up summoning of the UC2 room dashboard.** `XR_UX-proposal1.md` §4.2.
+- **Voice control / wider gesture grammar** — accessibility-flagged future work. `PROPOSAL.md` Accessibility Considerations.
+
+### Standards alignment
+
+- **Live service discovery via mDNS / dataspace registry (V1.5)** — manifest-driven mark loading is shipped, but devices don't yet auto-register with a discovery endpoint; runtime mDNS resolution is not wired into the Vite proxy. *See companion proposal `specs/device-self-registration.md`.* `PROPOSAL.md` V1.5.
+- **Local-network permission + `.local` discovery in-browser** — Tier 1 hlxr-browser feature so dataspace discovery doesn't round-trip through `hlxr.org`. `XR_UX-proposal1.md` §7.3 Tier 1.
+- **W3C WoT Thing Description compatibility / R5 conformance suite.** `PROPOSAL.md` R5.
+- **`udm_spatial_anchor` upstream acceptance** — proposed back to the IoTone UDM spec, not yet ratified. `PROPOSAL.md` Manifest schema V1.9.
+
+### Continuous-awareness HUD (V1.2 — partial)
+
+- **TLS-lock / PKI-lock icon, latency sparkline, battery percent, device count** — the chip strip + audio HUD + debug HUD ship; these specific HUD elements don't. `PROPOSAL.md` V1.2; `XR_UX-proposal1.md` §3.
+
+### Device-side
+
+- **Device-side auto-onboarding via shared-secret join (R24, R32)** — IoT devices using a longer-lived shared secret against the same `/join` endpoint. UX is just an LED state, but the protocol surface in the join server doesn't yet implement the device path. `PROPOSAL.md` R24, R32; `XR_UX-proposal1.md` §2.5.
+- **MQTT bridge to a real context engine** — drafted for UC2 ("HTTP first; MQTT planned for Phase 2"). The Capsule scribe has a craw_mqtt bridge but it isn't wired to a project-level broker. `PROPOSAL.md` Real-device integration.
+- **OTA update flow / device-managed credential rotation** — R30 explicitly defers device security to the device implementer. `PROPOSAL.md` R30.
+
+### Demo content gaps
+
+- **Realistic 10+ device UC2 room** — current UC2 manifest is the seed; the larger build-out (HVAC, occupancy, multiple lights, camera feed) is open. `USECASE_SPECS.md` §UC2.
+- **Energy-flow sankey for UC2** — sankey primitive exists; no UC2 instance ships it. `USECASE_SPECS.md` §UC2.
+- **Full UC3 poster session** — UC3 shipped as the "XRt Exhibit" mini-exhibit (M21) instead of a multi-poster session. Hall minimap, proximity-triggered artifact bloom, per-poster manifest discovery still design-only. `XR_UX-proposal1.md` §4.3.
+- **UC4 in-flight-experience content surface** — UC4 closed at M22 with attitude + music + video + splat gallery; flight-path map / entertainment catalog / seat controls / in-flight Wi-Fi stats are open. `USECASE_SPECS.md` §UC4.
+- **UC1 timeline-scrub disc + long-press detach-to-world** — design specified, current UC1 manifest is a flat 5-mark layout. `XR_UX-proposal1.md` §4.1.
+
+### Browser / platform (hlxr-browser, §7)
+
+- **WebBLE, Web MIDI, WebUSB/Serial, WebHID** in an HMD browser. `XR_UX-proposal1.md` §7.3 Tier 2.
+- **First-run direct-to-Join experience + OS-level QR deep link.** `XR_UX-proposal1.md` §7.3 Tier 1.
+- **Apple Vision Pro / Pico / Lynx test passes.** `ROADMAP.md` P4.2, P4.3.
+
+### Cross-cutting (accessibility, i18n)
+
+- **Visible equivalent for every audio cue, reduced-motion preference, high-contrast mode.** `ROADMAP.md` P3.3.
+- **Japanese localization of the reference UI** — PROPOSAL commits to EN + JA; only EN strings ship today. `PROPOSAL.md` Language Considerations / Localization.
+
+---
+
 ## File map
 
 ```
