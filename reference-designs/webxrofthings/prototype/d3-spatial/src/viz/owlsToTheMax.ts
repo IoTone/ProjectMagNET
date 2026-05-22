@@ -251,6 +251,14 @@ export function buildOwlsToTheMax(opts: OwlsToTheMaxOptions = {}): OwlsToTheMaxV
   const startMs = performance.now();
   let anchorCompensated = false;
   const tmpWorld = new THREE.Vector3();
+  /* Throttle the canvas redraw to ~12 fps. The owls' blink + bob
+   * animation samples a smooth function of `t`, so the perceived
+   * motion is fine at low redraw rates — what we'd LOSE redrawing
+   * at 60 fps is mostly CPU spent re-rasterising 48 owls × ~10
+   * canvas primitives each. Previously this was unbounded and was
+   * one of the top CPU costs on Quest 3 in UC3. */
+  const OWL_DRAW_INTERVAL_MS = 80;     // 12.5 fps
+  let lastDrawMs = 0;
   mesh.onBeforeRender = () => {
     /* One-time Y compensation: the cell may be attached to vizAnchor
      * (≈ camY-0.20 in world Y) rather than world root. floorY is the
@@ -262,7 +270,10 @@ export function buildOwlsToTheMax(opts: OwlsToTheMaxOptions = {}): OwlsToTheMaxV
       mesh.position.y = floorY - tmpWorld.y;
       anchorCompensated = true;
     }
-    const t = (performance.now() - startMs) / 1000;
+    const now = performance.now();
+    if (now - lastDrawMs < OWL_DRAW_INTERVAL_MS) return;
+    lastDrawMs = now;
+    const t = (now - startMs) / 1000;
     drawAll(t);
     texture.needsUpdate = true;
   };

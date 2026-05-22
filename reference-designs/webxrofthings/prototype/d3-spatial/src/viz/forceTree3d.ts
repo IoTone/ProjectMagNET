@@ -33,10 +33,14 @@ export interface ForceTree3dOptions {
   /** Node sphere radius in metres before fit-scaling. Default 0.012 —
    *  +25 % over the standard force-graph node (≈ 0.0095). */
   radius?: number;
-  /** Initial pre-tick iterations. Default 160. Used to settle the layout
-   *  before the first frame so the user doesn't watch the tree explode
-   *  from a single point. Live ticks continue from onBeforeRender once
-   *  alpha is reheated by pinNode(). */
+  /** Initial pre-tick iterations on construction. Default 40 — enough
+   *  to get the cluster sub-trees off the random initial positions and
+   *  into a plausible shape, while keeping the sync cost on Quest-class
+   *  hardware under ~80 ms (160 ticks, the previous default, hung the
+   *  UC3 entry by ~300–800 ms on Quest 3). The onBeforeRender loop is
+   *  alpha-gated and keeps ticking past construction, so the layout
+   *  finishes settling visibly over the first ~1.5 s — reads as a
+   *  "tree growing in" rather than a hang. */
   ticks?: number;
   /** Cluster colour palette (one entry per cluster, cycled if shorter). */
   palette?: number[];
@@ -74,7 +78,7 @@ export function buildForceTree3d(opts: ForceTree3dOptions = {}): ForceTree3dViz 
     leavesPerCluster = 5,
     size             = 0.40,
     radius           = 0.012,
-    ticks            = 160,
+    ticks            = 40,
     palette          = [0xff5577, 0x66ccff, 0xffcc66, 0xcc99ff, 0x77ddaa],
   } = opts;
 

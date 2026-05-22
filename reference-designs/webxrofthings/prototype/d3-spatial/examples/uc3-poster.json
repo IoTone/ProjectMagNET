@@ -26,7 +26,8 @@
         "dotSize": 1.9,
         "invert": true,
         "maxGridDim": 256,
-        "mirrorBack": true
+        "prism": true,
+        "attribution": "Attribution: Vincent Foster (Sony A6)."
       },
       "hoverable": false
     },

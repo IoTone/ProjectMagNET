@@ -29,7 +29,9 @@
 
 import * as THREE from 'three';
 import { Delaunay } from 'd3-delaunay';
+import { Text } from 'troika-three-text';
 import { TEXT } from '../ui/palette';
+import { createGlitchMaterial, type GlitchMaterial } from './glitchTextureShader';
 
 export interface VoronoiStipplingOptions {
   /** URL of the source image (any same-origin / CORS-permitting raster). */
@@ -72,6 +74,36 @@ export interface VoronoiStipplingOptions {
    *  (no stippling). Useful in an exhibit-walk-around context: stippled
    *  art on one side, the raw photograph on the other. Default false. */
   mirrorBack?: boolean;
+  /** When true, arrange three planes into an equilateral triangular
+   *  prism (cross-section equilateral triangle, faces 120° apart):
+   *    - Face A: the stippled visualisation (existing front).
+   *    - Face B: the photograph plain.
+   *    - Face C: the photograph with a glitch shader applied.
+   *  Mutually exclusive with `mirrorBack` — prism implies the photo is
+   *  already on faces B + C. Default false. */
+  prism?: boolean;
+  /** Caption text rendered at the bottom of each photograph face
+   *  (B + C, only when `prism: true`). Face C gets the additional
+   *  status line "(status: glitched UofO)" appended. Empty string =
+   *  no caption. Default empty. */
+  attribution?: string;
+  /** Rotation of the whole prism around its central Y (vertical) axis,
+   *  in degrees. 0° = face A head-on (the stipple visualisation faces
+   *  the camera, the photo + glitch faces are off to the sides).
+   *  −60° = the vertical seam between face A (stipple) and face B
+   *  (photograph) sits dead-centre to the camera; the viewer sees
+   *  equal portions of A + B and face C (glitched) is occluded
+   *  behind. This is the curated "vertex-on" gallery composition.
+   *  +60° = the C-A edge faces the camera; B is hidden behind.
+   *  Default −60°. */
+  prismRotationDeg?: number;
+  /** Header label rendered at the TOP of each face. Defaults match
+   *  the UC3 XRt Exhibit composition; override in the manifest if a
+   *  different image needs different titling. Empty string disables
+   *  that face's header. */
+  prismLabelA?: string;   // default 'Voronoi Stippling'
+  prismLabelB?: string;   // default 'Original Photograph'
+  prismLabelC?: string;   // default 'Glitched'
 }
 
 export interface VoronoiStipplingViz {
@@ -95,7 +127,13 @@ export function buildVoronoiStippling(opts: VoronoiStipplingOptions): VoronoiSti
     title,
     invert        = true,
     maxGridDim    = 256,
-    mirrorBack    = false,
+    mirrorBack       = false,
+    prism            = false,
+    attribution      = '',
+    prismRotationDeg = -60,
+    prismLabelA      = 'Voronoi Stippling',
+    prismLabelB      = 'Original Photograph',
+    prismLabelC      = 'Glitched',
   } = opts;
   /* Silence the unused-import warning that creeps in when TEXT isn't
    * referenced anymore; keep the import in case a future theme call
@@ -105,11 +143,39 @@ export function buildVoronoiStippling(opts: VoronoiStipplingOptions): VoronoiSti
   const group = new THREE.Group();
   group.name  = 'voronoi-stippling';
 
+  /* Rotate the whole prism around the central Y axis so the viewer
+   * lands between a face and a vertical seam by default. Only applied
+   * when prism mode is on; non-prism cells stay axis-aligned with the
+   * grid like before. The manifest's cell wrapper (with the title +
+   * subtitle text) sits OUTSIDE this group, so the caption stays
+   * upright regardless of how we spin the prism. */
+  if (prism) {
+    group.rotation.y = prismRotationDeg * Math.PI / 180;
+  }
+
+  /* Triangular-prism geometry. Inscribed circle radius `r` for an
+   * equilateral triangle of side `width` is W·√3/6. When `prism` is
+   * true face A (the stipple visualisation) gets pushed forward by r
+   * so the prism's central axis sits at the cell's local origin;
+   * faces B and C then place themselves 120° around that axis. When
+   * `prism` is false, faceA remains at the origin and the cell looks
+   * exactly like the pre-prism design. */
+  const PRISM_R       = prism ? (width * Math.sqrt(3) / 6) : 0;
+  const PRISM_SQRT3_2 = Math.sqrt(3) / 2;
+
+  /* Face A wrapper. Even when prism is off, wrapping in a sub-group is
+   * a no-op (faceA at origin == direct children of `group`) and keeps
+   * the prism / non-prism code paths uniform. */
+  const faceA = new THREE.Group();
+  faceA.name  = 'voronoi-face-a';
+  faceA.position.z = PRISM_R;
+  group.add(faceA);
+
   // Background panel — matches the rest of the manifest cells visually.
   const bgMat = new THREE.MeshBasicMaterial({ color: 0x0f1116, transparent: true, opacity: 0.92 });
   const bg    = new THREE.Mesh(new THREE.PlaneGeometry(width, height), bgMat);
   bg.position.z = -0.001;
-  group.add(bg);
+  faceA.add(bg);
 
   // Border
   const edgeMat = new THREE.LineBasicMaterial({ color: 0x9a8a70, transparent: true, opacity: 0.6 });
@@ -117,7 +183,7 @@ export function buildVoronoiStippling(opts: VoronoiStipplingOptions): VoronoiSti
     new THREE.EdgesGeometry(new THREE.PlaneGeometry(width, height)),
     edgeMat,
   );
-  group.add(edge);
+  faceA.add(edge);
 
   if (title) {
     // troika-three-text would add asset dependency; use a plain plane label
@@ -133,7 +199,30 @@ export function buildVoronoiStippling(opts: VoronoiStipplingOptions): VoronoiSti
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   const pointMat = new THREE.PointsMaterial({ color, size: dotSize, sizeAttenuation: false });
   const points   = new THREE.Points(geometry, pointMat);
-  group.add(points);
+  faceA.add(points);
+
+  /* Face A header label. Sits ABOVE the stipple panel as a child of
+   * faceA — rotates with the prism (the manifest mark's own title,
+   * rendered by renderManifest in the cell wrapper, stays put in
+   * world space and doesn't track the prism rotation). Anchored
+   * 'bottom' so the text grows upward from above the panel's top
+   * edge. Only added when prism mode is on (non-prism cells already
+   * get their title from the manifest layer). */
+  let faceAHeader: Text | null = null;
+  if (prism && prismLabelA) {
+    faceAHeader = new Text();
+    faceAHeader.text          = prismLabelA;
+    faceAHeader.fontSize      = 0.026;
+    faceAHeader.color         = 0xe8e2d4;
+    faceAHeader.outlineWidth  = 0.0008;
+    faceAHeader.outlineColor  = 0x000000;
+    faceAHeader.anchorX       = 'center';
+    faceAHeader.anchorY       = 'bottom';
+    faceAHeader.maxWidth      = width * 0.92;
+    faceAHeader.position.set(0, height / 2 + 0.012, 0.002);
+    faceAHeader.sync();
+    faceA.add(faceAHeader);
+  }
 
   // Per-stipple state in image-space coordinates (0..imageW, 0..imageH).
   const stipplesX = new Float32Array(samples);
@@ -152,6 +241,107 @@ export function buildVoronoiStippling(opts: VoronoiStipplingOptions): VoronoiSti
    * `dispose()` (which frees it) close over the same refs. */
   let backBuilt = false;
   let backRefs: { mesh: THREE.Mesh; geo: THREE.PlaneGeometry; mat: THREE.MeshBasicMaterial; tex: THREE.Texture } | null = null;
+
+  /* Prism-mode state. `prismBuilt` guards against double-construction
+   * when img.onload could plausibly fire twice (cache-revalidation
+   * paths). `prismRefs` collects each face's geometry / material /
+   * caption so dispose() can free them — same shape as backRefs but
+   * scaled out to multiple faces. */
+  interface PrismFaceRefs {
+    group:    THREE.Group;
+    mesh:     THREE.Mesh;
+    geo:      THREE.PlaneGeometry;
+    mat:      THREE.Material;
+    tex:      THREE.Texture;
+    header?:  Text;
+    caption?: Text;
+    glitch?:  GlitchMaterial;
+  }
+  let prismBuilt = false;
+  const prismRefs: PrismFaceRefs[] = [];
+
+  /* Build one photograph face. The plain variant uses a vanilla
+   * MeshBasicMaterial with the shared texture; the glitch variant
+   * swaps in the GLSL effect from `glitchTextureShader`. Caption is
+   * troika-three-text anchored to the bottom of the panel; if empty
+   * string, no caption mesh is added. */
+  function buildPhotoFace(o: {
+    width: number; height: number;
+    texture: THREE.Texture;
+    header: string;
+    caption: string;
+    glitch: boolean;
+  }): PrismFaceRefs {
+    const g = new THREE.Group();
+    g.name = o.glitch ? 'voronoi-face-c' : 'voronoi-face-b';
+
+    const geo = new THREE.PlaneGeometry(o.width, o.height);
+    const glitchMat = o.glitch ? createGlitchMaterial(o.texture) : null;
+    const mat = glitchMat ?? new THREE.MeshBasicMaterial({ map: o.texture });
+    const mesh = new THREE.Mesh(geo, mat);
+    g.add(mesh);
+
+    /* Tick the glitch shader's uTime each frame the mesh would be
+     * rendered. Skipped automatically when the cell is out of frustum
+     * (onBeforeRender doesn't fire), so a hidden face costs nothing. */
+    if (glitchMat) {
+      mesh.onBeforeRender = () => {
+        if (disposed) return;
+        glitchMat.setTime(performance.now() / 1000);
+      };
+    }
+
+    let headerRef: Text | undefined;
+    if (o.header) {
+      /* Top-anchored header — matches the face A header so all three
+       * face titles sit at the same Y in their local frame. Slightly
+       * forward of the plane to avoid z-fighting at grazing angles. */
+      const h = new Text();
+      h.text         = o.header;
+      h.fontSize     = 0.026;
+      h.color        = 0xe8e2d4;
+      h.outlineWidth = 0.0008;
+      h.outlineColor = 0x000000;
+      h.anchorX      = 'center';
+      h.anchorY      = 'bottom';
+      h.maxWidth     = o.width * 0.92;
+      h.position.set(0, o.height / 2 + 0.012, 0.002);
+      h.sync();
+      g.add(h);
+      headerRef = h;
+    }
+
+    let captionRef: Text | undefined;
+    if (o.caption) {
+      /* Bottom-anchored caption — sits just outside the panel's lower
+       * edge in local space, slightly forward of the plane (z=+0.002)
+       * so it doesn't z-fight when the camera is grazing the panel. */
+      const t = new Text();
+      t.text       = o.caption;
+      t.fontSize   = 0.022;
+      t.color      = 0xe8e2d4;
+      t.outlineWidth = 0.0008;
+      t.outlineColor = 0x000000;
+      t.anchorX    = 'center';
+      t.anchorY    = 'top';
+      t.maxWidth   = o.width * 0.92;
+      t.position.set(0, -o.height / 2 - 0.012, 0.002);
+      t.sync();
+      g.add(t);
+      captionRef = t;
+    }
+
+    return {
+      group:   g,
+      mesh,
+      geo,
+      mat,
+      tex:     o.texture,
+      header:  headerRef,
+      caption: captionRef,
+      glitch:  glitchMat ?? undefined,
+    };
+  }
 
   const img = new Image();
   img.crossOrigin = 'anonymous';
@@ -213,8 +403,10 @@ export function buildVoronoiStippling(opts: VoronoiStipplingOptions): VoronoiSti
     /* Mirror-back: a second plane behind the stippling, facing the
      * opposite direction, showing the raw photograph. Built lazily here
      * (rather than at top-level) so we can reuse the already-loaded
-     * <img> as the texture source instead of issuing a second fetch. */
-    if (mirrorBack && !backBuilt) {
+     * <img> as the texture source instead of issuing a second fetch.
+     * Skipped when `prism` is true — prism builds three faces and the
+     * photograph appears on B + C instead. */
+    if (mirrorBack && !prism && !backBuilt) {
       backBuilt = true;
       const backTex = new THREE.Texture(img);
       backTex.colorSpace = THREE.SRGBColorSpace;
@@ -233,6 +425,66 @@ export function buildVoronoiStippling(opts: VoronoiStipplingOptions): VoronoiSti
       backMesh.scale.x    = -1;
       group.add(backMesh);
       backRefs = { mesh: backMesh, geo: backGeo, mat: backMat, tex: backTex };
+    }
+
+    /* Triangular-prism mode: build faces B (photograph plain) and C
+     * (photograph + glitch shader) at 120° / 240° around the prism's
+     * central Y axis. Face A (the stippling) is already at the right
+     * spot — faceA.position.z = PRISM_R was set at construction.
+     *
+     * Each face's construction (PlaneGeometry alloc + Texture upload
+     * + troika Text SDF rasterisation + glitch ShaderMaterial compile)
+     * is non-trivial — collectively ~250 ms on Quest 3, all on one
+     * frame's main thread. Defer face B by one rAF and face C by two
+     * so the texture upload, the shader compile, and each font-SDF
+     * rasterisation land on separate frames; the cell appears to
+     * "build itself" over ~50 ms rather than hanging for half a
+     * second. The voronoi iteration loop keeps animating in between. */
+    if (prism && !prismBuilt) {
+      prismBuilt = true;
+      const sharedTex = new THREE.Texture(img);
+      sharedTex.colorSpace  = THREE.SRGBColorSpace;
+      sharedTex.minFilter   = THREE.LinearFilter;
+      sharedTex.magFilter   = THREE.LinearFilter;
+      sharedTex.needsUpdate = true;
+
+      /* Frame 1: Face B (plain photograph). Position at azimuth 210°
+       * on the inscribed circle (face A is at 90°, so B sits 120°
+       * clockwise). Rotation aligns the plane's +Z normal with the
+       * outward radial direction. */
+      requestAnimationFrame(() => {
+        if (disposed) return;
+        const faceB = buildPhotoFace({
+          width, height, texture: sharedTex,
+          header:  prismLabelB,
+          caption: attribution,
+          glitch:  false,
+        });
+        faceB.group.position.set(-PRISM_R * PRISM_SQRT3_2, 0, -PRISM_R / 2);
+        faceB.group.rotation.y = -2 * Math.PI / 3;
+        group.add(faceB.group);
+        prismRefs.push(faceB);
+
+        /* Frame 2: Face C (photograph + glitch shader). Pulling the
+         * glitch ShaderMaterial compile into its own frame is what
+         * actually buys most of the load-stutter win on Quest 3. */
+        requestAnimationFrame(() => {
+          if (disposed) return;
+          const captionC = attribution
+            ? `${attribution}\n(status: glitched UofO)`
+            : '(status: glitched UofO)';
+          const faceC = buildPhotoFace({
+            width, height, texture: sharedTex,
+            header:  prismLabelC,
+            caption: captionC,
+            glitch:  true,
+          });
+          faceC.group.position.set(PRISM_R * PRISM_SQRT3_2, 0, -PRISM_R / 2);
+          faceC.group.rotation.y = 2 * Math.PI / 3;
+          group.add(faceC.group);
+          prismRefs.push(faceC);
+        });
+      });
     }
   };
   img.onerror = () => { /* leave panel empty */ };
@@ -330,6 +582,23 @@ export function buildVoronoiStippling(opts: VoronoiStipplingOptions): VoronoiSti
         backRefs.geo.dispose();
         backRefs.tex.dispose();
       }
+      /* Prism faces share one Texture across B + C — dispose it once
+       * via the first face's `tex` ref, then dispose the rest's
+       * geometries + materials + caption + header Text widgets. */
+      if (faceAHeader) faceAHeader.dispose();
+      let texDisposed = false;
+      for (const face of prismRefs) {
+        face.mesh.onBeforeRender = () => {};
+        face.geo.dispose();
+        face.mat.dispose();
+        if (face.header)  face.header.dispose();
+        if (face.caption) face.caption.dispose();
+        if (!texDisposed) {
+          face.tex.dispose();
+          texDisposed = true;
+        }
+      }
+      prismRefs.length = 0;
     },
   };
 }

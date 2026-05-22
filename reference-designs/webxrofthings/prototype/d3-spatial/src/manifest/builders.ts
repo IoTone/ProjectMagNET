@@ -517,6 +517,12 @@ export function registerAllBuilders() {
       maxSteps:      (cfg.maxSteps      as number)  ?? 120,
       dotSize:       (cfg.dotSize       as number)  ?? 1.6,
       mirrorBack:    (cfg.mirrorBack    as boolean) ?? false,
+      prism:            (cfg.prism            as boolean) ?? false,
+      attribution:      (cfg.attribution      as string)  ?? '',
+      prismRotationDeg: (cfg.prismRotationDeg as number)  ?? -60,
+      prismLabelA:      (cfg.prismLabelA      as string)  ?? 'Voronoi Stippling',
+      prismLabelB:      (cfg.prismLabelB      as string)  ?? 'Original Photograph',
+      prismLabelC:      (cfg.prismLabelC      as string)  ?? 'Glitched',
     });
     return makeMark(spec, viz.group, viz);
   });
@@ -576,7 +582,7 @@ export function registerAllBuilders() {
       leavesPerCluster: (cfg.leavesPerCluster as number) ?? 5,
       size:             (cfg.size             as number) ?? 0.40,
       radius:           (cfg.radius           as number) ?? 0.012,
-      ticks:            (cfg.ticks            as number) ?? 160,
+      ticks:            (cfg.ticks            as number) ?? 40,
     });
     /* Position the cell's group in vizAnchor-local coords. Defaults
      * place the tree's centre at y = 0.55 (above the 0.64-tall
