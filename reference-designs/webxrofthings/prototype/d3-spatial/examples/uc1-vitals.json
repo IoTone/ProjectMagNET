@@ -38,21 +38,6 @@
       "udm_tags": ["personal", "lan-only", "no-tls", "health-data", "sleep-only", "non-contact"],
       "udm_spatial_anchor_x": { "x": 0.0, "y": 1.0, "z": -0.4 },
       "udm_fw_version_x": "vitals-e4th-0.3.0"
-    },
-    {
-      "udm_key":   "wearable-body-temp-001",
-      "udm_uuid":  "urn:device:wearable-thermistor:001",
-      "_comment":  "Simulated wearable body-temperature sensor. Backed by mock-join-server for the demo; real hardware would be a wrist or chest thermistor.",
-      "udm_model_name":   "Body-temp wearable (sim)",
-      "udm_vendor":       "MagNET (sim)",
-      "udm_mktg_name":    "BodyTemp Wearable",
-      "udm_type":         "health-sensor",
-      "udm_class":        ["health-sensor", "wearable", "biometric"],
-      "udm_capabilities": ["body-temperature", "json-http", "non-contact"],
-      "udm_sensors": ["thermistor"],
-      "udm_services_link": ["body-temp-history", "body-temp-current"],
-      "udm_tags": ["personal", "biometric", "simulated"],
-      "udm_spatial_anchor_x": { "x": 0.25, "y": 0.95, "z": -0.4 }
     }
   ],
 
@@ -70,28 +55,36 @@
       "usm_tags": ["live", "lan-only", "biometric"]
     },
     {
-      "usm_key": "hr-history",
-      "usm_uuid": "urn:service:hr-series:c0d4",
-      "usm_service_name": "Heart-rate history (last 60 min)",
-      "usm_type": "timeseries",
-      "usm_class": ["timeseries", "biometric", "heart-rate"],
+      "usm_key": "hr-snapshot",
+      "usm_uuid": "urn:service:hr-snapshot:c0d4",
+      "usm_service_name": "Heart-rate (live snapshot)",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "biometric", "heart-rate", "snapshot"],
       "usm_service_endpoint": {
-        "GET": { "url": "/api/v1/vitals/heart-rate/history", "content-type": "application/json" }
+        "GET": { "url": "/api/v1/vitals/heart-rate", "content-type": "application/json" }
       },
+      "usm_polling_x": { "interval_seconds": 3 },
       "characteristics": [
-        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
-          "usm_characteristic_constraints": { "v_unit": "beats/min", "t_unit": "ms_since_epoch" } }
-      ]
+        { "usm_characteristic_id": "bpm", "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "v_unit": "beats/min" } }
+      ],
+      "usm_tags": ["live", "lan-only", "biometric"]
     },
     {
-      "usm_key": "br-history",
-      "usm_uuid": "urn:service:br-series:c0d4",
-      "usm_service_name": "Breathing-rate history (last 60 min)",
-      "usm_type": "timeseries",
-      "usm_class": ["timeseries", "biometric", "breathing-rate"],
+      "usm_key": "br-snapshot",
+      "usm_uuid": "urn:service:br-snapshot:c0d4",
+      "usm_service_name": "Breathing-rate (live snapshot)",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "biometric", "breathing-rate", "snapshot"],
       "usm_service_endpoint": {
-        "GET": { "url": "/api/v1/vitals/breathing/history", "content-type": "application/json" }
-      }
+        "GET": { "url": "/api/v1/vitals/breathing", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 3 },
+      "characteristics": [
+        { "usm_characteristic_id": "rpm", "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "v_unit": "breaths/min" } }
+      ],
+      "usm_tags": ["live", "lan-only", "biometric"]
     },
     {
       "usm_key": "phases",
@@ -130,33 +123,6 @@
       "usm_service_endpoint": {
         "GET": { "url": "/api/v1/vitals/targets", "content-type": "application/json" }
       }
-    },
-    {
-      "usm_key": "body-temp-history",
-      "usm_uuid": "urn:service:body-temp-series:001",
-      "usm_service_name": "Body temperature history (last 60 min)",
-      "usm_type": "timeseries",
-      "usm_class": ["timeseries", "biometric", "body-temperature"],
-      "usm_service_endpoint": {
-        "GET": { "url": "/api/v1/sensor/body-temperature/history", "content-type": "application/json" }
-      },
-      "characteristics": [
-        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
-          "usm_characteristic_constraints": { "v_unit": "celsius", "t_unit": "ms_since_epoch" } }
-      ],
-      "usm_tags": ["live", "biometric", "simulated"]
-    },
-    {
-      "usm_key": "body-temp-current",
-      "usm_uuid": "urn:service:body-temp-snapshot:001",
-      "usm_service_name": "Body temperature snapshot",
-      "usm_type": "sensor",
-      "usm_class": ["sensor", "biometric", "snapshot"],
-      "usm_service_endpoint": {
-        "GET": { "url": "/api/v1/sensor/body-temperature", "content-type": "application/json" }
-      },
-      "usm_polling_x": { "interval_seconds": 5 },
-      "usm_tags": ["live", "biometric", "simulated"]
     }
   ],
 
@@ -165,52 +131,70 @@
       "id": "hr-gauge",
       "type": "arc",
       "title": "Heart rate · current",
-      "subtitle": "radial gauge · 40–130 bpm",
+      "subtitle": "radial gauge · 40–130 bpm · live",
       "data": {
         "source": "url",
-        "url": "/api/v1/vitals/heart-rate/history",
-        "shape": "series",
-        "refreshInterval": 30
+        "url": "/api/v1/vitals/heart-rate",
+        "shape": "snapshot",
+        "refreshInterval": 3
       },
       "config": {
+        "pluck": "bpm",
+        "presenceField": "presence",
+        "historyLength": 60,
         "min": 40,
         "max": 130,
         "radius": 0.06,
         "tubeRadius": 0.004
       },
-      "_comment": "Reads the latest sample from /heart-rate/history. Resolution is one update per minute (matches the device's history ring buffer cadence). For sub-minute gauge updates we'd add a /vitals 'value' data shape.",
+      "_comment": "Snapshot mode: polls /heart-rate every 3 s, plucks `bpm`, gauges latest sample. `presence=false` ticks are skipped (not a fake 0). Was reading from /heart-rate/history (1 sample/min ring buffer) — minute-stale.",
       "deviceRef": "magnet-vitals-c0d4",
-      "serviceRef": "hr-history",
+      "serviceRef": "hr-snapshot",
       "hoverable": true
     },
     {
       "id": "hr-line",
       "type": "line",
       "title": "Heart rate",
-      "subtitle": "last 60 min · 1 sample/min",
+      "subtitle": "live · last 3 min, 1 sample / 3 s",
       "data": {
         "source": "url",
-        "url": "/api/v1/vitals/heart-rate/history",
-        "shape": "series",
-        "refreshInterval": 30
+        "url": "/api/v1/vitals/heart-rate",
+        "shape": "snapshot",
+        "refreshInterval": 3
       },
+      "config": {
+        "pluck": "bpm",
+        "presenceField": "presence",
+        "historyLength": 60,
+        "vMin": 40,
+        "vMax": 130
+      },
+      "_comment": "Snapshot mode mirrors the demo gallery's live-HR cell. Each refresh appends one bpm sample to a client-side rolling buffer; the line spans the buffer's window (~3 min @ 3 s cadence × 60 samples). Skips `presence=false` ticks so an empty room doesn't flat-line the chart.",
       "deviceRef": "magnet-vitals-c0d4",
-      "serviceRef": "hr-history",
+      "serviceRef": "hr-snapshot",
       "hoverable": true
     },
     {
       "id": "br-line",
       "type": "line",
       "title": "Breathing",
-      "subtitle": "last 60 min · 1 sample/min",
+      "subtitle": "live · last 3 min, 1 sample / 3 s",
       "data": {
         "source": "url",
-        "url": "/api/v1/vitals/breathing/history",
-        "shape": "series",
-        "refreshInterval": 30
+        "url": "/api/v1/vitals/breathing",
+        "shape": "snapshot",
+        "refreshInterval": 3
       },
+      "config": {
+        "pluck": "rpm",
+        "historyLength": 60,
+        "vMin": 4,
+        "vMax": 30
+      },
+      "_comment": "Snapshot mode — same pattern as hr-line. /breathing has no `presence` field; the loader's default minValue=0 still filters out `rpm: 0` resting-baseline ticks.",
       "deviceRef": "magnet-vitals-c0d4",
-      "serviceRef": "br-history",
+      "serviceRef": "br-snapshot",
       "hoverable": true
     },
     {
@@ -234,23 +218,27 @@
       "hoverable": true
     },
     {
-      "id": "body-temp-line",
-      "type": "line",
-      "title": "Body temperature",
-      "subtitle": "last 60 min · 1 sample/min · simulated",
+      "id": "targets-radar",
+      "type": "targets",
+      "title": "Targets · floor map",
+      "subtitle": "live mmWave detection · 1 Hz",
       "data": {
         "source": "url",
-        "url": "/api/v1/sensor/body-temperature/history",
-        "shape": "series",
-        "refreshInterval": 30
+        "url": "/api/v1/vitals/targets",
+        "shape": "targets",
+        "refreshInterval": 1
       },
       "config": {
-        "vMin": 36.0,
-        "vMax": 37.5,
-        "color": 16753280
+        "width": 0.32,
+        "height": 0.16,
+        "extent_m": 2.5,
+        "max_distance_m": 4.0,
+        "fov_deg": 50,
+        "tilt_rad": 0
       },
-      "deviceRef": "wearable-body-temp-001",
-      "serviceRef": "body-temp-history",
+      "_comment": "Self-polling cell (shape: 'targets'). Renders detected persons as glowing orbs on a top-down radar plot. After 10s of consecutive fetch failures the cell enters autonomous mode and synthesises 1-2 walking targets — the DEMO MODE HUD lights up to indicate non-real data.",
+      "deviceRef": "magnet-vitals-c0d4",
+      "serviceRef": "targets",
       "hoverable": true
     }
   ],

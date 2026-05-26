@@ -1554,6 +1554,11 @@ function showJoinPanel() {
 
 function hideJoinPanel() {
   joinPanel.hide();
+  /* Splash emblem is paired with the join panel — when the user
+   * leaves the splash for the gallery / charts / morph (toolbar)
+   * the emblem should fade out too. Without this it persists into
+   * the gallery view, floating over the demo cells. */
+  splashLogo.hide();
   // Don't auto-show anything; let the toolbar buttons handle it
 }
 

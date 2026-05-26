@@ -106,13 +106,34 @@ function fakeDistributions(markId: string): number[][] {
   return [heart, breath, total];
 }
 
+/** Snapshot shape: one scalar value, sampled at "now". The loader owns
+ *  the per-mark rolling buffer; this function just supplies the next
+ *  point. Uses the same sine-of-slow-period + harmonic shape as the
+ *  series synthesiser so the offline-mode line traces feel like the
+ *  same data source, just fabricated. */
+function fakeSnapshot(spec: MarkSpec): number {
+  const s = seed(spec.id);
+  const { center, amplitude } = fakeRangeFor(spec);
+  const tMin = Date.now() / 60_000;
+  return center
+       + amplitude       * Math.sin(tMin * 0.07 + s * 6.28)
+       + amplitude * 0.2 * Math.sin(tMin * 0.5);
+}
+
 /** Top-level entry. Returns the JSON-shaped fake payload, or null if
  *  we don't know how to fake this shape (caller leaves the spec alone
- *  and the chart stops updating). */
+ *  and the chart stops updating).
+ *
+ *  For 'snapshot' the return type is `number` (the scalar that the
+ *  loader will push into the mark's rolling buffer), not a JSON envelope —
+ *  this avoids a synth→stringify→parse→pluck round-trip that would
+ *  otherwise require the synthesiser to know which field name the
+ *  device uses. */
 export function generateFakePayload(spec: MarkSpec, shape: string): unknown | null {
   switch (shape) {
     case 'series':        return fakeSeries(spec);
     case 'distributions': return fakeDistributions(spec.id);
+    case 'snapshot':      return fakeSnapshot(spec);
     default:              return null;
   }
 }

@@ -65,11 +65,62 @@ common ground against the table above.
 | `ws-show` | ( strip -- ) | blast one strip to the wire |
 | `ws-show-all` | ( -- ) | blast all strips |
 | `ws-clear` | ( -- ) | blank + show all strips |
+| `bri` | ( n -- ) | set master brightness cap 0..255 (prints confirmation) |
+| `bri?` | ( -- n ) | push current cap to stack — **silent**; use `bri? .` to print |
+| `npx` | ( n -- ) | set active pixels/strip 1..NUM_PIXELS (partial strips) |
+| `npx?` | ( -- n ) | push active pixel count — **silent**; use `npx? .` to print |
 | `rnd` | ( n -- r ) | pseudo-random in [0,n) |
 | `nap` | ( ms -- ) | cooperative delay |
+| `strip-release` | ( -- ) | hand strip to Forth REPL (render task disengages) |
+| `strip-engage` | ( -- ) | hand strip to HTTP render task |
+| `strip-status` | ( -- ) | show the BLE/WiFi indicator pattern |
+| `strip?` | ( -- ) | print HTTP-driven state + current owner |
 
-The high-level `selftest*` / `randrun` words are defined in Forth (loaded at
-boot from a bundle in `main.c`) and can be redefined live at the REPL.
+The `?`-suffix words (`bri?` / `npx?`) follow Forth getter convention: they
+push to the data stack without printing. Append `.` to print: `bri? .` →
+displays the current cap. The `bri` setter does print a confirmation —
+that's asymmetric vs `bri?`, by design (setters log; getters don't).
+
+The high-level `selftest*` words (`selftest`, `selftest-bars`,
+`selftest-allon`, `selftest-walk`, `smoke`, `id`, `walk1`) are defined in
+Forth (loaded at boot from a bundle in `main.c`) and can be redefined live
+at the REPL.
+
+### Direct-pixel writes auto-acquire the strip
+
+Calling any `ws-*` word automatically flips the strip's owner to Forth —
+you don't need to type `strip-release` first. The render task stops
+touching the LEDs the moment you write a pixel. Use `strip-engage` to hand
+it back to HTTP, or `strip-status` to put the BLE/WiFi indicator pattern
+back on.
+
+### Try-it cookbook
+
+```forth
+\ One red pixel on strip 0
+0 5 255 0 0 ws-px    0 ws-show
+
+\ Off again
+0 5 0 0 0 ws-px      0 ws-show
+
+\ Three pixels at once (one ws-show latches them all)
+0 0 255 0 0 ws-px   0 1 0 255 0 ws-px   0 2 0 0 255 ws-px   0 ws-show
+
+\ Random pixels flashing for ~2 s — sanity check the whole pipeline
+30 0 do  0  npx? rnd  255 rnd  255 rnd  255 rnd  ws-px  0 ws-show  60 nap  loop
+
+\ Read current brightness cap
+bri? .
+
+\ Crank brightness, fill white, read back to confirm
+255 bri  255 255 255 ws-fill-all  ws-show-all
+bri? .
+```
+
+Brightness scaling is automatic: RGB values are 0–255 raw, then scaled by
+the current `bri` cap before reaching the LEDs. `255 bri` for max output,
+`48 bri` for USB-safe (the render task uses `48` for its provisioning
+indicator).
 
 ## Phase 2 — WiFi + UC2 HTTP API
 
@@ -83,7 +134,23 @@ accepts WiFi credentials (same flow as the M5_Hive_Cam). Once connected it
 auto-reconnects on later boots. At the REPL:
 
 - `prov-status` — BLE/WiFi state + current IP
-- `prov-reset` — clear stored creds, re-advertise
+- `prov-reset` — clear WiFi creds + reboot to re-advertise
+- `wifi-scan` — active scan of 2.4 GHz channels; prints a sorted-by-RSSI
+  table of nearby APs. Useful when `prov-status` shows `wifi: down` and you
+  want to confirm the radio can actually see your network. Common gotcha:
+  the SSID you're trying to connect to is 5 GHz-only — the C3/C6 are 2.4
+  GHz only, and a 5 GHz SSID won't appear in this scan at all. Blocks for
+  ~3-4 seconds.
+
+  Example output:
+  ```
+   #  ch  rssi  auth         ssid
+  --  --  ----  -----------  --------------------------------
+   1   6   -47  wpa2-psk     whyknownode2g
+   2  11   -58  wpa2-psk     guest
+   3   1   -71  wpa2/wpa3    neighbour-fi
+   4   6   -83  open         xfinitywifi
+  ```
 
 On WiFi connect it starts mDNS as `magnet-lighting-<MAC4>.local` (e.g.
 `magnet-lighting-b7c0.local`) — the same MAC suffix the BLE name uses, so

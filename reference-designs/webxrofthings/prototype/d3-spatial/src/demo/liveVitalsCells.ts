@@ -268,7 +268,8 @@ export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
   const markerMat = new THREE.MeshBasicMaterial({
     color: TEXT.body, transparent: true, opacity: 0.9,
   });
-  group.add(new THREE.Mesh(markerGeo, markerMat));
+  const markerMesh = new THREE.Mesh(markerGeo, markerMat);
+  group.add(markerMesh);
 
   /* Pre-allocate target glyphs as glowing 3D orbs (Standard material with
    * emissive so the scene's hemisphere + directional light both shade them
@@ -291,15 +292,57 @@ export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
     glyphs.push(m);
   }
 
+  /* Autonomous-mode state. After consecutive fetch failures totalling
+   * AUTONOMOUS_AFTER_OFFLINE_MS, the cell stops trying to render an
+   * empty floor map and instead synthesises one or two persons walking
+   * through the radar cone. Mirrors the UC4 IMU's autonomous behaviour:
+   * the user sees plausible motion even when the device is gone, and
+   * the DEMO MODE HUD (driven by the manifest health monitor) tells
+   * them the data isn't real. */
+  const AUTONOMOUS_AFTER_OFFLINE_MS = 10_000;
+  let consecutiveFailMs = 0;
+  let lastFailWallMs = 0;
+  let autonomousStartMs = 0;
+
+  function applyFakeTargets() {
+    /* Two synthetic persons sweeping through the radar cone on slow
+     * lissajous-like paths. Periods 17 s / 23 s — mutually prime so the
+     * combined motion never visibly repeats. Distances 0.8–2.2 m,
+     * lateral ±1.5 m: comfortably inside the BHA2's HR/BR detection
+     * cone so a real handover from live → fake → live doesn't visually
+     * pop the targets out of the cell. */
+    const t = (performance.now() - autonomousStartMs) / 1000;
+    const fakes = [
+      { x_m: 1.5 * Math.sin(t * (2 * Math.PI / 17)),         y_m: 1.5 + 0.7 * Math.cos(t * (2 * Math.PI / 17)) },
+      { x_m: -1.2 * Math.cos(t * (2 * Math.PI / 23) + 0.7),  y_m: 1.2 + 0.6 * Math.sin(t * (2 * Math.PI / 23)) },
+    ];
+    for (let i = 0; i < MAX_TARGETS; i++) {
+      const ft = fakes[i];
+      if (ft) {
+        const p = mapXY(ft.x_m, ft.y_m);
+        const cx = Math.max(-width / 2, Math.min(width / 2, p.x));
+        const cy = Math.max(-height / 2, Math.min(height / 2, p.y));
+        glyphs[i]!.position.set(cx, cy, glyph_lift);
+        glyphs[i]!.visible = true;
+      } else {
+        glyphs[i]!.visible = false;
+      }
+    }
+  }
+
   async function refresh(): Promise<boolean> {
     try {
       const resp = await fetch(url);
-      if (!resp.ok) return false;
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json() as {
         count?: number;
         targets?: Array<{ id: number; x_m: number; y_m: number }>;
       };
       const targets = data.targets ?? [];
+
+      /* Successful fetch — leave autonomous mode if we were in it. */
+      consecutiveFailMs = 0;
+      autonomousStartMs = 0;
 
       for (let i = 0; i < MAX_TARGETS; i++) {
         const t = targets[i];
@@ -318,18 +361,44 @@ export function buildLiveTargetsCell(opts: LiveTargetsOpts): LiveCell {
       }
       return true;
     } catch {
-      for (const g of glyphs) g.visible = false;
+      /* Track elapsed offline time using wall clock between failures —
+       * `refreshMs` may be inaccurate if the page tab was backgrounded. */
+      const now = performance.now();
+      if (lastFailWallMs > 0) consecutiveFailMs += now - lastFailWallMs;
+      lastFailWallMs = now;
+
+      if (consecutiveFailMs >= AUTONOMOUS_AFTER_OFFLINE_MS) {
+        if (autonomousStartMs === 0) autonomousStartMs = now;
+        applyFakeTargets();
+      } else {
+        for (const g of glyphs) g.visible = false;
+      }
       return false;
     }
   }
 
   const poller = startPolling(refreshMs, refresh);
 
+  /* Drive the autonomous-mode animation at render rate. tick() is wired
+   * by the demo gallery and the manifest pipeline differently across
+   * callsites; onBeforeRender on a permanently-visible child mesh fires
+   * reliably in both paths (same pattern as buildLiveImuCell uses for
+   * IMU dead-reckoning). No-op when live — synthesised targets only
+   * move while consecutive failures keep us in autonomous mode. */
+  markerMesh.onBeforeRender = () => {
+    if (autonomousStartMs > 0) applyFakeTargets();
+  };
+
   return {
     group,
-    tick: () => { /* static between refreshes */ },
+    tick: () => {
+      /* Belt-and-braces: callers that drive tick() get the same
+       * animation. onBeforeRender is the primary path. */
+      if (autonomousStartMs > 0) applyFakeTargets();
+    },
     dispose: () => {
       poller.stop();
+      markerMesh.onBeforeRender = () => {};
       coneGeo.dispose();
       hrArcGeo.dispose();
       markerGeo.dispose();

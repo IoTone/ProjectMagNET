@@ -43,6 +43,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "driver/usb_serial_jtag.h"
+#include "esp_wifi_types.h"   /* WIFI_AUTH_* enum, used by w_wifi_scan */
 #include "led_strip.h"
 #include "mdns.h"
 #include "craw_nvs.h"
@@ -130,6 +131,19 @@ static volatile strip_owner_t s_owner = OWNER_STATUS;
  * characteristic write fires (creds received / commit requested), so the
  * installer can see the device accepted the provisioning packet. */
 static volatile int64_t s_ack_until_us = 0;
+
+/* Connected-celebration deadline. When WiFi associates we briefly keep
+ * the strip in STATUS to render the green breathing confirmation, then
+ * auto-flip to OWNER_HTTP at the deadline so subsequent HTTP / REPL
+ * writes aren't overwritten by render_status's 50 fps loop.
+ *
+ * The pre-fix behaviour ("strip enforces green breathing while WiFi is
+ * up, overrides every color/pattern/on/off command") came from s_owner
+ * staying at OWNER_STATUS indefinitely after WiFi connect — strip_task
+ * raced every user write within 20 ms and render_status also clobbered
+ * s_bri_cap to 48 every frame. */
+#define CONNECT_CELEBRATION_MS 2000
+static volatile int64_t s_celebrate_until_us = 0;
 
 /* ---- USB serial I/O ---- */
 
@@ -449,11 +463,20 @@ static void render_frame(const strip_state_t *s, uint32_t f) {
  *   FAILED                           red strobe (~8 Hz)
  *   BLE characteristic write         white pulse (~250 ms) overrides above */
 static void render_status(uint32_t f) {
-    s_bri_cap = 48;   /* USB-safe full-strip brightness */
+    /* Save + clamp + restore s_bri_cap so that the USB-safe 48 cap only
+     * applies WHILE the status renderer is writing pixels. Pre-fix this
+     * was a bare assignment that permanently dropped the user's chosen
+     * cap to 48 — so even after switching owner the strip stayed dim
+     * until the user re-issued `bri`. The clamp uses min(user, 48) so
+     * the user's stricter cap is still honoured. */
+    uint8_t saved_cap = s_bri_cap;
+    s_bri_cap = saved_cap < 48 ? saved_cap : 48;
+
     int64_t now = esp_timer_get_time();
     if (now < s_ack_until_us) {
         for (int i = 0; i < NUM_PIXELS; i++) ws_set_pixel(0, i, 255, 255, 255);
         ws_show(0);
+        s_bri_cap = saved_cap;
         return;
     }
     uint8_t r = 0, g = 0, b = 0;
@@ -484,12 +507,25 @@ static void render_status(uint32_t f) {
     if (lit) for (int i = 0; i < NUM_PIXELS; i++) ws_set_pixel(0, i, r, g, b);
     else     for (int i = 0; i < NUM_PIXELS; i++) ws_set_pixel(0, i, 0, 0, 0);
     ws_show(0);
+    s_bri_cap = saved_cap;
 }
 
 static void strip_task(void *arg) {
     (void)arg;
     uint32_t f = 0;
     for (;;) {
+        /* Auto-handoff from STATUS → HTTP after the WiFi-connected
+         * celebration window expires. Without this, the status renderer
+         * keeps overwriting every user write at 50 fps until the user
+         * manually calls `strip-engage` from the REPL. See
+         * s_celebrate_until_us declaration for the why. */
+        if (s_owner == OWNER_STATUS && s_celebrate_until_us > 0
+            && esp_timer_get_time() >= s_celebrate_until_us) {
+            s_owner = OWNER_HTTP;
+            s_celebrate_until_us = 0;
+            usb_print("\r\n[strip] auto-handoff to OWNER_HTTP after WiFi-connect celebration\r\n");
+        }
+
         switch (s_owner) {
         case OWNER_HTTP: {
             strip_state_t s;
@@ -550,9 +586,32 @@ static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
         craw_ble_provision_set_ip(s_ip_str);
         craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTED);
         s_prov_state = CRAW_BLE_PROV_CONNECTED;
+        /* Tear down BLE BEFORE starting mDNS / httpd. The NimBLE controller
+         * holds a ~40 KB contiguous DRAM block; leaving it resident while
+         * WiFi grows its own buffers causes:
+         *   - continuous `wifi:m f null` / `wifi:mem fail` spam in the log
+         *   - httpd_start() fails with ESP_ERR_HTTPD_TASK because xTaskCreate
+         *     can't find enough heap for the server task
+         *   - WiFi/BLE coexistence keeps the radio thrashing, slowing
+         *     re-connects
+         * Once deinit'd, BLE provisioning cannot be re-initialised in this
+         * boot — re-provisioning requires `prov-reset` over Forth REPL + a
+         * reboot. For a set-up-once lighting device that's the right trade.
+         * See auto-memory [project_hive_node_bringup_order] — same pattern. */
+        usb_printf("[BLE] tearing down NimBLE post-connect (free heap before: %lu)\r\n",
+            (unsigned long)esp_get_free_heap_size());
+        craw_ble_provision_deinit();
+        usb_printf("[BLE] free heap after deinit: %lu\r\n",
+            (unsigned long)esp_get_free_heap_size());
         start_mdns();
         if (http_strip_start() == ESP_OK)
             usb_printf("[HTTP] http://%s/api/v1/actuator/neopixel\r\n", s_ip_str);
+        /* Show the green-breath "connected" confirmation for
+         * CONNECT_CELEBRATION_MS, then hand the strip to HTTP so user
+         * writes (REPL or HTTP) aren't fought by the status renderer.
+         * Without this handoff every user pixel write loses to render_status
+         * within 20 ms (the strip_task tick interval). */
+        s_celebrate_until_us = esp_timer_get_time() + (int64_t)CONNECT_CELEBRATION_MS * 1000;
         break;
     case CRAW_WIFI_EVENT_DISCONNECTED:
         usb_print("\r\n[WiFi] disconnected\r\n");
@@ -591,7 +650,11 @@ static void on_prov_event(craw_ble_prov_state_t state,
         craw_nvs_save_wifi_creds(ssid, pass ? pass : "");
         craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
         s_prov_state = CRAW_BLE_PROV_CONNECTING;
-        craw_wifi_connect(ssid, pass ? pass : "");
+        /* connect_best scans first and pins to the strongest BSSID for the
+         * SSID. Bypasses band-steering / mesh roaming during the 4-way
+         * handshake — essential on ISP / consumer mesh routers (eero, Velop,
+         * etc.) where you can't disable smart-connect from the admin UI. */
+        craw_wifi_connect_best(ssid, pass ? pass : "");
         break;
     default:
         break;
@@ -600,6 +663,19 @@ static void on_prov_event(craw_ble_prov_state_t state,
 
 /* ---- Forth FFI words ---- */
 
+/* Auto-acquire OWNER_FORTH on any direct pixel-write word so users can run
+ * self-tests (`smoke`, `selftest-walk`, ad-hoc `ws-px` calls) without
+ * remembering to call `strip-release` first. Skipping the release was the
+ * #1 cause of "self-test commands appear to do nothing or get stuck" —
+ * the strip_task in OWNER_STATUS was overwriting their writes within 20 ms.
+ * Users who want HTTP / status to stay in control through a REPL session
+ * can still call `strip-engage` or `strip-status` explicitly. */
+static inline void forth_claim_strip(void) {
+    s_owner = OWNER_FORTH;
+    /* Cancel a pending celebration so it doesn't bounce ownership back. */
+    s_celebrate_until_us = 0;
+}
+
 /* ( strip idx r g b -- ) */
 static void w_ws_px(void) {
     uint8_t b = (uint8_t)forth_pop();
@@ -607,6 +683,7 @@ static void w_ws_px(void) {
     uint8_t r = (uint8_t)forth_pop();
     int idx   = (int)forth_pop();
     int s     = (int)forth_pop();
+    forth_claim_strip();
     ws_set_pixel(s, idx, r, g, b);
 }
 
@@ -616,6 +693,7 @@ static void w_ws_fill(void) {
     uint8_t g = (uint8_t)forth_pop();
     uint8_t r = (uint8_t)forth_pop();
     int s     = (int)forth_pop();
+    forth_claim_strip();
     ws_fill(s, r, g, b);
 }
 
@@ -624,26 +702,31 @@ static void w_ws_fill_all(void) {
     uint8_t b = (uint8_t)forth_pop();
     uint8_t g = (uint8_t)forth_pop();
     uint8_t r = (uint8_t)forth_pop();
+    forth_claim_strip();
     for (int s = 0; s < STRIP_COUNT; s++) ws_fill(s, r, g, b);
 }
 
 /* ( strip -- ) */
 static void w_ws_rand_fill(void) {
+    forth_claim_strip();
     ws_rand_fill((int)forth_pop());
 }
 
 /* ( strip -- ) */
 static void w_ws_show(void) {
+    forth_claim_strip();
     ws_show((int)forth_pop());
 }
 
 /* ( -- ) */
 static void w_ws_show_all(void) {
+    forth_claim_strip();
     ws_show_all();
 }
 
 /* ( -- ) */
 static void w_ws_clear(void) {
+    forth_claim_strip();
     ws_clear_all();
 }
 
@@ -709,7 +792,9 @@ static void w_strips(void) {
     usb_print("  s ws-show / ws-show-all / s ws-rand-fill\r\n");
     usb_print("Phase 2 (WiFi/HTTP):\r\n");
     usb_print("  prov-status     BLE/WiFi provisioning state + IP\r\n");
-    usb_print("  prov-reset      clear WiFi creds, re-advertise\r\n");
+    usb_print("  prov-reset      clear WiFi creds + reboot to re-advertise\r\n");
+    usb_print("  wifi-scan       active scan; print nearby APs (3-4 s)\r\n");
+    usb_print("  wifi-connect    re-connect to stored SSID (scan + BSSID pin)\r\n");
     usb_print("  strip?          show HTTP-driven strip state + owner\r\n");
     usb_print("  strip-status    show BLE/WiFi indicator on the strip\r\n");
     usb_print("                  (orange flash=unconfigured, red strobe=failed,\r\n");
@@ -732,17 +817,74 @@ static void w_prov_status(void) {
     usb_printf("ip:    %s\r\n", s_ip_str);
 }
 
-/* ( -- ) clear WiFi creds and re-advertise */
+/* ( -- ) active scan + print a sorted-by-RSSI table of nearby APs.
+ *
+ * Diagnostic for "device can't connect" cases. Confirms what SSIDs the
+ * radio actually sees and on what 2.4 GHz channel. Common gotcha: the
+ * SSID the user is trying to reach is 5 GHz-only (the C3 is 2.4 GHz)
+ * and doesn't appear in this scan at all. Blocks for ~3-4 seconds. */
+static void w_wifi_scan(void) {
+    craw_wifi_scan_result_t results[20];
+    usb_print("\r\nScanning 2.4 GHz channels... (3-4 s)\r\n");
+    int n = craw_wifi_scan(results, 20);
+    if (n < 0) { usb_print("scan failed\r\n"); return; }
+    if (n == 0) { usb_print("no APs found\r\n"); return; }
+    usb_print("\r\n #  ch  rssi  auth         ssid\r\n");
+    usb_print("--  --  ----  -----------  --------------------------------\r\n");
+    for (int i = 0; i < n; i++) {
+        const char *auth;
+        switch (results[i].authmode) {
+            case WIFI_AUTH_OPEN:            auth = "open";       break;
+            case WIFI_AUTH_WEP:             auth = "wep";        break;
+            case WIFI_AUTH_WPA_PSK:         auth = "wpa-psk";    break;
+            case WIFI_AUTH_WPA2_PSK:        auth = "wpa2-psk";   break;
+            case WIFI_AUTH_WPA_WPA2_PSK:    auth = "wpa/wpa2";   break;
+            case WIFI_AUTH_WPA2_ENTERPRISE: auth = "wpa2-ent";   break;
+            case WIFI_AUTH_WPA3_PSK:        auth = "wpa3-psk";   break;
+            case WIFI_AUTH_WPA2_WPA3_PSK:   auth = "wpa2/wpa3";  break;
+            default:                        auth = "?";          break;
+        }
+        const char *ssid = results[i].ssid[0] ? results[i].ssid : "<hidden>";
+        usb_printf("%2d  %2u  %4d  %-11s  %s\r\n",
+            i + 1, (unsigned)results[i].channel, (int)results[i].rssi,
+            auth, ssid);
+    }
+    usb_printf("\r\n%d AP%s found\r\n", n, n == 1 ? "" : "s");
+}
+
+/* ( -- ) re-connect to stored SSID via scan + BSSID pin + PMF off.
+ *
+ * Manual retry path for when the boot-time auto-connect failed and you
+ * don't want to reboot. Loads the saved SSID + password from NVS, scans
+ * for the strongest matching BSSID, and connects pinned to it. Same
+ * underlying call as the boot-time auto-connect — exposed here so you
+ * can re-try at the ok> prompt while watching the log. */
+static void w_wifi_connect_best(void) {
+    char ssid[33], pass[65];
+    if (!craw_nvs_load_wifi_creds(ssid, pass) || !ssid[0]) {
+        usb_print("\r\nNo stored WiFi creds. Use BLE provisioning to set them.\r\n");
+        return;
+    }
+    usb_printf("\r\nRe-connecting to '%s' (scan + BSSID pin + PMF off)...\r\n", ssid);
+    craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
+    s_prov_state = CRAW_BLE_PROV_CONNECTING;
+    craw_wifi_connect_best(ssid, pass);
+}
+
+/* ( -- ) clear WiFi creds and reboot to re-provision.
+ *
+ * Reboots because we deinit BLE on WiFi-connect to free DRAM for the
+ * httpd task (see on_wifi_event CONNECTED). craw_ble_provision_deinit
+ * is one-way per the header comment — BLE can't be re-advertised in
+ * the same process. So the only way back to "advertising for fresh
+ * provisioning" is a fresh boot, which is what this word does. */
 static void w_prov_reset(void) {
     char ssid[33], pass[65];
     craw_nvs_clear_wifi_creds(ssid, pass);
     craw_wifi_disconnect();
-    strncpy(s_ip_str, "N/A", sizeof(s_ip_str));
-    craw_ble_provision_set_ip(s_ip_str);
-    craw_ble_provision_set_status(CRAW_BLE_PROV_IDLE);
-    s_prov_state = CRAW_BLE_PROV_IDLE;
-    craw_ble_provision_advertise();
-    usb_print("\r\nProvisioning reset. Advertising.\r\n");
+    usb_print("\r\nProvisioning reset — rebooting in 1 s to re-advertise...\r\n");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
 }
 
 /* ( -- ) print the HTTP-driven strip state + current owner */
@@ -779,6 +921,8 @@ static void w_strip_status(void) {
 static void register_words(void) {
     forth_register_word("prov-status",  w_prov_status);
     forth_register_word("prov-reset",   w_prov_reset);
+    forth_register_word("wifi-scan",    w_wifi_scan);
+    forth_register_word("wifi-connect", w_wifi_connect_best);
     forth_register_word("strip?",       w_strip_q);
     forth_register_word("strip-release",w_strip_release);
     forth_register_word("strip-engage", w_strip_engage);
@@ -911,10 +1055,14 @@ void app_main(void) {
     /* Auto-connect if we already have stored WiFi creds */
     char ssid[33], pass[65];
     if (craw_nvs_load_wifi_creds(ssid, pass) && ssid[0]) {
-        usb_printf("Stored WiFi '%s' — auto-connecting...\r\n", ssid);
+        usb_printf("Stored WiFi '%s' — auto-connecting (scan + BSSID pin)...\r\n", ssid);
         craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
         s_prov_state = CRAW_BLE_PROV_CONNECTING;
-        craw_wifi_connect(ssid, pass);
+        /* connect_best does a 3-4 s scan, picks the strongest BSSID matching
+         * `ssid`, and pins the association to it. Bypasses ISP-router band
+         * steering / mesh roaming during the 4-way handshake. Falls back to
+         * plain craw_wifi_connect if no matching SSID is seen. */
+        craw_wifi_connect_best(ssid, pass);
     } else {
         usb_print("No stored WiFi. Provision over BLE, then the UC2\r\n");
         usb_print("panel POSTs /api/v1/actuator/neopixel to drive the strip.\r\n");

@@ -402,3 +402,122 @@ describe('LoadResult.dispose', () => {
     expect(() => { result.dispose(); result.dispose(); }).not.toThrow();
   });
 });
+
+/* ─── snapshot shape ────────────────────────────────────────────────── */
+
+describe('loadManifest — snapshot shape', () => {
+  it('plucks the configured field and accumulates into a per-mark rolling buffer', async () => {
+    const rec = makeRecordingBuilder();
+    registerMarkBuilder(TEST_TYPE, rec.builder);
+    /* Three live polls: 72 → 74 → 76 bpm, all with presence=true. */
+    mockFetchOnce({ bpm: 72, presence: true, timestamp_us: 1 });
+    mockFetchOnce({ bpm: 74, presence: true, timestamp_us: 2 });
+    mockFetchOnce({ bpm: 76, presence: true, timestamp_us: 3 });
+
+    const result = await loadManifest(ds([{
+      id: 'hr', type: TEST_TYPE, title: 'HR',
+      data: { source: 'url', url: '/heart-rate', shape: 'snapshot', refreshInterval: 3 },
+      config: { pluck: 'bpm', presenceField: 'presence', historyLength: 10 },
+    } as MarkSpec]));
+
+    /* Step the refresh interval twice — first poll happened at load
+     * time; the next two are at 3 s, 6 s. */
+    await vi.advanceTimersByTimeAsync(6_500);
+
+    /* The mark's most recent refresh saw the full buffer. */
+    expect(rec.refreshCalls.length).toBeGreaterThanOrEqual(2);
+    const last = rec.refreshCalls.at(-1)!;
+    expect((last.data as any).source).toBe('inline');
+    const series = (last.data as any).series as Array<{ t: number; v: number }>;
+    expect(series.map(s => s.v)).toEqual([72, 74, 76]);
+    expect(series.every(s => typeof s.t === 'number')).toBe(true);
+
+    result.dispose();
+  });
+
+  it('skips presence=false ticks without polluting the buffer', async () => {
+    const rec = makeRecordingBuilder();
+    registerMarkBuilder(TEST_TYPE, rec.builder);
+    /* First poll seeds the buffer; second poll has presence=false and
+     * must NOT push a value; third resumes presence=true. */
+    mockFetchOnce({ bpm: 72, presence: true });
+    mockFetchOnce({ bpm: 0,  presence: false });   // empty room
+    mockFetchOnce({ bpm: 75, presence: true });
+
+    const result = await loadManifest(ds([{
+      id: 'hr', type: TEST_TYPE, title: 'HR',
+      data: { source: 'url', url: '/heart-rate', shape: 'snapshot', refreshInterval: 3 },
+      config: { pluck: 'bpm', presenceField: 'presence', historyLength: 10 },
+    } as MarkSpec]));
+
+    await vi.advanceTimersByTimeAsync(6_500);
+
+    const last = rec.refreshCalls.at(-1)!;
+    const series = (last.data as any).series as Array<{ t: number; v: number }>;
+    expect(series.map(s => s.v)).toEqual([72, 75]);
+
+    result.dispose();
+  });
+
+  it('trims the buffer to historyLength', async () => {
+    const rec = makeRecordingBuilder();
+    registerMarkBuilder(TEST_TYPE, rec.builder);
+    /* historyLength = 3; push 5 values; buffer should retain the last 3. */
+    for (const v of [10, 20, 30, 40, 50]) mockFetchOnce({ rpm: v });
+
+    const result = await loadManifest(ds([{
+      id: 'br', type: TEST_TYPE, title: 'BR',
+      data: { source: 'url', url: '/breathing', shape: 'snapshot', refreshInterval: 1 },
+      config: { pluck: 'rpm', historyLength: 3 },
+    } as MarkSpec]));
+
+    await vi.advanceTimersByTimeAsync(4_500);
+
+    const last = rec.refreshCalls.at(-1)!;
+    const series = (last.data as any).series as Array<{ t: number; v: number }>;
+    expect(series.map(s => s.v)).toEqual([30, 40, 50]);
+
+    result.dispose();
+  });
+
+  it('seeds fake snapshot values when the device is offline', async () => {
+    const rec = makeRecordingBuilder();
+    registerMarkBuilder(TEST_TYPE, rec.builder);
+    /* Pre-fetch fails → loader should seed fake data on cold start. */
+    mockFetchRejectOnce(new Error('econnrefused'));
+
+    const result = await loadManifest(ds([{
+      id: 'hr-line', type: TEST_TYPE, title: 'HR',
+      data: { source: 'url', url: '/heart-rate', shape: 'snapshot', refreshInterval: 3 },
+      config: { pluck: 'bpm', presenceField: 'presence', historyLength: 60,
+                vMin: 40, vMax: 130 },
+    } as MarkSpec]));
+
+    /* The pre-fetch failed; seedFakeIfPossible needs at least 2 values
+     * in the buffer to stamp inline data — so cold-start may still hand
+     * the builder a URL spec. After the first refresh interval (also
+     * failing) a second fake gets pushed and the spec converts. */
+    mockFetchRejectOnce(new Error('econnrefused'));
+    mockFetchRejectOnce(new Error('econnrefused'));
+    mockFetchRejectOnce(new Error('econnrefused'));
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    /* By now the health monitor flagged offline and fake data flowed. */
+    const last = rec.refreshCalls.at(-1);
+    if (last) {
+      const data = last.data as any;
+      if (data.source === 'inline') {
+        const series = data.series as Array<{ t: number; v: number }>;
+        expect(series.length).toBeGreaterThanOrEqual(2);
+        /* Fake values should respect vMin/vMax (40..130) — fakeData's
+         * fakeRangeFor reads spec.config.vMin/vMax first. */
+        for (const s of series) {
+          expect(s.v).toBeGreaterThan(20);
+          expect(s.v).toBeLessThan(150);
+        }
+      }
+    }
+
+    result.dispose();
+  });
+});

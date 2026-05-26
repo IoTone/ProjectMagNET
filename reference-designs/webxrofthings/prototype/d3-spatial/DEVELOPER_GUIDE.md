@@ -216,6 +216,37 @@ The `config` block is type-specific; copy from `examples/` and adapt. Defaults a
 
 When a URL fetch fails repeatedly, the loader switches to a **fake-data generator** (see `src/manifest/fakeData.ts`) and the **DEMO MODE** badge + **offline-sensors** card appear in the HUD. Your charts keep moving; the user can tell from the chrome that the data isn't real. The fake values respect your `vMin`/`vMax` config so a narrow-range chart doesn't get scrawled across the scene.
 
+### Polling cadence — slower than you think, staggered when sharing a chip
+
+Pick `refreshInterval` to match how often the underlying signal *actually changes*, not how often you'd like the chart to move. Polling too fast doesn't make the data fresher — it just hammers the device's HTTP server. Rough guide for typical IoT-class sensors:
+
+| Signal | Sensible cadence | Why |
+|---|---|---|
+| Heart rate, breathing | 1–3 s | Beat-to-beat variability is the signal itself |
+| IMU / orientation | 100–500 ms (self-fetching) | Smoothness of motion matters; cells dead-reckon between polls |
+| Camera frame | 1–2 s | Throughput-limited by chip + Vite proxy maxSockets:1 |
+| Ambient temperature, humidity | **30–60 s** | Room temp changes by ~0.1°C per minute; faster is just waste |
+| Pressure, AQI, light, pollen | 30–60 s | Same — environmental signals are slow |
+| Actuator state (light on/off) | event-driven, not polled | Mark refreshes via direct response to the POST |
+
+For the slow signals (env, baro, AQI), `5 s` is **12× faster than the signal changes**. On a small chip like the M5 Atom Echo, that rate can drive the esp_http_server's parser into edge cases (we've seen 100 % deterministic `431 Request Header Fields Too Large` on humidity at 5 s polls when temperature is also polling at 5 s on the same device — see [the 2026-05-25 debug session](#) and the firmware-side memo).
+
+**Staggering — the `startDelayMs` field.** When two marks poll the same chip at the same cadence, they fire at the same instant by default (manifest pre-fetch happens at *t* = 0 for all marks in parallel; the scheduled `setInterval` then ticks them all together every cadence). To offset them, set `startDelayMs` on the second mark:
+
+```jsonc
+{ "id": "room-temp",
+  "data": { "source": "url", "url": "/api/v1/sensor/temperature/history",
+            "shape": "series", "refreshInterval": 30 } },
+{ "id": "room-humidity",
+  "data": { "source": "url", "url": "/api/v1/sensor/humidity/history",
+            "shape": "series", "refreshInterval": 30,
+            "startDelayMs": 15000 } }
+```
+
+Both poll at 30 s, but humidity is offset by 15 s — so the chip never sees both requests at the same instant. The pre-fetch on manifest load still fires for both at *t* = 0 (so you get data on first paint), but the **scheduled** refresh cadence is staggered for the rest of the session.
+
+For three or more marks on the same device at the same cadence, spread them evenly: with three at 30 s, use `startDelayMs: 0`, `10000`, `20000` — one poll every 10 s instead of three at once every 30 s. The device's httpd is dramatically happier with one-at-a-time polls vs simultaneous bursts.
+
 ---
 
 ## Wiring real devices

@@ -424,8 +424,9 @@
         "source": "url",
         "url": "/api/v1/sensor/temperature/history",
         "shape": "series",
-        "refreshInterval": 5
+        "refreshInterval": 30
       },
+      "_comment": "Was 5 s — that's 12× faster than room temperature changes meaningfully and was hammering the chip's httpd. 30 s gives ~120 samples/hour, still smooth visually.",
       "config": { "vMin": 15, "vMax": 35, "color": 16753664 },
       "deviceRef": "magnet-stamp-c3u-a1b2",
       "serviceRef": "temp-history",
@@ -440,8 +441,10 @@
         "source": "url",
         "url": "/api/v1/sensor/humidity/history",
         "shape": "series",
-        "refreshInterval": 5
+        "refreshInterval": 30,
+        "startDelayMs": 15000
       },
+      "_comment": "Same 30 s cadence as room-temp but offset by 15 s so the two AHT20 polls never hit the device at the same instant. This is the same physical sensor; alternating reads at 15 s spacing gives the chip plenty of headroom between requests.",
       "config": { "vMin": 0, "vMax": 100, "color": 5570559 },
       "deviceRef": "magnet-stamp-c3u-a1b2",
       "serviceRef": "humidity-history",

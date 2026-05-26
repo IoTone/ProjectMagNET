@@ -213,7 +213,7 @@ export type MarkType =
   | 'parallel' | 'tangled-tree' | 'edge-bundle' | 'hexbin'
   | 'video' | 'imu' | 'spatial-audio' | 'splat-gallery' | 'actuator-panel'
   | 'voronoi-stippling' | 'moon-phases-arc' | 'owls-to-the-max'
-  | 'force-tree-3d';
+  | 'force-tree-3d' | 'targets';
 
 export const MARK_TYPES: readonly MarkType[] = [
   'line', 'bar', 'scatter', 'arc',
@@ -222,11 +222,11 @@ export const MARK_TYPES: readonly MarkType[] = [
   'parallel', 'tangled-tree', 'edge-bundle', 'hexbin',
   'video', 'imu', 'spatial-audio', 'splat-gallery', 'actuator-panel',
   'voronoi-stippling', 'moon-phases-arc', 'owls-to-the-max',
-  'force-tree-3d',
+  'force-tree-3d', 'targets',
 ];
 
 export const SCALE_TAGS = ['personal', 'room', 'hall', 'net', 'vehicle'] as const;
-export const URL_DATA_SHAPES = ['hierarchy', 'graph', 'series', 'distributions', 'flow', 'video', 'imu'] as const;
+export const URL_DATA_SHAPES = ['hierarchy', 'graph', 'series', 'distributions', 'flow', 'video', 'imu', 'targets', 'snapshot'] as const;
 
 export type ManifestValidationResult =
   | { valid: true; warnings?: string[] }
@@ -390,10 +390,33 @@ export interface InlineData {
 export interface UrlData {
   source: 'url';
   url: string;
-  /** Expected shape — renderer validates after fetch. `video` is a sentinel for binary image/stream URLs. */
-  shape: 'hierarchy' | 'graph' | 'series' | 'distributions' | 'flow' | 'video';
+  /** Expected shape — renderer validates after fetch. `video`, `imu`, and
+   *  `targets` are self-fetching sentinels: the cell polls its own URL and
+   *  the manifest loader skips prefetch + scheduled refresh. `snapshot`
+   *  is a stateful shape: each poll plucks one scalar from a device snapshot
+   *  payload (e.g. `{bpm, presence, timestamp_us}` from /heart-rate) and the
+   *  loader appends it to a per-mark rolling buffer that the builder consumes
+   *  as a series. Mark `config` declares the pluck contract:
+   *    - `pluck`:          field name in the snapshot JSON (e.g. "bpm")
+   *    - `presenceField`:  (optional) only accept value if this field truthy
+   *    - `historyLength`:  rolling buffer size (default 60)
+   *    - `minValue`:       (optional, default 0) plucked v must be > this */
+  shape: 'hierarchy' | 'graph' | 'series' | 'distributions' | 'flow' | 'video' | 'imu' | 'targets' | 'snapshot';
   /** Refresh interval in seconds. 0 = one-shot. */
   refreshInterval?: number;
+  /** Delay before the FIRST scheduled refresh fires (milliseconds). The
+   *  pre-fetch on manifest load still happens at t=0 regardless — this only
+   *  staggers the subsequent setInterval cadence. Use to keep multiple marks
+   *  on the same device from hitting it at the same instant. E.g. with two
+   *  30 s marks, set one to `startDelayMs: 15000` and they'll poll 15 s
+   *  apart for the entire session.
+   *
+   *  Without this, manifest-load fires every URL-source pre-fetch as fast
+   *  as Promise.allSettled can; the scheduled-refresh setInterval then
+   *  ticks all of them at the same instant every cadence — which on a
+   *  tiny chip like the AHT20-on-Atom-Echo can starve the httpd parser.
+   *  See the 2026-05-25 humidity 431 debugging session for context. */
+  startDelayMs?: number;
 }
 
 /** Hierarchy data shape (matches HNode from sampleHierarchy.ts). */

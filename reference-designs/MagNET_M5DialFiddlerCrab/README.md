@@ -179,3 +179,4 @@ Per-peer projects: `M5Atom_Echo_Hex_Hive_Test/`, `M5_Hive_Camera/`, `M5Capsule_H
 ## Dev-environment gotchas
 
 - **[macOS LAN networking](docs/macOS-LAN-networking.md)** — Local Network permission, iCloud Private Relay, Private Wi-Fi MAC, and the macOS firewall each silently break LAN connectivity (mDNS discovery, pings, HTTP to `.local` hosts). Read this first if symptoms look like "device is online on the phone but not from my Mac."
+- **[ESP-IDF v5.4 efuse build collision](docs/idf-v54-efuse-collision.md)** — every project here pins `platform = espressif32@6.9.0` (IDF v5.3.1), but working on `M5Capsule_Hive_Scribe_Redis` with the BMI270 managed component silently upgrades framework-espidf to v5.4 in place, and the upgrade leaves a duplicate `esp_efuse_fields.c` registration that breaks the next build with "Multiple ways to build the same target." Symptoms + three fix options documented in the linked doc.

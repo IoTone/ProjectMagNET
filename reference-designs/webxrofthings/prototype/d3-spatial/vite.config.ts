@@ -342,6 +342,27 @@ export default defineConfig({
           });
         },
       } as any,
+      // Simulated UC2 env-hub sensors (aqi / barometer / pollen). These are
+      // served by mock-join-server on localhost:3001, NOT by the real Atom
+      // Echo at ENV_HOST. Without these explicit carve-outs the generic
+      // '/api/v1/sensor' rule below routes them at the Echo, whose firmware
+      // doesn't recognise the path and RST-resets the connection — surfaces
+      // as `Error: read ECONNRESET` + `[vite] http proxy error` in the dev
+      // console once per refresh cycle, per offline sensor. Same JOIN_SERVER_PORT
+      // override as the '/api/v1' catch-all below so the two stay aligned.
+      // MUST appear BEFORE '/api/v1/sensor'.
+      '/api/v1/sensor/aqi': {
+        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        changeOrigin: true,
+      },
+      '/api/v1/sensor/barometer': {
+        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        changeOrigin: true,
+      },
+      '/api/v1/sensor/pollen': {
+        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        changeOrigin: true,
+      },
       // M5Atom_Echo_Hex_Hive_ATH20 — UC2 environment sensor (temp + humidity).
       // The AHT20 firmware exposes /api/v1/sensor/{environment,temperature,
       // humidity}. Set ENV_HOST to the device IP (mDNS is published via the
@@ -354,17 +375,100 @@ export default defineConfig({
         agent: envAgent,
         configure: (proxy: any) => {
           envDiag.attachToProxy(proxy);
+          /* Snapshot listeners attached so far (just envDiag's) before
+           * Vite attaches its own logger. Used by the emit-override below
+           * to keep diag counting transient errors after we suppress them. */
+          const earlyErrorListeners = proxy.listeners('error').slice();
+
           proxy.on('proxyReq', (proxyReq: any) => {
             if (proxyReq.headersSent) return;
+            /* Extended drop list — same family as the
+             * [project_esp_httpd_cloudflared_431] memo but the trigger this
+             * time was the browser cache. The Atom Echo's
+             * CONFIG_HTTPD_MAX_REQ_HDR_LEN is already 1024, yet
+             * /humidity/history was failing 17/17 with HTTP 431 (verified
+             * via /__diag/env on 2026-05-25) — total request headers were
+             * exceeding 1024. The culprit: a stale If-None-Match etag from
+             * a previous Vite session, stacked on the usual browser noise.
+             * Strip all cache validators so the chip only ever sees a
+             * clean GET; also pre-emptively drop cf-* and x-forwarded-*
+             * in case env_HOST is ever exposed behind a tunnel (same set
+             * the imu / lighting proxies already strip). */
+            /* Aggressive strip — the Atom Echo is a tiny LAN-only IoT chip
+             * that cares about exactly two pieces of HTTP semantics: the
+             * URI and the method. Every other header is dead weight that
+             * gets it closer to the 1024-byte CONFIG_HTTPD_MAX_REQ_HDR_LEN
+             * cliff. After the 2026-05-25 incident where /humidity/history
+             * returned 100% 431 from browser (but 100% 200 from curl with
+             * identical-looking bytes), we landed on this minimal-strip
+             * policy: drop everything except Host. Auth in particular is
+             * useless (the device doesn't validate), but the full list
+             * removes ~530 bytes of request and eliminates the entire
+             * class of "browser TCP state interacts weirdly with chip
+             * httpd" failures by leaving no headers around to confuse it. */
             const drop = [
-              'cookie', 'accept-language', 'referer', 'origin',
-              'cache-control', 'pragma',
+              'cookie', 'accept', 'accept-language', 'accept-encoding',
+              'referer', 'origin', 'cache-control', 'pragma',
+              'if-none-match', 'if-modified-since', 'if-match',
+              'if-unmodified-since', 'if-range',
               'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
               'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
               'upgrade-insecure-requests',
+              'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor',
+              'cf-warp-tag-id', 'cf-ew-via', 'cf-worker',
+              'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto',
+              'x-forwarded-port', 'x-real-ip', 'cdn-loop',
+              'authorization', 'user-agent',
             ];
             for (const h of drop) proxyReq.removeHeader(h);
+            /* Force the device to close the TCP connection after each
+             * response. The browser sets Connection: keep-alive by default
+             * and that gets forwarded through the proxy; the chip then
+             * tries to honour it, leaving stale parser state when the next
+             * request arrives. Setting Connection: close (and matching
+             * envAgent's keepAlive:false) makes every request a clean
+             * one-shot TCP. */
+            proxyReq.setHeader('connection', 'close');
           });
+
+          /* Suppress noisy `[vite] http proxy error: ... EPIPE/ECONNRESET`
+           * logs for transient proxy-side socket-reuse races against the
+           * Atom Echo's esp_http_server. Verified 20/20 200s direct-curl
+           * on /humidity/history (2026-05-25) — the device serves reliably;
+           * the EPIPE happens between Vite's Node http.Agent and the chip,
+           * not on the device. With 5-s polls these were firing ~5-10% of
+           * the time and drowning real-device errors in spam.
+           *
+           * Strategy: override proxy.emit('error') to detect these specific
+           * codes, end the client response cleanly with 504, and notify
+           * proxy-diag (so the counter still reflects the failure) — then
+           * return without re-emitting, so Vite's own error listener (which
+           * gets attached AFTER our configure() runs) never sees them.
+           *
+           * Real errors (other codes) emit normally and reach Vite's logger
+           * unchanged. */
+          const origEmit = proxy.emit.bind(proxy);
+          proxy.emit = function (event: string, ...args: any[]) {
+            if (event === 'error') {
+              const err = args[0] as NodeJS.ErrnoException | undefined;
+              if (err && (err.code === 'EPIPE' || err.code === 'ECONNRESET')) {
+                /* Hand the error to diag first so per-mark health counters
+                 * still see it (otherwise the OFFLINE-SENSORS HUD would
+                 * miss real device flakes during a noisy stretch). */
+                for (const l of earlyErrorListeners) {
+                  try { (l as (...a: any[]) => void)(...args); } catch { /* ignore */ }
+                }
+                /* Close the client response so the browser sees a clean
+                 * transient (504) rather than a stalled fetch. */
+                const res = args[2];
+                if (res && !res.headersSent && !res.writableEnded) {
+                  try { res.writeHead(504); res.end(); } catch { /* ignore */ }
+                }
+                return true;   /* suppress emit — Vite's listener never fires */
+              }
+            }
+            return origEmit(event, ...args);
+          };
         },
       } as any,
       // MagNET_ReSpeaker_Boombox — UC2 speaker actuator (chime/doorbell).

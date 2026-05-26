@@ -23,6 +23,7 @@ import { buildMoonPhasesArc } from '../viz/moonPhasesArc';
 import { buildOwlsToTheMax } from '../viz/owlsToTheMax';
 import { buildForceTree3d } from '../viz/forceTree3d';
 import { buildLiveImuCell } from '../demo/liveImuCell';
+import { buildLiveTargetsCell } from '../demo/liveVitalsCells';
 import { buildLiveSpatialAudioCell } from '../demo/liveSpatialAudioCell';
 import { buildLiveSplatGalleryCell, type SplatPhoto } from '../demo/liveSplatGalleryCell';
 import { buildLiveActuatorPanelCell } from '../demo/liveActuatorPanelCell';
@@ -429,6 +430,41 @@ export function registerAllBuilders() {
       size:   (cfg.size   as number) ?? 0.10,
       color:  (cfg.color  as number) ?? TEXT.primary,
       smooth: (cfg.smooth as boolean) ?? true,
+    });
+    return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
+  });
+
+  // ─── targets mark — UC1 multi-target floor map ──────────────────────
+  //
+  // Spec shape:
+  //   { id, type: 'targets', title,
+  //     data: { source: 'url', url, shape: 'targets', refreshInterval: <s> },
+  //     config: { width, height, extent_m, max_distance_m, fov_deg, tilt_rad } }
+  //
+  // Wraps buildLiveTargetsCell, which self-polls /api/v1/vitals/targets
+  // and renders a top-down radar plot of detected persons. The cell also
+  // handles its own autonomous mode (synthetic 1-2 targets after 10s of
+  // consecutive fetch failures), so we list 'targets' in the loader's
+  // SELF_FETCHING_SHAPES set and the manifest loader's prefetch + scheduled
+  // refresh skip it entirely.
+  registerMarkBuilder('targets', (spec) => {
+    if (spec.data.source !== 'url') return null;
+    const url = (spec.data as any).url as string;
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const refreshMs = typeof (spec.data as any).refreshInterval === 'number'
+      ? Math.max(200, (spec.data as any).refreshInterval * 1000)
+      : 1000;
+    const cell = buildLiveTargetsCell({
+      url,
+      refreshMs,
+      width:          (cfg.width          as number) ?? 0.32,
+      height:         (cfg.height         as number) ?? 0.16,
+      extent_m:       (cfg.extent_m       as number) ?? 2.5,
+      max_distance_m: (cfg.max_distance_m as number) ?? 4.0,
+      fov_deg:        (cfg.fov_deg        as number) ?? 50,
+      tilt_rad:       (cfg.tilt_rad       as number) ?? 0,
+      glyph_radius:   (cfg.glyph_radius   as number) ?? 0.012,
+      glyph_lift:     (cfg.glyph_lift     as number) ?? 0.025,
     });
     return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
   });
