@@ -1,0 +1,57 @@
+sequenceDiagram
+  autonumber
+  actor User
+  actor Owner as Dataspace owner
+  participant HMD as HMD / WebXR client
+  participant HCE as Hyperlocal Context Engine<br/>(join + manifest server)
+  participant PKI as Identity provider<br/>(PKI / OIDC — private only)
+  participant Host as Dataspace proxy +<br/>device surface
+  participant Dev as IoT devices
+
+  rect rgb(245,245,250)
+    Note over Owner,HCE: Phase A — pre-issuance (out of band)
+    Owner->>HCE: authenticate to owner dashboard
+    Owner->>HCE: create dataspace + access policy<br/>(public / invite / pki — R21–R23)
+    HCE-->>Owner: dataspace_id + signing keys
+    Owner->>HCE: issue join_code<br/>{ttl, max_uses, scope}
+    HCE-->>Owner: short memorable code, e.g.<br/>"MAGNET-7K2" — R20
+    Owner-->>User: deliver code over<br/>secure channel
+  end
+
+  rect rgb(245,250,245)
+    Note over User,HCE: Phase B — exchange code for token
+    User->>HMD: enter join_code at keypad
+    HMD->>HCE: POST /api/v1/join<br/>{code, device_attest, user_pubkey?}
+    HCE->>HCE: validate code<br/>(ttl, max_uses, scope)
+    alt private dataspace (R23)
+      HCE->>PKI: verify device + user pubkey
+      PKI-->>HCE: identity attested
+    else public dataspace (R22)
+      HCE->>HCE: accept code with rate-limit
+    end
+    HCE->>HCE: mint short-lived JWT<br/>{ds_id, session_id, scope, exp~5 min}
+    HCE->>HCE: increment code use_count<br/>(consume invitation)
+    HCE-->>HMD: 200 {token, manifest_url, session_id}
+  end
+
+  rect rgb(250,247,240)
+    Note over HMD,Dev: Phase C — load manifest + open live session
+    HMD->>HCE: GET /api/v1/manifest<br/>Authorization: Bearer …token…
+    HCE-->>HMD: manifest<br/>(udm_devices, usm_services, marks)
+    HMD->>Host: connect through dataspace proxy<br/>(or LAN endpoints via mDNS)
+    loop per-mark fetch cadence
+      Host->>Dev: GET /api/v1/sensor/…<br/>(per-request scoped sub-token)
+      Dev-->>Host: live telemetry
+      Host-->>HMD: forwarded data + audit-log entry
+    end
+  end
+
+  rect rgb(248,244,250)
+    Note over HMD,HCE: Phase D — refresh + revocation
+    HMD->>HCE: POST /api/v1/refresh<br/>before exp
+    HCE-->>HMD: rotated token
+    User->>HMD: leave dataspace
+    HMD->>HCE: POST /api/v1/leave
+    HCE->>HCE: revoke token, end session,<br/>seal audit log (R16)
+    HCE-->>HMD: 204
+  end
