@@ -1,6 +1,6 @@
-# Overview (v3)
+# Overview (v4)
 
-The "Internet Of Things", popularly known as IoT, presented a unique way of looking at the nature of data, connectivity, security, and standards around small low power compute devices as they relate to people and the larger world.  "The WebXR of things" as a phrase expresses the ability to explore devices and places and even people,  in a spatial mixed reality sense.  This concept is expressed as a desire to allow XR to become the default interface to devices, places, people, and data.  The caveat to this statement, is, the user should have the option to "own" this tech stack, as opposed to the past 20+ years of computing, which largely operated through a gatekeepers deciding matters of privacy, ownership of copyright over data, collaboration with government (or not) and the right to monetize data.  Open standards are desired as an approach to deliver a stack owned by the consumer, self hosted, paid SaaS hosted, or free with rights granted to the owner of the stack.  This paper will also address the caveats and challenges in the current tech stacks for delivering the "WebXR of Things".  In this discussion, we will focus on the "hyperlocal" scale.  This implies the immediate area, within sight of the a user, within short range, within walking distance, and not larger scale.
+The "Internet Of Things", popularly known as IoT, presented a unique way of looking at the nature of data, connectivity, security, and standards around small low power compute devices as they relate to people and the larger world.  "The WebXR of things" as a phrase expresses the ability to explore devices and places and even people,  in a spatial mixed reality sense.  This concept is expressed as a desire to allow XR to become the default interface to devices, places, people, and data.  The caveat to this statement, is, the user should have the option to "own" this tech stack, as opposed to the past 20+ years of computing, which largely operated through a gatekeepers deciding matters of privacy, ownership of copyright over data, collaboration with government (or not) and the right to monetize data.  Open standards are desired as an approach to deliver a stack owned by the consumer, self hosted, paid SaaS hosted, or for free with copyright of data granted to the owner of the stack.  This paper will also address the caveats and challenges in the current tech stacks for delivering the "WebXR of Things".  In this discussion, we will focus on the "hyperlocal" scale.  This implies the immediate area, within sight of the a user, within short range, within walking distance, and not the global scale.
 
 ## The Problem 
 
@@ -14,10 +14,14 @@ Attribution: Adam Varga (design concept)
 
 Credit: https://www.linkedin.com/posts/dmvrg_unity-m5stack-arduino-activity-7341335884333531138-oHRI/?rcm=ACoAAAAIENgBAB7U7RX_Hl-tsAvNwMh3WO-qm4E
 
+The above images evoke an idea that data and a virtually physical control surface are locked away in every device.
+
 ## References
 
 - IoT:  https://en.wikipedia.org/wiki/Internet_of_things
 - WebXR Specficiation: https://www.w3.org/TR/webxr/
+- Three-Mesh-UI: https://github.com/felixmariotto/three-mesh-ui
+- D3.js: https://d3js.org/
 
 ## Proposed Solution(s)
 
@@ -66,6 +70,48 @@ We will build the architecture pictured below, with a a secure server used as da
 - The hyperlocal context engine is hosted on the web, self hosted
 - The context is secured via HTTPS:// and WSS://using a self obtained valid SSL certificate
 - The HMD/Mixed Reality Glasses will hit a known url (we will use hlxr.org ... hyperlocal XR) and obtain a temporary or permanent token and dataspace
+
+#### Dataspace architecture
+
+The dataspace is the central abstraction (**R19**): a namespace that binds together an identity/access boundary, a manifest describing what's in it, a device-and-service surface, and a WebXR client that renders all of the above. Each block below is a layer of the reference implementation and maps onto the requirements above.
+
+```mermaid
+flowchart TB
+  User((User))
+  Owner((Owner))
+
+  Client["<b>WebXR client</b> — R8, R12, R33<br/>Join keypad · toolbar · HUD · spatial audio (R28)<br/>d3-spatial renderer · three.js + WebXR<br/>Per-mark cells: line · arc · stream · IMU · video<br/>Health monitor · DEMO mode · fake-data fallback"]
+
+  Identity["<b>Identity &amp; access control</b><br/>Join code issuance — R20 (ttl · max_uses · scope)<br/>PKI / OIDC — R23 · shared secret — R24<br/>Short-lived scoped JWT per session"]
+
+  HCE["<b>Hyperlocal Context Engine</b> — R19, R21<br/>Manifest store (UDM + USM + marks)<br/>Device proxy &amp; discovery — mDNS · LAN · HTTPS tunnel<br/>Telemetry bus — HTTP today, MQTT planned<br/>Policy engine — R17 · Audit log — R16 · Export — R18"]
+
+  Devices["<b>IoT devices &amp; services</b> — R10, R13, R24<br/>Sensors: vitals · env · camera · IMU<br/>Actuators: lighting · audio · thermostat<br/>People avatars — R26 (future)"]
+
+  User  -. "enters code" .->          Client
+  Owner -. "policy + invites" .->     Identity
+
+  Identity -- "authorise"           --> HCE
+  Client   -- "manifest + data"     --> HCE
+  HCE      ==>|"scoped sub-tokens<br/>per request"| Devices
+
+  Devices  -. "telemetry"          .-> HCE
+  HCE      -. "responses"          .-> Client
+  HCE      -. "audit introspect (R16)<br/>user export (R18)" .-> User
+
+  classDef actor   fill:#fff,stroke:#333,stroke-width:1.5px
+  classDef client  fill:#fff8dc,stroke:#a88c2a,stroke-width:2px,padding:12px
+  classDef sec     fill:#fdf3f3,stroke:#a44,stroke-width:2px,padding:12px
+  classDef hce     fill:#e8f0fb,stroke:#3a5a8a,stroke-width:2px,padding:12px
+  classDef dev     fill:#f0f6ec,stroke:#3a7a4a,stroke-width:2px,padding:12px
+  class User,Owner actor
+  class Client client
+  class Identity sec
+  class HCE hce
+  class Devices dev
+```
+
+Reading the diagram bottom-up: a user with an HMD enters a join code (R20) at the keypad on the WebXR client. That code is exchanged at the Identity layer for a short-lived JWT scoped to one dataspace + one session. The JWT authorises every subsequent request to the Hyperlocal Context Engine — fetching the manifest, opening the device proxy, subscribing to the telemetry bus. The HCE owns the policy boundary that R17 demands: nothing leaves the dataspace unless the user has authorised it, and R16's introspection log captures every fetch so the user can audit what was collected on their behalf. The device tier sits behind the proxy; devices never address the WebXR client directly. The portability layer (R18) lets the user export the manifest + collected data when leaving a host. The DEMO-mode plumbing in the client (fake-data fallback, OFFLINE-SENSORS HUD) is what keeps the experience legible when one device drops; in the security-focused production flow every dropped device also generates an audit-log entry the user can review.
 
 
 ### Proposal B - SaaS hosted server for hyperlocal context
@@ -157,6 +203,79 @@ The UI Spec V1 has been prototyped in `reference-designs/webxrofthings/prototype
 
 #### Implemented
 - **V1.1 Join-code onboarding flow** (Phase 1+2) — Three-mesh-ui Join panel with 6-char slot entry, mock validation OR real server flow, JWT-protected manifest fetch, transition into the loaded dataspace. Phase 3 (PKI for private dataspaces) deferred.
+
+The interaction below is the **security-focused** join flow — what the production deployment looks like, not the DEMO01–04 fixed-code shortcut used by the reference implementation today (which is flagged as "Out of Scope: Security" below). The demo path collapses steps 1–4 into a hardcoded lookup table; everything from step 5 onward is the same in both modes.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor User
+  actor Owner as Dataspace owner
+  participant HMD as HMD / WebXR client
+  participant HCE as Hyperlocal Context Engine<br/>(join + manifest server)
+  participant PKI as Identity provider<br/>(PKI / OIDC — private only)
+  participant Host as Dataspace proxy +<br/>device surface
+  participant Dev as IoT devices
+
+  rect rgb(245,245,250)
+    Note over Owner,HCE: Phase A — pre-issuance (out of band)
+    Owner->>HCE: authenticate to owner dashboard
+    Owner->>HCE: create dataspace + access policy<br/>(public / invite / pki — R21–R23)
+    HCE-->>Owner: dataspace_id + signing keys
+    Owner->>HCE: issue join_code<br/>{ttl, max_uses, scope}
+    HCE-->>Owner: short memorable code, e.g.<br/>"MAGNET-7K2" — R20
+    Owner-->>User: deliver code over<br/>secure channel
+  end
+
+  rect rgb(245,250,245)
+    Note over User,HCE: Phase B — exchange code for token
+    User->>HMD: enter join_code at keypad
+    HMD->>HCE: POST /api/v1/join<br/>{code, device_attest, user_pubkey?}
+    HCE->>HCE: validate code<br/>(ttl, max_uses, scope)
+    alt private dataspace (R23)
+      HCE->>PKI: verify device + user pubkey
+      PKI-->>HCE: identity attested
+    else public dataspace (R22)
+      HCE->>HCE: accept code with rate-limit
+    end
+    HCE->>HCE: mint short-lived JWT<br/>{ds_id, session_id, scope, exp~5 min}
+    HCE->>HCE: increment code use_count<br/>(consume invitation)
+    HCE-->>HMD: 200 {token, manifest_url, session_id}
+  end
+
+  rect rgb(250,247,240)
+    Note over HMD,Dev: Phase C — load manifest + open live session
+    HMD->>HCE: GET /api/v1/manifest<br/>Authorization: Bearer …token…
+    HCE-->>HMD: manifest<br/>(udm_devices, usm_services, marks)
+    HMD->>Host: connect through dataspace proxy<br/>(or LAN endpoints via mDNS)
+    loop per-mark fetch cadence
+      Host->>Dev: GET /api/v1/sensor/…<br/>(per-request scoped sub-token)
+      Dev-->>Host: live telemetry
+      Host-->>HMD: forwarded data + audit-log entry
+    end
+  end
+
+  rect rgb(248,244,250)
+    Note over HMD,HCE: Phase D — refresh + revocation
+    HMD->>HCE: POST /api/v1/refresh<br/>before exp
+    HCE-->>HMD: rotated token
+    User->>HMD: leave dataspace
+    HMD->>HCE: POST /api/v1/leave
+    HCE->>HCE: revoke token, end session,<br/>seal audit log (R16)
+    HCE-->>HMD: 204
+  end
+```
+
+**What makes this the security path, not the demo path:**
+
+1. **Codes are issued, not hardcoded.** Each invitation is bound to a dataspace, has a TTL, a `max_uses` counter, and a scope (read-only vs. control). DEMO01–04 in the prototype are a fixed lookup table the code-handling middleware short-circuits.
+2. **Tokens are short-lived and scoped.** ~5-minute expiry with `refresh` rotation. The token claims the dataspace, the session, and the granted operations — never broader. The prototype's JWT also embeds the manifest path (which we noted in the polling-cadence debug as a header-size hazard); production removes this in favour of a server-side dataspace → manifest map.
+3. **Private dataspaces require identity attestation (R23).** PKI cert or OIDC introspection step before token issuance. The prototype skips this; that's the Phase 3 work flagged "deferred."
+4. **Device fetches use per-request scoped sub-tokens, not the user's main token.** Limits blast radius if a device or proxy hop is compromised.
+5. **Every fetch is audited (R16).** The proxy logs `{session, device, endpoint, ts}` to an append-only store the user can introspect via the InspectorCard or export via the portability surface (R18).
+6. **`leave` actively revokes** — it doesn't just let the token expire. The session is terminated on the server side and the cached manifest in the client is cleared, satisfying R17's "no data leaks out without user approval" at session close.
+
+See `prototype/d3-spatial/specs/device-self-registration.md` for the firmware-side counterpart (R24 IoT enrolment via shared secret) and `server/mock-join-server.ts` for the current minimum-viable implementation of phases B and C.
 - **V1.6 Data dashboard UX** — 16 spatial mark types incl. live video panels. Per-node hover, drill-in transitions, multi-hand drag, brush selection, live data streaming, animated layout morph (tree↔sunburst↔treemap↔pack on the same data). See `XR_UX-proposal1.md §5, §9`.
 - **V1.8 Spatial audio model** — `THREE.PositionalAudio` per-mark hover ticks + Omnitone FOA ambient bed with head-pose rotation. See `XR_UX-proposal1.md §8`.
 - **V1.9 Manifest schema** — DataspaceManifest JSON schema with IoTone UDM + USM integration. Live ESP32-CAM video and synthetic series rendering through the manifest path validated end-to-end. See `prototype/d3-spatial/src/manifest/schema.ts` and `manifest.schema.json`.
@@ -176,6 +295,12 @@ See `XR_UX-proposal1.md` for full design specifications and `prototype/d3-spatia
 
 Proposal A.  The other solutions have significant compromises.  The goal is to get away from native applications that are controlled by FANG gatekeepers. 
 
+## Out of Scope
+
+- Security: The dataspace join code design sown in the demo circumvents real security, and the implementation includes a JWT based approach which could provide private access
+- Accessibility: The proposal did not explore accessibility in this implementation but it must be a consideration for any further design.
+- Scalability: It is known the approach as designs is too resource intense for small devices as designed and will beoptimized in the future.
+
 ## Known Limitiations
 
 - WebXR requires a secure context.  There is no "exception" mechanism to ignore HTTPS requirements to connect into XR sessions.  The authors opinion is this is like saying we do not trust the voters.  The user cannot make choices about exceptions.
@@ -184,7 +309,11 @@ Proposal A.  The other solutions have significant compromises.  The goal is to g
 - WebXR front facing cameras are generally not available to the browser.  Meta devices have provided some limited support for scanning rooms, but raw camera data isn't available.
 - Because of the previous limitation, AR Markers can't be scanned by normal means.  Doesn't mean you cannot use other technques, but it would require sensor fusion and possibly and external camera set worn by the user feeding data streams live to the dataspace /session.
 - HMD / Mixed Reality Glasses have horrible browsers.  Not mincing words, these are not standard browsers.  They aren't standards compliant.  They don't support bleeding edge features.  They are slow, and possibly don't do well in web standards even.  TODO: link to Snap Spectacles browser stuff.  But if they support WebXR we must find ways to support these companeies.  
-- 
+- We don't pretend to have a handle on the scope of the disparity between native XR/AR/VR app capabilities vs what is supported in WebXR.  But it is clear the matrix of browser support for WebXR is generally lacking.  A great reference is here: https://www.webxr.fyi/
+- RAM and GPU support are an ongoing issue on XR capable headsets and glasses.  In 2026 glasses still suffer from heat issues enemic GPU and RAM.  So large XR experiences in terms of polygon are not practical.
+- Debugging on device is tricky, and suboptimal.  In particular on the Snap Specticals, one really needs a true console debugger.
+- WebXR bugs: On Snap Specticals '24 there are known bugs which degrade the onboarding experience getting into XR, and confusing "ghost browser" that won't be fixed until Snap Spectacles '26 is released.  Additionally the device is prone to overheat if plugged in to charge.
+- XR Exit Disorientation on Meta Quest 3: For an unknown reason, the design of the Quest browser causes the user to slide into an immersive "wash" of polygons into a blank landscape before having reality fade back in.  It is jarring and unneccessary, as you can experience vertigo or agoraphobia in this transition. 
 
 ## Call To Action
 
@@ -193,13 +322,32 @@ Write a letter to your local XR Browser vendor.  Seriously, we need to actually 
 We also need browsers that support interesting features related to IoT:
 
 - WebBLE : can we please?  Unsupported on Meta Quest and Snap Spectacles.  Surely also AVP.  Why?
-- Web MIDI (this is a perfect match to WebXR, security asside).
-- Web USB Serial (so we can connect directly to devices!!!!)
+- Web MIDI (this is a perfect match to WebXR, security aside).
+- Web USB Serial (so we can connect directly to devices)
 - Others?
 
 Additional wants and needs:
 - ability to install certificates / root CAs in the browsers on these devices.  This is a very enterprise need
 - ability to trigger URLs to open in a browser from within XR
 - We do need standard cross platform UI Widgets for WebXR.  I'm experimenting with this on another set of projects here.  Please weigh in.  This seems like we need more than just widgets, but also some better user centric experiences.
+- Universal Webkit / Gecko Web Developer debugging capability
 
-If you feel some solidarity with this effort, and you have resources, please join up with us in OSS force.  This is not a standards body, because standards bodies are controlled by the companies who can donate the most money.  This is a meritocracy where those who do are rewarded in the market.  Let's build the vision, and execute.  Consumers are more well informed than in the past.  As a group we can control a few of the knobs on our technology stacks  We need to get to Open Hardware eventually.  Something anyone or any company can build and potentially monetize.
+A call for an Open Hardware / OSS:
+- Ideal platform provides a true spatial experience, likely a QCOM based design
+- A good kickstarter candidate for an ODM building reference designs
+- Linux or Android ecosystem ideally
+- Sub $800 price target
+
+Those who feel solidarity with these efforts, or who have resources to bear, area invited to contribute to this work.  This is not a standards body, because standards bodies are controlled by the companies who can donate the most money.  This is a meritocracy where those who do are rewarded in the market.  Let's build the vision, and execute.  Consumers are more well informed than in the past.  As a group we can control a few of the knobs on our technology stacks  We need to get to Open Hardware eventually.  Something anyone or any company can build and potentially monetize.
+
+## Citation
+
+```bibtex
+@misc{kordsmeier2026thewebxrofthings,
+      title={The WebXR Of Things: A Proposal for WebXR as the default interface for people, places and things}, 
+      author={David J. Kordsmeier},
+      year={2026},
+      primaryClass={cs.XR},
+      url={https://www.meaningfulxr.org/mxr26-program}
+}
+```
