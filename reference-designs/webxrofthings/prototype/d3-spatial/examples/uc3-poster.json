@@ -1,0 +1,87 @@
+{
+  "version": "1",
+  "name": "uc3-xrt-exhibit",
+  "displayTitle": "WebXR of Things  -  UC3  XRt Exhibit",
+  "scaleTag": "hall",
+  "owner": "dkords@gmail.com",
+  "acousticEnvironment": "indoor",
+  "_comment": "UC3 'XRt Exhibit' — generative-art / data-art exhibits authored as manifest marks. The voronoi-stippling mark is a flat panel (grid-placeable); moon-phases-arc is self-positioned and wraps a 300° arc around the user from front-centre to behind. Originally a conference-poster placeholder (see webxrofthings/PROPOSAL.md §UC3); rebranded to a curated mini-exhibit so DEMO03 has real generative content while a full poster-session toolkit is built out.",
+  "marks": [
+    {
+      "id": "exhibit-stippling",
+      "type": "voronoi-stippling",
+      "title": "Voronoi Stippling",
+      "subtitle": "after Mike Bostock · live iteration",
+      "data": {
+        "source": "url",
+        "url": "/spatial/_DSC7796.jpeg",
+        "shape": "video"
+      },
+      "config": {
+        "samples": 6000,
+        "width": 0.84,
+        "height": 0.64,
+        "stepsPerFrame": 1,
+        "maxSteps": 150,
+        "dotSize": 1.9,
+        "invert": true,
+        "maxGridDim": 256,
+        "prism": true,
+        "attribution": "Attribution: Vincent Foster (Sony A6)."
+      },
+      "hoverable": false
+    },
+    {
+      "id": "exhibit-moons",
+      "type": "moon-phases-arc",
+      "title": "Phases of the Moon",
+      "subtitle": "one synodic month · 300° arc",
+      "data": {
+        "source": "inline"
+      },
+      "config": {
+        "count": 29,
+        "arcDegrees": 300,
+        "radius": 2.6,
+        "moonSize": 0.30,
+        "height": 1.6
+      },
+      "hoverable": false
+    },
+    {
+      "id": "exhibit-force-tree",
+      "type": "force-tree-3d",
+      "title": "Force-directed tree",
+      "subtitle": "after Bostock · d3-force-3d · 5 clusters",
+      "data": { "source": "inline" },
+      "config": {
+        "clusters": 5,
+        "leavesPerCluster": 5,
+        "size": 0.42,
+        "radius": 0.01725,
+        "position": { "x": 0, "y": 0.80, "z": 0.02 }
+      },
+      "hoverable": true
+    },
+    {
+      "id": "exhibit-owls",
+      "type": "owls-to-the-max",
+      "title": "Owls to the Max",
+      "subtitle": "after Mike Bostock · ceiling tile",
+      "data": {
+        "source": "inline"
+      },
+      "config": {
+        "cols": 8,
+        "rows": 6,
+        "width": 2.5,
+        "height": 1.875,
+        "distance": 1.2,
+        "ceiling": true,
+        "floorY": 3.2,
+        "pixelSize": 1280
+      },
+      "hoverable": false
+    }
+  ]
+}

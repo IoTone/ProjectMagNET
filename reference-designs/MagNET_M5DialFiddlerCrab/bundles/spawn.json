@@ -1,0 +1,12 @@
+{
+  "name": "spawn",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [],
+  "deps": [],
+  "crc32": "c3e64bab",
+  "sig_alg": "hmac-sha256",
+  "sig": "548525d92297affe55cdfd26cce8715951d9b804fe03a1e9dc1c0fb3e4678e24",
+  "src_b64": "XCBSb2xlOiBzcGF3biDigJQgbWluaW1hbCAiSSBqb2luZWQgdGhlIGhpdmUiIGlkZW50aXR5IGJ1bmRsZS4KXCBJbnN0YWxscyBhIHNpbmdsZSBncmVldGluZyB3b3JkIGFuZCBhbm5vdW5jZXMgaXRzZWxmIG9uY2UgYXQgaW5zdGFsbCB0aW1lLgpcIGNhcHNfcmVxOiBbXSAod29ya3Mgb24gYW55IG5vZGUpCgo6IGhlbGxvLXNwYXduIC4iIEhlbGxvIGZyb20gdGhlIHNwYXduIHJvbGUiIGNyIDsKaGVsbG8tc3Bhd24K"
+}

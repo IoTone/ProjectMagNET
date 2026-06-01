@@ -1,0 +1,14 @@
+{
+  "name": "spy-snapper",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [
+    "camera"
+  ],
+  "deps": [],
+  "crc32": "6bb4612a",
+  "sig_alg": "hmac-sha256",
+  "sig": "b633ca81818c187d541ff4900ab622599fb324a2615d54c9e4ea519564039384",
+  "src_b64": "XCBSb2xlOiBzcHktc25hcHBlciDigJQgc2luZ2xlLXNob3QgInRha2Ugb25lIHBpY3R1cmUiIHdvcmQgdGhhdCBhbiBleHRlcm5hbApcIHNjaGVkdWxlciBjYW4gaW52b2tlLiBSZWFsIHBlcmlvZGljLWNhcHR1cmUgbG9vcHMgc2hvdWxkIHVzZSBjb29wZXJhdGl2ZQpcIEZvcnRoIHRhc2tzIG9uY2UgdGhvc2UgbGFuZDsgZm9yIHYxIHdlIGtlZXAgaXQgYXMgYSBvbmUtc2hvdCBzbyB0aGUKXCBpbnN0YWxsIGRvZXNuJ3QgdGllIHVwIHRoZSBGb3J0aCBSRVBMLgpcIGNhcHNfcmVxOiBbImNhbWVyYSJdICAgKE01X0hpdmVfQ2FtZXJhIGFkdmVydGlzZXMgdGhpcykKCjogc25hcCAgIGNhbS1zbmFwIGRyb3AgOwoKXCBDb25maXJtIGluc3RhbGwgd2l0aCBvbmUgY2FwdHVyZSAoZHJvcCB0aGUgc2l6ZSBmcm9tIHRoZSBzdGFjaykuCnNuYXAK"
+}

@@ -1,0 +1,28 @@
+menu "MagNET Vitals (MR60BHA2 driver)"
+
+config CRAW_MR60_UART_PORT
+    int "UART port number for MR60BHA2"
+    range 0 1
+    default 0
+    help
+        Which UART peripheral to use for the radar link. UART0 matches
+        Seeed's reference (`HardwareSerial(0)`) and is what the XIAO C6
+        mmWave kit pre-wires to the radar. UART0 is free for app use
+        because we route the console to USB-serial-JTAG. Use UART1 only
+        if your hardware has different routing.
+
+config CRAW_MR60_RX_GPIO
+    int "GPIO for UART RX (radar TX → host RX)"
+    default 17
+    help
+        Default 17 matches the XIAO ESP32-C6 mmWave kit's pre-wired pinout
+        when used with UART1. Adjust if your hardware differs.
+
+config CRAW_MR60_TX_GPIO
+    int "GPIO for UART TX (host TX → radar RX)"
+    default 16
+    help
+        Default 16 matches the XIAO ESP32-C6 mmWave kit. Set to -1 if the
+        host does not need to send commands to the radar.
+
+endmenu

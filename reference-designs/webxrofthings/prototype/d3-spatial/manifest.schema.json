@@ -1,0 +1,362 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DataspaceManifest",
+  "description": "A dataspace manifest describing marks, data sources, and interaction capabilities for the d3-spatial renderer. Schema version 1.",
+  "type": "object",
+  "required": ["version", "name", "scaleTag", "marks"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1",
+      "description": "Schema version. Always \"1\" for this iteration."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable name of the dataspace."
+    },
+    "scaleTag": {
+      "type": "string",
+      "enum": ["personal", "room", "hall", "net"],
+      "description": "Scale tag drives default placement radius from the reader."
+    },
+    "owner": {
+      "type": "string",
+      "description": "Dataspace owner identity (opaque string — email, DID, device ID)."
+    },
+    "ambisonicBedUrl": {
+      "type": "string",
+      "description": "Optional ambient audio bed (ambix-format .ogg). User must opt in."
+    },
+    "acousticEnvironment": {
+      "type": "string",
+      "enum": ["indoor", "outdoor", "auto"],
+      "description": "Optional acoustic environment hint for reverb."
+    },
+    "marks": {
+      "type": "array",
+      "description": "The marks this dataspace wants rendered.",
+      "items": {
+        "$ref": "#/$defs/MarkSpec"
+      }
+    },
+    "joinCode": {
+      "type": "object",
+      "description": "Optional join-code display configuration (onboarding).",
+      "required": ["rotationSeconds", "charSet", "length"],
+      "additionalProperties": false,
+      "properties": {
+        "rotationSeconds": {
+          "type": "number",
+          "description": "How often the join code rotates, in seconds."
+        },
+        "charSet": {
+          "type": "string",
+          "const": "alphanumeric-unambiguous",
+          "description": "Character set for join code generation."
+        },
+        "length": {
+          "type": "integer",
+          "description": "Number of characters in the join code."
+        }
+      }
+    },
+    "hud": {
+      "$ref": "#/$defs/DataspaceHudConfig",
+      "description": "Optional HUD menu configuration for this dataspace."
+    }
+  },
+  "$defs": {
+    "DataspaceHudConfig": {
+      "type": "object",
+      "description": "Configuration for a per-dataspace HUD context menu.",
+      "required": ["items"],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Menu items to display in the HUD.",
+          "items": {
+            "$ref": "#/$defs/DataspaceHudItem"
+          }
+        },
+        "position": {
+          "type": "string",
+          "enum": ["bottom", "side", "wrist"],
+          "description": "Where to position the menu relative to the dataspace anchor."
+        }
+      }
+    },
+    "DataspaceHudItem": {
+      "type": "object",
+      "description": "A single item in the dataspace HUD context menu.",
+      "required": ["id", "label", "action"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this menu item."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human-readable label shown on the menu item."
+        },
+        "icon": {
+          "type": "string",
+          "description": "Emoji or text icon shown beside the label."
+        },
+        "action": {
+          "type": "string",
+          "description": "Action to fire when the item is selected. Built-in actions: reload-marks, toggle-ambient, show-join-code, leave-dataspace, recenter, toggle-labels, reset-view. Custom strings are also allowed."
+        }
+      }
+    },
+    "MarkSpec": {
+      "type": "object",
+      "description": "A single mark (visualization) within a dataspace manifest.",
+      "required": ["id", "type", "title", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique id within this manifest."
+        },
+        "type": {
+          "$ref": "#/$defs/MarkType"
+        },
+        "title": {
+          "type": "string",
+          "description": "Human-readable title shown above the mark."
+        },
+        "subtitle": {
+          "type": "string",
+          "description": "Optional subtitle shown below the mark."
+        },
+        "data": {
+          "oneOf": [
+            { "$ref": "#/$defs/InlineData" },
+            { "$ref": "#/$defs/UrlData" }
+          ],
+          "description": "Data source — inline or URL."
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Mark-specific configuration (extensible key-value pairs)."
+        },
+        "drillable": {
+          "type": "boolean",
+          "description": "Whether this mark supports drill-in (hierarchy marks)."
+        },
+        "hoverable": {
+          "type": "boolean",
+          "description": "Whether nodes are individually hoverable."
+        },
+        "draggable": {
+          "type": "boolean",
+          "description": "Whether nodes support drag interaction (force graph)."
+        }
+      }
+    },
+    "MarkType": {
+      "type": "string",
+      "enum": [
+        "line", "bar", "scatter", "arc",
+        "tree", "treemap", "sunburst", "pack",
+        "force", "ridgeline", "sankey",
+        "parallel", "tangled-tree", "edge-bundle", "hexbin"
+      ],
+      "description": "All supported mark types."
+    },
+    "InlineData": {
+      "type": "object",
+      "description": "Inline data embedded in the manifest.",
+      "required": ["source"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "const": "inline"
+        },
+        "hierarchy": {
+          "$ref": "#/$defs/HierarchyData",
+          "description": "For hierarchy marks: HNode tree."
+        },
+        "graph": {
+          "$ref": "#/$defs/GraphDataSpec",
+          "description": "For graph marks: nodes + links."
+        },
+        "series": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SeriesData"
+          },
+          "description": "For time-series marks: array of {t, v} data points."
+        },
+        "distributions": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "description": "For distribution marks: array of number arrays (rows)."
+        },
+        "flow": {
+          "$ref": "#/$defs/FlowDataSpec",
+          "description": "For flow marks (sankey): nodes + links with values."
+        }
+      }
+    },
+    "UrlData": {
+      "type": "object",
+      "description": "URL-referenced data fetched at load time.",
+      "required": ["source", "url", "shape"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "const": "url"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to fetch data from."
+        },
+        "shape": {
+          "type": "string",
+          "enum": ["hierarchy", "graph", "series", "distributions", "flow"],
+          "description": "Expected shape — renderer validates after fetch."
+        },
+        "refreshInterval": {
+          "type": "number",
+          "description": "Refresh interval in seconds. 0 = one-shot."
+        }
+      }
+    },
+    "HierarchyData": {
+      "type": "object",
+      "description": "Hierarchy data shape (recursive tree node).",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HierarchyData"
+          }
+        }
+      }
+    },
+    "GraphDataSpec": {
+      "type": "object",
+      "description": "Graph data shape: nodes and links.",
+      "required": ["nodes", "links"],
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "group": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source", "target"],
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "value": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    },
+    "SeriesData": {
+      "type": "object",
+      "description": "Time-series data point.",
+      "required": ["t", "v"],
+      "properties": {
+        "t": {
+          "type": "number"
+        },
+        "v": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true
+    },
+    "FlowDataSpec": {
+      "type": "object",
+      "description": "Flow (Sankey) data shape.",
+      "required": ["nodes", "links"],
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "group": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source", "target", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "value": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

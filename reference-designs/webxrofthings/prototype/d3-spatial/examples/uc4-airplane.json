@@ -1,0 +1,238 @@
+{
+  "version": "1",
+  "name": "uc4-airplane",
+  "displayTitle": "WebXR of Things  -  UC4  Airplane",
+  "scaleTag": "vehicle",
+  "owner": "dkords@gmail.com",
+  "acousticEnvironment": "vehicle",
+
+  "udm_version": "1.0",
+  "udm_doc_version": "0.1.0",
+
+  "_comment": "UC4 airplane dataspace — simulated in-flight experience. Four mutually-exclusive content modes selectable from the dataspace HUD: IMU attitude / music / video / spatial photos. Only one renders at a time; the others stay loaded in the scene graph but hidden + paused.",
+
+  "udm_devices": [
+    {
+      "udm_key":   "airplane-imu-001",
+      "udm_uuid":  "urn:device:imu:m5capsule-001",
+      "_comment":  "M5Capsule (ESP32-S3 + Bosch BMI270 6-DoF on I2C G8/G40), firmware M5Capsule_Hive_Scribe_Redis with the craw_imu component. Madgwick AHRS in firmware produces orientation; HTTP at /api/v1/sensor/imu. No magnetometer on the BMI270 — yaw is gyro-integrated and drifts ~1–2°/min. Forth `imu-zero` on the Capsule resets the heading datum when the user is facing 'forward' in the scene. Bring the sensor up explicitly: connect to the Capsule's USB console and run `imu-on`. To fall back to the mock-join-server simulation, unset IMU_HOST and the rule order is bypassed.",
+      "udm_model_name":   "M5Capsule (BMI270)",
+      "udm_vendor":       "M5Stack / Bosch Sensortec",
+      "udm_mktg_name":    "Airplane IMU",
+      "udm_type":         "motion-sensor",
+      "udm_class":        ["motion-sensor", "imu", "vehicle"],
+      "udm_capabilities": ["orientation-euler", "angular-velocity", "linear-acceleration", "json-http", "madgwick-ahrs"],
+      "udm_sensors":      ["accelerometer", "gyroscope"],
+      "udm_services_link": ["imu-snapshot"],
+      "udm_tags":         ["vehicle", "real-hardware", "bmi270"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.2, "z": -0.6 }
+    },
+    {
+      "udm_key":   "cabin-boombox-001",
+      "udm_uuid":  "urn:device:spatial-audio:boombox-001",
+      "_comment":  "Procedural music boombox. P5b stub — plays an 8-second I-V-vi-IV loop generated in code (no audio asset to ship). Spatialised via THREE.PositionalAudio on the camera's AudioListener.",
+      "udm_model_name":   "Cabin boombox (procedural)",
+      "udm_vendor":       "MagNET (sim)",
+      "udm_mktg_name":    "In-cabin music player",
+      "udm_type":         "actuator",
+      "udm_class":        ["actuator", "audio", "spatial"],
+      "udm_capabilities": ["procedural-music", "positional-audio", "loop"],
+      "udm_services_link": [],
+      "udm_tags":         ["vehicle", "audio", "simulated"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.0, "z": -0.8 }
+    },
+    {
+      "udm_key":   "cabin-display-001",
+      "udm_uuid":  "urn:device:hls-display:cabin-001",
+      "_comment":  "In-cabin HLS streaming display. P5c stub: plays the Mux test stream (Big Buck Bunny). Treat the stream URL as an external resource — replace with a real cabin-IFE backend later by editing the manifest's serviceRef URL.",
+      "udm_model_name":   "Cabin Display (HLS)",
+      "udm_vendor":       "MagNET (sim)",
+      "udm_mktg_name":    "Cabin Display",
+      "udm_type":         "display",
+      "udm_class":        ["display", "video", "streaming"],
+      "udm_capabilities": ["hls", "h264", "multi-bitrate"],
+      "udm_services_link": ["cabin-stream"],
+      "udm_tags":         ["vehicle", "video", "external-url"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.4, "z": -1.2 }
+    },
+    {
+      "udm_key":   "cabin-spatial-gallery-001",
+      "udm_uuid":  "urn:device:spatial-photo-gallery:cabin-001",
+      "_comment":  "Spatial-photo gallery: Gaussian-splat viewer cycling through .compressed.ply files (converted from source .sog via `npm run convert:spatial`). Sourced from ../../ml-sharp/samples and copied into public/spatial/. Treat as a 'frame' device: the manifest configures which photos it cycles through.",
+      "udm_model_name":   "Spatial Photo Frame (3D Gaussian)",
+      "udm_vendor":       "MagNET (sim)",
+      "udm_mktg_name":    "Cabin Spatial Gallery",
+      "udm_type":         "display",
+      "udm_class":        ["display", "gaussian-splat", "spatial-photo"],
+      "udm_capabilities": ["compressed-ply-format", "auto-advance", "manual-navigation"],
+      "udm_services_link": [],
+      "udm_tags":         ["vehicle", "photo", "spatial"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.2, "z": -1.0 }
+    }
+  ],
+
+  "usm_services": [
+    {
+      "usm_key": "imu-snapshot",
+      "usm_uuid": "urn:service:imu-snapshot:airplane-001",
+      "usm_service_name": "Airplane IMU snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "motion", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/imu", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 0.2 },
+      "characteristics": [
+        { "usm_characteristic_id": "orientation",      "usm_characteristic_format": "{roll_rad,pitch_rad,yaw_rad}",
+          "usm_characteristic_constraints": { "unit": "radians" } },
+        { "usm_characteristic_id": "angular_velocity", "usm_characteristic_format": "{x,y,z}",
+          "usm_characteristic_constraints": { "unit": "rad/s" } },
+        { "usm_characteristic_id": "acceleration",     "usm_characteristic_format": "{x,y,z}",
+          "usm_characteristic_constraints": { "unit": "m/s^2" } }
+      ],
+      "usm_tags": ["live", "motion", "simulated"]
+    },
+    {
+      "usm_key": "cabin-stream",
+      "usm_uuid": "urn:service:hls-stream:cabin-001",
+      "usm_service_name": "Cabin display HLS stream",
+      "usm_type": "video",
+      "usm_class": ["video", "hls", "external"],
+      "usm_service_endpoint": {
+        "GET": {
+          "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+          "content-type": "application/vnd.apple.mpegurl"
+        }
+      },
+      "usm_capabilities": { "resolutions": ["960x540", "1280x720"], "framerate_hz": [24] },
+      "characteristics": [
+        { "usm_characteristic_id": "playlist", "usm_characteristic_format": "m3u8" }
+      ],
+      "usm_tags": ["live", "external-url", "demo-stream"]
+    }
+  ],
+
+  "_marks_note": "All four marks load but only one renders at a time — the dataspace HUD below switches via `show-only:<id>` actions. IMU is the default visible mode on entry; the others start hidden + (where applicable) paused.",
+
+  "marks": [
+    {
+      "id": "airplane-imu",
+      "type": "imu",
+      "title": "Airplane attitude",
+      "subtitle": "live IMU · simulated",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/imu",
+        "shape": "imu",
+        "refreshInterval": 0.2
+      },
+      "config": {
+        "_comment_size": "0.162 = 0.12 × 1.35 — user wanted the airplane + globe + instrument labels 35% larger so the UC4 dataspace reads more like a cockpit and less like a desktop widget. Buffer between the wing tip and the KT/HDG labels was widened in liveImuCell.ts (offset multiplier 1.3 → 1.5) so the proportionally larger size doesn't push the labels into the wing's swept volume.",
+        "size": 0.162,
+        "_comment_color": "0x4ec5ff — bright cyan-blue, matches boombox accentColor + globe atmosphereColor. Pairs with wireframe:true in liveImuCell.ts.",
+        "color": 5161471,
+        "smooth": true
+      },
+      "deviceRef": "airplane-imu-001",
+      "serviceRef": "imu-snapshot",
+      "hoverable": true,
+      "defaultVisible": true
+    },
+    {
+      "id": "cabin-boombox",
+      "type": "spatial-audio",
+      "title": "Cabin boombox",
+      "subtitle": "procedural music · spatialised",
+      "data": { "source": "inline" },
+      "config": {
+        "_comment_size": "0.115 = 15% larger than the earlier 0.10 default — user feedback was the boombox felt too small on the centered stage.",
+        "size": 0.115,
+        "refDistance": 0.6,
+        "gain": 0.6,
+        "autoplay": false
+      },
+      "deviceRef": "cabin-boombox-001",
+      "hoverable": true,
+      "defaultVisible": false
+    },
+    {
+      "id": "cabin-display",
+      "type": "video",
+      "title": "Cabin display",
+      "subtitle": "in-flight feature · 16:9",
+      "_comment_video": "Back to HLS. The progressive-MP4 detour was a wrong turn: hls.js DOES work on Spectacles (240/480/720 renditions verified against the hls.js demo). The real problem was rendition height — the decoder chokes on 1080p+. videoPanel's initHLS now caps the ABR ladder at 720p (HLS_MAX_HEIGHT), which keeps Spectacles inside what it can decode while desktop/Quest still look sharp. The Mux x36xhzz stream is the hls.js demo's own default multi-bitrate Big Buck Bunny ladder.",
+      "data": {
+        "source": "url",
+        "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+        "shape": "video"
+      },
+      "config": {
+        "type": "hls",
+        "width": 0.6,
+        "aspectRatio": 1.7777,
+        "autoplay": false,
+        "muted": false
+      },
+      "deviceRef": "cabin-display-001",
+      "serviceRef": "cabin-stream",
+      "hoverable": true,
+      "defaultVisible": false
+    },
+    {
+      "id": "cabin-spatial-gallery",
+      "type": "splat-gallery",
+      "title": "Travel Destinations",
+      "subtitle": "3D Gaussian splats  -  ArrowL / ArrowR to navigate",
+      "data": { "source": "inline" },
+      "_comment_photos": "Travel-poster captions in the 'Visit [Destination]' style. Auto-advance order: Kyoto → Cannon Beach → Banff. The .ply files keep their original DSC* basenames — DSC2913 is the Kyoto temple-garden splat, DSC8994 is the Cannon Beach / Haystack Rock splat, DSC1624 is the Banff camping splat.",
+      "config": {
+        "photos": [
+          {
+            "url": "/spatial/_DSC2913.compressed.ply",
+            "imageUrl": "/spatial/_DSC2913.jpg",
+            "title": "Visit Kyoto",
+            "location": "Kyoto, Japan",
+            "description": "A moss-covered temple garden in late autumn. Stone paths thread between cedar trunks centuries older than the shrine itself; a koi pond just out of frame. Slip your shoes off at the gate, take the unhurried tour, leave with rain in your hair."
+          },
+          {
+            "url": "/spatial/_DSC8994.compressed.ply",
+            "imageUrl": "/spatial/_DSC8994.webp",
+            "title": "Visit Haystack Rock",
+            "location": "Cannon Beach, Oregon, USA",
+            "description": "Two hundred thirty-five feet of basalt sea stack at the Pacific's edge — tide pools at its base, tufted puffins nesting on its shoulders, a long beach to walk the cold sand at low water. Stand close enough to feel the spray, but only at low tide; the Pacific takes the shore back twice a day."
+          },
+          {
+            "url": "/spatial/_DSC1624.compressed.ply",
+            "imageUrl": "/spatial/_DSC1624.webp",
+            "title": "Visit Banff",
+            "location": "Banff National Park, Alberta, Canada",
+            "description": "Pitch the tent under the larches as they go gold, brew coffee on the camp stove at first light, listen for elk in the meadow at dusk. Banff is wild edges and big silence — pack warm, pack curious, leave time for a paddle on the lake."
+          }
+        ],
+        "autoAdvanceMs": 18000,
+        "splatY": 0,
+        "_comment_alpha_threshold": "Climbed 5 → 20 → 35 → 60 as Photos-mode stayed fragment-bound. [perf] showed 2.33M tris/frame even at 35 — roughly ~1.1M splats per scene, which exceeds Quest 3's per-frame triangle budget at 90 Hz. 60 keeps only splats with alpha ≥ ~24% (60/255), expected to drop another 30-40% of splats. Visible quality cost: faint translucent splats (mist, hair, foliage edges) thin out; solid-surface fidelity unchanged. If Quest still struggles after this, the next lever is splatRenderMode:TWO_D in liveSplatGalleryCell.ts (2D billboards, 2-3× faster fragment shading, loses parallax-correct depth — fine for a stationary photo gallery). The clean-quality path is re-converting source .ply with splat-transform decimation flags.",
+        "splatAlphaRemovalThreshold": 60,
+        "scenePosition": [0, 0, 0],
+        "_comment_rotation": "Quaternion [-1, 0, 0, 0] applies a 180° flip around X (horizontal mirror as viewed from the front). Per user feedback the SOGs were arriving mirrored.",
+        "sceneRotation": [-1, 0, 0, 0],
+        "sceneScale":    [0.6, 0.6, 0.6]
+      },
+      "deviceRef": "cabin-spatial-gallery-001",
+      "hoverable": true,
+      "defaultVisible": false
+    }
+  ],
+
+  "hud": {
+    "position": "bottom",
+    "items": [
+      { "id": "uc4-imu",     "label": "Flight Info", "icon": "+", "action": "show-only:airplane-imu" },
+      { "id": "uc4-music",   "label": "Music",    "icon": ">", "action": "show-only:cabin-boombox" },
+      { "id": "uc4-video",   "label": "Video",    "icon": "*", "action": "show-only:cabin-display" },
+      { "id": "uc4-photos",  "label": "Photos",   "icon": ".", "action": "show-only:cabin-spatial-gallery" },
+      { "id": "recenter",    "label": "Recenter", "icon": "@", "action": "recenter" },
+      { "id": "leave",       "label": "Leave",    "icon": "x", "action": "leave-dataspace" }
+    ]
+  }
+}

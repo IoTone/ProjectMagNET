@@ -1,0 +1,146 @@
+IOToneKit: Device Modeling with Universal Device Metadata 
+
+ 
+
+Overview 
+
+One of the key capabilities in IOToneKit (Lite and Pro versions) is the ability to model all manner of IoT devices very easily.  The goal of the system is to ease the burden of knowing specific IoT protocols and ecosystems, and instead focus on defining the devices used in the system, and let IOToneKit handle the orchestration over supported network transports and IoT protocols.  To enable this, IoTone created an open specification called Universal Device Metadata.  As an open spec it is possible for others to contribute to this spec.  It also means that others can use this spec freely, leading to the possibility that interoperability of device metadata can happen. 
+
+ 
+
+References 
+
+ 
+
+Universal Device Metadata Spec 0.9.1 https://github.com/IoTone/IoToneSpec_UniversalDeviceMetadata/blob/master/IOTONE_SPEC_1.md 
+
+ 
+
+Concepts 
+
+ 
+
+udm_device: A device being modeled.  A udm_device is made up of attrubte pairs 
+
+Attrpair: a descriptive attribute key and a value. 
+
+Json schema: Using a json schema, one can define a heirarchy of relationships that enable one to define any device and its capabilities 
+
+Hashmap alternative representation: Using a hashmap of udm attrpairs, one can define any device and its capabilities 
+
+model files: Any set of files used model a device using UDM.  These can be loaded into IOToneKits to use in practice. 
+
+Endpoint: A service that is exposed by a device, upon which capabilities can be read or written. 
+
+Capability: A capability represents some data or feature that can be read/written, or invoked 
+
+Type: Not to be confused with datatypes, this is a descriptive name for the kind of endpoint.  In Home Automation, there are some typical types encountered: Lightbulbs, OnOff Switch, Fan, etc. 
+
+_ (underscore).  In reference to a capability, and _ (underscore) represents the invocation of a capability, while without represents an address or value represented by the capability. 
+
+<some capability key>_x : Any time you see an _x, it means this is an extension to the UDM, not officially part of the current spec.  It is a good sign that there some things that should be submitted back to IoTone for adding into the standard UDM spec. 
+
+ 
+
+Modeling A Device 
+
+ 
+
+Every device has a set of things that it should define to be truly universal and independent of any particular IoT ecosystem.  These are common metadata that every device shares: 
+
+Model Name 
+
+Serial number 
+
+Oem (manufacturer) 
+
+Display name (a nicer or more descriptive name) 
+
+ 
+
+Beyond this common metadata, it may be important to define some other things about a device: 
+
+OS 
+
+Manufacture date 
+
+Hardware Revision 
+
+Firmware Version 
+
+uuid 
+
+ 
+
+Beyond the less common metadata, it is important to expose capabilities of a device.  Because there are so many possible nomenclatures and approaches for defining services, attributes, capabilities, endpoints, etc., we've adopted a hybrid of concepts.  If something doesn't quite map, we can always extend the UDM (see next section).  As such, we define endpoints as a service or even an application that is exposed publicly.  It has capabilities defined which are read and/or write.  Endpoints are numbered, indexes starting at 1.  The capabilities are just descriptive keys.  The UDM attempts to define common keys for capabilities. 
+
+ 
+
+Consider the most simple device, an on/off switch for a Zigbee HA 1.2 .  A modeling might look something like this, where each Key and Value pair is numbered, for easy loading.  The actual representation is less important as the modeling of the key and the value. 
+
+K1=udm_version 
+V1="0.9.1" 
+K2=udm_key 
+V2=${1} 
+K3=udm_model_name 
+V3="IoTone Proto Switch 1" 
+K4=udm_model_number 
+V4="IOTONE-SWI-P1" 
+K5=udm_oem 
+V5="IoTone" 
+K6=udm_uuid 
+V6="1a8748bf-9c13-46ab-a762-e463376a1f27" 
+K7=udm_os 
+V7="Zigbee HA1.2" 
+K8=udm_endpoints_x 
+V8="1" 
+K9="1:udm_type:OnOff Switch" 
+V9="0103" 
+K10=udm_profile 
+V10="0000" 
+K11=udm_serialno 
+V11="1a8748bf-9c13-46ab-a762-e463376a1f27" 
+K12=1:udm_capability_x:Identify 
+V12="0003" 
+K13=1:udm_capability_x:Identify:_ 
+V13="0" 
+K14=1:udm_capability_x:OnOff 
+V14="0006" 
+K15=1:udm_capability_x:OnOff:_ 
+V15="1" 
+K16=1:udm_capabilities_x 
+V16="Identify,OnOff" 
+K17=udm_types_x 
+V17="OnOff Switch" 
+K18=udm_display_types_x 
+V18="OnOff Light Switch" 
+K19=udm_endpoints_x:_ 
+V19="01" 
+K20=udm_model_name:_ 
+V20="Proto Switch 1" 
+
+Walking through the example above, you can see this is a simplistic, but realistic example of a Zigbee HA1.2 On Off Switch.  Anyone familiar with Zigbee can understand how the modeling might work with UDM.  More importantly, this requires no knowledge of a particular IoT ecosystem, other than the details of the device you are trying to model.  It leverages the knowledge that an OEM should have of their own devices and ecosystem, and that is the strength of this approach.  Modeling in this manner might take 1 minute per keyvalue pair, so let's say, just about 20 minutes. 
+
+Extending UDM 
+
+ 
+
+As seen above, it is possible to model all manner of capabilities and endpoints.  While the UDM tries to model as much as it can, in these early days of IoT, not every case has been convered.  And every day new things are being created, requiring new descriptions and capabilities.  Let's say an OEM has created a proprietary new Home Automation device type called BarkingDogBot.  We can simply reference that new type.  If we need to model a new attribute, we can define it by using: udm_<some key name>_x (adding an underscore _x).  Your code used Iin the IOToneKit SDK should be updated to handle this new extension if it will be used in the system. 
+
+Provisioning New Devices 
+
+ 
+
+As new devices are created, they can be provisioned to IOToneKit powered device, and loaded directly via an update to the device, or through whatever manner an OEM has designed into their system.  It gets refreshed and loaded into the system as part of the IOToneKit implementation.  If an existing device schema has been modified, it may be necessary to migrate an existing device's record to the new schema.  These are implementation details left up to IOToneKit and the OEM. 
+
+Challenges and Handling Edge Cases 
+
+ 
+
+With flexibility comes complexity sometimes.  It may be that you encounter a situation that doesn't map easily into UDM.  We are collecting some of the more challenging cases encountered, and working through what needs to change in the UDM ease the challenges. 
+
+The Future of UDM 
+
+ 
+
+IoTone is committed to a vision of universal device harmony, that is, all devices existing easily with each other, able to communicate with each other and serve the user. 

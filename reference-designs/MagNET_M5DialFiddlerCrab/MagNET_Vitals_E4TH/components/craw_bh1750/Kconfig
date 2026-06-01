@@ -1,0 +1,15 @@
+menu "MagNET Vitals — BH1750 lux sensor"
+
+config CRAW_BH1750_SDA_GPIO
+    int "I²C SDA GPIO for BH1750"
+    default 22
+    help
+        XIAO ESP32-C6 D4 → GPIO 22 by default. Adjust if your kit differs.
+
+config CRAW_BH1750_SCL_GPIO
+    int "I²C SCL GPIO for BH1750"
+    default 23
+    help
+        XIAO ESP32-C6 D5 → GPIO 23 by default.
+
+endmenu

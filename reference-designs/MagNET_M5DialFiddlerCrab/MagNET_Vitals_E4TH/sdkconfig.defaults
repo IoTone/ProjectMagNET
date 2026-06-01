@@ -1,0 +1,48 @@
+# XIAO ESP32-C6 — MagNET Vitals defaults
+
+CONFIG_IDF_TARGET="esp32c6"
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# USB-serial-JTAG console — frees UART0/UART1 for the radar
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Custom partitions (extra app space for BLE + WiFi + HTTP server)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# BLE — NimBLE (reuses craw_ble_provision pattern from the M5StampC3U project)
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+
+# Save RAM
+CONFIG_LWIP_IPV6=n
+
+# Pin the kit-specific GPIOs directly so they survive sdkconfig regeneration.
+# Per Seeed's MR60BHA2 mmWave kit examples (LightRGB.ino, mmwaveBreath.ino):
+#   WS2812 LED → D1 = GPIO 1
+#   Radar UART → HardwareSerial(0) at default UART0 pins
+CONFIG_CRAW_LED_GPIO=1
+CONFIG_CRAW_MR60_UART_PORT=0
+CONFIG_CRAW_MR60_RX_GPIO=17
+CONFIG_CRAW_MR60_TX_GPIO=16
+
+# Bump esp_http_server's per-request header buffer. Browsers send headers
+# (cookies, sec-ch-*, accept-language, etc.) that overflow the 512-byte
+# default and the device returns 431. The Vite dev proxy strips most of
+# these but raw `curl` or other clients won't, so size it generously.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=4096
+CONFIG_HTTPD_MAX_URI_LEN=512
+
+# Bump LWIP's socket pool from the default 10 to 16 so esp_http_server can
+# accept max_open_sockets=13 (it reserves 3 internally — listen socket +
+# control sockets). Without this the httpd_start call fails at boot with
+# `Config option max_open_sockets is too large (max allowed 7)`.
+#
+# Each LWIP socket reserves ~150 B of static state, so 16 vs 10 costs about
+# 1 KB SRAM — small price to absorb TIME_WAIT churn from the d3-spatial
+# demo's 4 concurrently-polling cells.
+CONFIG_LWIP_MAX_SOCKETS=16

@@ -1,0 +1,1463 @@
+/*
+ * M5Capsule_Hive_Scribe — Role 4 (Scribe) of the MagNET hive.
+ *
+ * "A scribe's only job is to save data to its internal memory and recall it
+ *  from shared memory if asked." — README design section.
+ *
+ * Hardware: M5Capsule (ESP32-S3FN8, 8 MB flash, no PSRAM, 250 mAh LiPo,
+ * USB-C native serial-JTAG, single button G6, buzzer G2, microSD slot,
+ * BMI270 IMU + BM8563 RTC on I2C bus G8/G40, IR TX G4).
+ *
+ * v1 scope (this firmware):
+ *   - Standard MagNET bringup: BLE provisioning → WiFi → SNTP → hive join
+ *     as role=scribe with caps ["scribe","kv-store"].
+ *   - Local NVS-backed string KV store in namespace "scribe_kv".
+ *   - REPL-driven Forth words: scribe-store, scribe-recall, scribe-list,
+ *     scribe-erase, scribe-count.
+ *   - Buzzer chirp on store/recall (audible "I remembered something").
+ *
+ * Deferred to Milestone C / future work:
+ *   - Hive-wide shared-memory queries (R16/R17). The scribe will respond to
+ *     network RECALL messages once the hive protocol gains a generic
+ *     PUBLISH/QUERY message type. For now KV is local-only and accessed
+ *     via the REPL (and any role bundle running on this node).
+ *   - microSD overflow storage when NVS gets tight.
+ *   - IMU/RTC wakeup-driven persistence (low-power "remember on motion").
+ *
+ * MIT License, Copyright (c) 2026 IoTone, Inc.
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <time.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_system.h"
+#include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_mac.h"
+#include "esp_timer.h"
+#include "esp_netif_sntp.h"
+#include "esp_sntp.h"
+#include "driver/gpio.h"
+#include "driver/usb_serial_jtag.h"
+#include "driver/ledc.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "mdns.h"
+
+#include "forth_core.h"
+#include "forth_version.h"
+#include "craw_nvs.h"
+#include "craw_wifi.h"
+#include "craw_ble_provision.h"
+#include "craw_hive.h"
+#include "craw_role_bundle.h"
+#include "craw_mqtt.h"
+#include "craw_redis.h"
+#include "craw_imu.h"
+#include "../../include/magnet_gen.h"
+
+static const char *TAG = "scribe";
+
+/* ---------- Pin map (M5Capsule) ---------- */
+#define BTN_GPIO        6
+#define BUZZER_GPIO     2
+#define IR_TX_GPIO      4
+/* I2C SDA=8, SCL=40 unused in v1 — reserved for IMU/RTC */
+
+#define FORTH_HEAP_SIZE (32 * 1024)
+#define TIME_SYNC_EPOCH_THRESHOLD 1577836800
+
+#define SCRIBE_NS       "scribe_kv"
+#define SCRIBE_KEY_MAX  15   /* ESP-IDF NVS hard limit */
+#define SCRIBE_VAL_MAX  256  /* arbitrary; bump if needed */
+
+/* ---------- Console (USB-serial-JTAG) ---------- */
+static void console_init(void) {
+    usb_serial_jtag_driver_config_t cfg = { .tx_buffer_size = 512, .rx_buffer_size = 512 };
+    usb_serial_jtag_driver_install(&cfg);
+}
+static void uprint(const char *s) {
+    usb_serial_jtag_write_bytes((const uint8_t *)s, strlen(s), pdMS_TO_TICKS(500));
+}
+static void uprintf(const char *fmt, ...) {
+    char buf[256]; va_list ap; va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap); va_end(ap);
+    uprint(buf);
+}
+static int console_getchar(void) {
+    uint8_t c; int n = usb_serial_jtag_read_bytes(&c, 1, pdMS_TO_TICKS(10));
+    return n > 0 ? c : -1;
+}
+static void console_putchar(int c) {
+    uint8_t ch = (uint8_t)c;
+    usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(100));
+}
+
+/* ---------- Buzzer (LEDC PWM tone) ----------
+ *
+ * Volume on a piezo buzzer is controlled by PWM duty cycle, not by
+ * amplitude. 50% duty (= 128 at 8-bit resolution) is the maximum
+ * loudness — a true square wave delivers the most fundamental energy
+ * to the piezo. Lower duty cycles attenuate the perceived volume
+ * roughly linearly from ~5% (very quiet) up to 50% (full). Above 50%
+ * the wave becomes a mirror image and gets quieter again — there's
+ * no point going past 128.
+ *
+ * `buzz_v(freq, dur, duty)` is the full form; `buzz(freq, dur)` is
+ * a convenience wrapper using `s_buzz_default_duty`. Forth word
+ * `buzz-vol` re-tunes the default at runtime.
+ */
+static bool s_buzzer_ready = false;
+/* Default duty = 64/255 = 25% — moderate, audible at arm's length but
+ * not abusive in a quiet room. Boot chirps + UX events use this. */
+static uint8_t s_buzz_default_duty = 64;
+
+static void buzzer_init(void) {
+    ledc_timer_config_t t = {
+        .speed_mode      = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .timer_num       = LEDC_TIMER_0,
+        .freq_hz         = 2000,
+        .clk_cfg         = LEDC_AUTO_CLK,
+    };
+    ledc_timer_config(&t);
+    ledc_channel_config_t c = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel    = LEDC_CHANNEL_0,
+        .timer_sel  = LEDC_TIMER_0,
+        .intr_type  = LEDC_INTR_DISABLE,
+        .gpio_num   = BUZZER_GPIO,
+        .duty       = 0,
+        .hpoint     = 0,
+    };
+    ledc_channel_config(&c);
+    s_buzzer_ready = true;
+}
+
+static void buzz_v(uint16_t freq_hz, uint16_t duration_ms, uint8_t duty) {
+    if (!s_buzzer_ready) return;
+    /* Cap duty at 128 — past 50% the wave inverts and gets quieter
+     * again, so accepting values up to 255 would be a footgun. */
+    if (duty > 128) duty = 128;
+    ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, freq_hz);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    vTaskDelay(pdMS_TO_TICKS(duration_ms));
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
+static void buzz(uint16_t freq_hz, uint16_t duration_ms) {
+    buzz_v(freq_hz, duration_ms, s_buzz_default_duty);
+}
+
+/* ---------- Scribe KV store (NVS, string values) ---------- */
+
+static int scribe_store(const char *key, const char *value) {
+    if (!key || !*key || strlen(key) > SCRIBE_KEY_MAX)  return -1;
+    if (!value || strlen(value) > SCRIBE_VAL_MAX)       return -2;
+    nvs_handle_t h;
+    if (nvs_open(SCRIBE_NS, NVS_READWRITE, &h) != ESP_OK) return -3;
+    esp_err_t err = nvs_set_str(h, key, value);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err == ESP_OK ? 0 : -4;
+}
+
+/* Returns 0 on success and writes value to out_buf (NUL-terminated).
+ * Returns -1 if key missing, other negative on internal error. */
+static int scribe_recall(const char *key, char *out_buf, size_t out_len) {
+    if (!key || !out_buf || out_len == 0) return -2;
+    nvs_handle_t h;
+    if (nvs_open(SCRIBE_NS, NVS_READONLY, &h) != ESP_OK) {
+        out_buf[0] = '\0';
+        return -1;
+    }
+    size_t sz = out_len;
+    esp_err_t err = nvs_get_str(h, key, out_buf, &sz);
+    nvs_close(h);
+    if (err == ESP_ERR_NVS_NOT_FOUND) return -1;
+    return err == ESP_OK ? 0 : -3;
+}
+
+static int scribe_erase(const char *key) {
+    nvs_handle_t h;
+    if (nvs_open(SCRIBE_NS, NVS_READWRITE, &h) != ESP_OK) return -1;
+    esp_err_t err = nvs_erase_key(h, key);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return err == ESP_OK ? 0 : (err == ESP_ERR_NVS_NOT_FOUND ? -2 : -3);
+}
+
+/* Iterate every entry in the scribe namespace, calling cb for each. */
+typedef void (*scribe_iter_cb_t)(const char *key, const char *value, void *ctx);
+static int scribe_iter(scribe_iter_cb_t cb, void *ctx) {
+    nvs_iterator_t it = NULL;
+    int count = 0;
+    esp_err_t err = nvs_entry_find(NVS_DEFAULT_PART_NAME, SCRIBE_NS, NVS_TYPE_STR, &it);
+    while (err == ESP_OK) {
+        nvs_entry_info_t info;
+        nvs_entry_info(it, &info);
+        char val[SCRIBE_VAL_MAX + 1] = {0};
+        if (scribe_recall(info.key, val, sizeof(val)) == 0) {
+            if (cb) cb(info.key, val, ctx);
+            count++;
+        }
+        err = nvs_entry_next(&it);
+    }
+    if (it) nvs_release_iterator(it);
+    return count;
+}
+
+/* ---------- MQTT bridge (Phase 4 — hive ⇄ MQTT) ----------
+ * Polling design: every BRIDGE_PERIOD_S seconds, walk a list of hive KV
+ * keys and republish any new value to "magnet/<hive>/<key-with-:-as-/>".
+ *
+ * NVS namespace "scribe_mqtt":
+ *   broker     str   default mqtt://broker.hivemq.com:1883 (PUBLIC; warned)
+ *   bridge_on  u8    0|1   (default 0; opt-in, but auto-resumes if previously on)
+ *   period_s   u8    1..255 (default 5)
+ *   keys       str   comma-separated hive KV keys to bridge
+ */
+
+#define MQTT_NS                  "scribe_mqtt"
+#define MQTT_KEY_BROKER          "broker"
+#define MQTT_KEY_BRIDGE_ON       "bridge_on"
+#define MQTT_KEY_PERIOD          "period_s"
+#define MQTT_KEY_KEYS            "keys"
+#define MQTT_DEFAULT_BROKER      "mqtt://broker.hivemq.com:1883"
+#define MQTT_BRIDGE_KEYS_MAX     256
+#define MQTT_BRIDGE_TOPIC_MAX    96
+#define MQTT_BRIDGE_HIVE         "beehive-1"  /* matches hive_id used in maybe_start_hive */
+
+static char     s_mqtt_broker[128] = MQTT_DEFAULT_BROKER;
+static char     s_bridge_keys[MQTT_BRIDGE_KEYS_MAX + 1] = "";
+static uint8_t  s_bridge_period_s = 5;
+static bool     s_bridge_on       = false;
+static bool     s_bridge_running  = false;
+static TaskHandle_t s_bridge_task = NULL;
+/* Per-key dedup: store last published value so we skip unchanged ticks. */
+typedef struct { char key[CRAW_HIVE_KV_KEY_MAX + 1];
+                 char last[CRAW_HIVE_KV_VALUE_MAX + 1]; } bridge_dedup_t;
+#define MQTT_BRIDGE_MAX_KEYS 8
+static bridge_dedup_t s_dedup[MQTT_BRIDGE_MAX_KEYS];
+static int s_dedup_count = 0;
+
+static void mqtt_nvs_load(void) {
+    nvs_handle_t h;
+    if (nvs_open(MQTT_NS, NVS_READONLY, &h) != ESP_OK) return;
+    size_t sz = sizeof(s_mqtt_broker);
+    nvs_get_str(h, MQTT_KEY_BROKER, s_mqtt_broker, &sz);
+    sz = sizeof(s_bridge_keys);
+    nvs_get_str(h, MQTT_KEY_KEYS, s_bridge_keys, &sz);
+    nvs_get_u8(h, MQTT_KEY_PERIOD, &s_bridge_period_s);
+    if (s_bridge_period_s == 0) s_bridge_period_s = 5;
+    uint8_t on = 0;
+    if (nvs_get_u8(h, MQTT_KEY_BRIDGE_ON, &on) == ESP_OK) s_bridge_on = on != 0;
+    nvs_close(h);
+}
+
+static void mqtt_nvs_save_str(const char *key, const char *value) {
+    nvs_handle_t h;
+    if (nvs_open(MQTT_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, key, value);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void mqtt_nvs_save_u8(const char *key, uint8_t v) {
+    nvs_handle_t h;
+    if (nvs_open(MQTT_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, key, v);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+/* Convert hive KV key "temp:nik3" → MQTT topic "magnet/beehive-1/temp/nik3". */
+static void key_to_topic(const char *key, char *out, size_t out_len) {
+    snprintf(out, out_len, "magnet/%s/%s", MQTT_BRIDGE_HIVE, key);
+    for (char *p = out; *p; p++) if (*p == ':') *p = '/';
+}
+
+/* Publish a hive heartbeat so the Dial can render an "M" indicator.
+ * Caller passes the node_id to avoid a forward-reference to the Hive
+ * bringup section's static. */
+static char *s_bridge_self_id = NULL;  /* set by bridge_start once joined */
+static void bridge_publish_heartbeat(bool on) {
+    craw_hive_node_kv_put("bridge:status",
+                          on && s_bridge_self_id ? s_bridge_self_id : "");
+}
+
+static bridge_dedup_t *dedup_for(const char *key) {
+    for (int i = 0; i < s_dedup_count; i++)
+        if (strcmp(s_dedup[i].key, key) == 0) return &s_dedup[i];
+    if (s_dedup_count >= MQTT_BRIDGE_MAX_KEYS) return NULL;
+    bridge_dedup_t *d = &s_dedup[s_dedup_count++];
+    strncpy(d->key, key, sizeof(d->key) - 1);
+    d->last[0] = '\0';
+    return d;
+}
+
+/* Iterate s_bridge_keys (comma-separated). For each key, KV_GET, publish
+ * if the value changed. Called once per bridge tick. */
+static int bridge_tick(void) {
+    if (!craw_hive_node_session_id()) return -1;  /* not joined yet */
+    if (!craw_mqtt_is_connected())    return -2;
+    int published = 0;
+    char tmp[MQTT_BRIDGE_KEYS_MAX + 1];
+    strncpy(tmp, s_bridge_keys, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    char *save = NULL;
+    char *tok = strtok_r(tmp, ",", &save);
+    while (tok) {
+        /* trim leading spaces */
+        while (*tok == ' ' || *tok == '\t') tok++;
+        if (*tok) {
+            char val[CRAW_HIVE_KV_VALUE_MAX + 1];
+            int rc = craw_hive_node_kv_get(tok, val, sizeof(val), 2000);
+            if (rc == 0) {
+                bridge_dedup_t *d = dedup_for(tok);
+                if (d && strcmp(d->last, val) != 0) {
+                    char topic[MQTT_BRIDGE_TOPIC_MAX];
+                    key_to_topic(tok, topic, sizeof(topic));
+                    if (craw_mqtt_publish(topic, val, 0, false) >= 0) {
+                        strncpy(d->last, val, sizeof(d->last) - 1);
+                        d->last[sizeof(d->last) - 1] = '\0';
+                        published++;
+                    }
+                }
+            }
+        }
+        tok = strtok_r(NULL, ",", &save);
+    }
+    return published;
+}
+
+static void bridge_task(void *arg) {
+    (void)arg;
+    s_bridge_running = true;
+    bridge_publish_heartbeat(true);
+    /* Initial publish-everything pass: clear dedup so first tick fires. */
+    s_dedup_count = 0;
+    while (s_bridge_on) {
+        int p = bridge_tick();
+        if (p > 0) uprintf("[bridge] published %d key(s)\r\n", p);
+        for (int i = 0; i < s_bridge_period_s * 10 && s_bridge_on; i++) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+    bridge_publish_heartbeat(false);
+    s_bridge_running = false;
+    s_bridge_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void bridge_start(void) {
+    if (s_bridge_running) return;
+    if (!craw_mqtt_is_connected()) {
+        uprint("[bridge] MQTT not connected yet, will start when ready\r\n");
+    }
+    s_bridge_on = true;
+    mqtt_nvs_save_u8(MQTT_KEY_BRIDGE_ON, 1);
+    xTaskCreate(bridge_task, "bridge", 6144, NULL, 4, &s_bridge_task);
+    uprint("[bridge] started\r\n");
+}
+
+static void bridge_stop(void) {
+    s_bridge_on = false;
+    mqtt_nvs_save_u8(MQTT_KEY_BRIDGE_ON, 0);
+    /* bridge_task will exit on next loop iteration */
+}
+
+/* ---------- Hive bringup (mirror Echo pattern) ---------- */
+static char     ip_str[20]              = "N/A";
+static char     hostname[40]            = "magnet-scribe-0000";
+static char     node_id[40]             = "MagNET-biologic-0000";
+static bool     ble_teardown_requested  = false;
+static bool     ble_torn_down           = false;
+static bool     sntp_started            = false;
+static bool     time_synced             = false;
+static bool     mdns_published          = false;
+static bool     hive_started            = false;
+
+static void mdns_publish(void) {
+    if (mdns_published) return;
+    mdns_init();
+    mdns_hostname_set(hostname);
+    mdns_instance_name_set("MagNET Hive Scribe");
+    /* Advertise a magnet-node service so peers know what role lives here. */
+    mdns_txt_item_t txt[] = {
+        { "role", "scribe" },
+        { "caps", "scribe,kv-store" },
+        { "ver",  "1" },
+    };
+    mdns_service_add(NULL, "_magnet-node", "_tcp", 0, txt, sizeof(txt)/sizeof(txt[0]));
+    mdns_published = true;
+    uprintf("[mDNS] %s.local advertised as scribe\r\n", hostname);
+}
+
+static void on_wifi_event(craw_wifi_event_t event, void *ctx) {
+    (void)ctx;
+    switch (event) {
+    case CRAW_WIFI_EVENT_CONNECTED:
+        craw_wifi_get_ip_str(ip_str, sizeof(ip_str));
+        uprintf("\r\n[WiFi] connected, IP: %s\r\n", ip_str);
+        craw_ble_provision_set_ip(ip_str);
+        craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTED);
+        craw_ble_provision_stop_advertising();
+        ble_teardown_requested = true;
+        if (!sntp_started) {
+            esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            esp_netif_sntp_init(&sntp_cfg);
+            sntp_started = true;
+            uprint("[SNTP] sync kicked off\r\n");
+        }
+        break;
+    case CRAW_WIFI_EVENT_DISCONNECTED:
+        uprint("\r\n[WiFi] disconnected\r\n");
+        strncpy(ip_str, "N/A", sizeof(ip_str));
+        if (!ble_torn_down) {
+            craw_ble_provision_set_ip(ip_str);
+            craw_ble_provision_advertise();
+        }
+        break;
+    case CRAW_WIFI_EVENT_CONNECT_FAILED:
+        uprint("\r\n[WiFi] failed\r\n");
+        if (!ble_torn_down) {
+            craw_ble_provision_set_status(CRAW_BLE_PROV_FAILED);
+            craw_ble_provision_advertise();
+        }
+        break;
+    }
+}
+
+static void on_prov_event(craw_ble_prov_state_t state,
+                          const char *ssid, const char *pass, void *ctx) {
+    (void)ctx;
+    switch (state) {
+    case CRAW_BLE_PROV_CREDS_RECEIVED:
+        uprintf("\r\n[PROV] creds: ssid='%s'\r\n", ssid);
+        break;
+    case CRAW_BLE_PROV_COMMIT_REQUESTED:
+        if (!ssid || !ssid[0]) break;
+        uprintf("\r\n[PROV] commit -> '%s'\r\n", ssid);
+        craw_nvs_save_wifi_creds(ssid, pass ? pass : "");
+        craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
+        craw_wifi_connect(ssid, pass ? pass : "");
+        break;
+    default: break;
+    }
+}
+
+static void on_hive_state(craw_hive_node_state_t state,
+                          const char *info, void *ctx) {
+    (void)ctx;
+    uprintf("\r\n[HIVE] state=%d (%s)\r\n", (int)state, info ? info : "");
+    if (state == CRAW_HIVE_NODE_JOINED) buzz(2000, 60);
+}
+
+/* Worker that fetches a bundle by KV key and installs it.
+ * Runs on its own task because craw_hive_node_kv_get is blocking and
+ * cannot run inside the receive loop's callback context. */
+typedef struct {
+    char bundle_key[CRAW_HIVE_KV_KEY_MAX + 1];
+    char role[CRAW_HIVE_ROLE_MAX + 1];
+} bundle_install_job_t;
+
+static const char *NODE_CAPS[] = { "scribe", "kv-store" };
+#define N_NODE_CAPS (sizeof(NODE_CAPS) / sizeof(NODE_CAPS[0]))
+
+static void bundle_install_worker(void *arg) {
+    bundle_install_job_t *job = (bundle_install_job_t *)arg;
+    /* Bundles can be up to 4 KB of source — heap-allocate the buffer to
+     * avoid blowing the worker task's stack. */
+    char *json_buf = malloc(CRAW_HIVE_KV_VALUE_MAX + 1);
+    if (!json_buf) {
+        uprintf("\r\n[bundle] worker malloc failed\r\n");
+        free(job);
+        vTaskDelete(NULL);
+        return;
+    }
+    uprintf("\r\n[bundle] fetching %s for role=%s...\r\n", job->bundle_key, job->role);
+    int rc = craw_hive_node_kv_get(job->bundle_key, json_buf,
+                                   CRAW_HIVE_KV_VALUE_MAX + 1, 5000);
+    if (rc == 0) {
+        craw_role_bundle_install_result_t result = {0};
+        int irc = craw_role_bundle_install_from_json(json_buf,
+                                                     NODE_CAPS, N_NODE_CAPS,
+                                                     &result);
+        if (irc == BUNDLE_OK) {
+            uprintf("[bundle] '%s' v%s installed (%u bytes src)\r\n",
+                    result.info.name, result.info.version,
+                    (unsigned)result.info.src_len);
+            buzz(1500, 40); buzz(2200, 60);
+        } else {
+            uprintf("[bundle] install failed rc=%d field='%s'\r\n",
+                    irc, result.err_field);
+            buzz(700, 80); buzz(500, 100);
+        }
+    } else if (rc == 1) {
+        uprintf("[bundle] kv-get '%s' returned not_found\r\n", job->bundle_key);
+    } else if (rc == -2) {
+        uprintf("[bundle] kv-get '%s' timed out\r\n", job->bundle_key);
+    } else {
+        uprintf("[bundle] kv-get '%s' failed rc=%d\r\n", job->bundle_key, rc);
+    }
+    free(json_buf);
+    free(job);
+    vTaskDelete(NULL);
+}
+
+static void on_role_grant(const char *role, const char *bundle_key,
+                          const char *scribe, void *ctx) {
+    (void)ctx; (void)scribe;
+    uprintf("\r\n[ROLE_GRANT] role=%s bundle=%s\r\n",
+            role, bundle_key ? bundle_key : "(none)");
+    if (!bundle_key) {
+        /* Legacy "label only" — nothing to install. */
+        return;
+    }
+    bundle_install_job_t *job = malloc(sizeof(*job));
+    if (!job) return;
+    strncpy(job->role, role, sizeof(job->role) - 1);
+    job->role[sizeof(job->role) - 1] = '\0';
+    strncpy(job->bundle_key, bundle_key, sizeof(job->bundle_key) - 1);
+    job->bundle_key[sizeof(job->bundle_key) - 1] = '\0';
+    if (xTaskCreate(bundle_install_worker, "bundle_inst", 8192, job, 4, NULL) != pdPASS) {
+        uprint("[bundle] failed to spawn install worker\r\n");
+        free(job);
+    }
+}
+
+static const char *CAPS[] = { "scribe", "kv-store", NULL };
+static uint8_t      secret_copy[32];
+
+static void derive_ids(void) {
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(hostname, sizeof(hostname), "magnet-scribe-%02x%02x", mac[4], mac[5]);
+    snprintf(node_id,  sizeof(node_id),  "MagNET-biologic-%02x%02x", mac[4], mac[5]);
+}
+
+static void maybe_start_hive(void) {
+    if (hive_started) return;
+    if (!craw_wifi_is_connected()) return;
+    if (!time_synced) return;
+    derive_ids();
+    if (!mdns_published) mdns_publish();
+    memcpy(secret_copy, CRAW_HIVE_DEV_SECRET, 32);
+    static craw_hive_node_config_t ncfg;
+    ncfg = (craw_hive_node_config_t){
+        .node_id          = node_id,
+        .hive_id          = "beehive-1",
+        .role_requested   = "scribe",
+        .caps             = CAPS,
+        .chip             = "ESP32-S3",
+        .fw               = "0.1.0",
+        .gen              = MAGNET_GEN_STR,
+        .secret           = secret_copy,
+        .on_state         = on_hive_state,
+        .on_state_ctx     = NULL,
+        .on_role_grant    = on_role_grant,
+        .on_role_grant_ctx= NULL,
+    };
+    if (craw_hive_node_start(&ncfg) == 0) {
+        hive_started = true;
+        s_bridge_self_id = node_id;
+        uprint("[HIVE] node started as role=scribe caps=scribe,kv-store\r\n");
+    }
+}
+
+/* Initialize MQTT once WiFi is up. Called from housekeeping_task. Does
+ * not connect synchronously — esp-mqtt connects in a background task and
+ * fires our conn callback when it's ready. */
+static bool s_mqtt_started = false;
+static void maybe_start_mqtt(void) {
+    if (s_mqtt_started) return;
+    if (!craw_wifi_is_connected()) return;
+    /* Insecure-default warning. Public broker → values published are
+     * world-readable. Document mqtt-broker REPL command in serial banner. */
+    if (strcmp(s_mqtt_broker, MQTT_DEFAULT_BROKER) == 0) {
+        uprint("\r\n[mqtt] WARNING: using public default broker "
+               MQTT_DEFAULT_BROKER ".\r\n"
+               "[mqtt] Bridge values are WORLD-READABLE. Override with "
+               "mqtt-broker at the REPL.\r\n");
+    }
+    /* publisher-only mode: pass NULL base_topic */
+    craw_mqtt_init(s_mqtt_broker, NULL, NULL, NULL, NULL);
+    craw_mqtt_start();
+    s_mqtt_started = true;
+    uprintf("[mqtt] started against %s\r\n", s_mqtt_broker);
+    /* Auto-resume bridge if it was on at last shutdown. Wait until MQTT
+     * is connected (handled inside bridge_task — it'll just no-op until). */
+    if (s_bridge_on && !s_bridge_running && hive_started) {
+        bridge_start();
+    }
+}
+
+static void housekeeping_task(void *arg) {
+    (void)arg;
+    while (1) {
+        if (ble_teardown_requested && !ble_torn_down) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            size_t before = esp_get_free_heap_size();
+            craw_ble_provision_deinit();
+            ble_torn_down = true;
+            size_t after = esp_get_free_heap_size();
+            uprintf("[BLE] torn down. Heap: %u -> %u (+%d bytes)\r\n",
+                    (unsigned)before, (unsigned)after,
+                    (int)after - (int)before);
+        }
+        if (sntp_started && !time_synced) {
+            sntp_sync_status_t st = sntp_get_sync_status();
+            time_t now = time(NULL);
+            if (st == SNTP_SYNC_STATUS_COMPLETED && now > TIME_SYNC_EPOCH_THRESHOLD) {
+                time_synced = true;
+                struct tm t; localtime_r(&now, &t);
+                char buf[32];
+                strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &t);
+                uprintf("[SNTP] time synced: %s UTC\r\n", buf);
+            }
+        }
+        maybe_start_hive();
+        maybe_start_mqtt();
+        /* Auto-resume bridge if NVS says on, but only after both hive
+         * and MQTT are ready. */
+        if (s_bridge_on && hive_started && s_mqtt_started && !s_bridge_running) {
+            bridge_start();
+        }
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+}
+
+/* ---------- Forth FFI ---------- */
+
+/* Forth doesn't have native string support. The KV words take addresses of
+ * NUL-terminated C strings on the stack — typically you'd push pointers
+ * from within a role bundle. For interactive REPL use, line-edit the
+ * key/value via a one-shot `prompt-store`/`prompt-recall` helper. */
+
+static char s_io_key[SCRIBE_KEY_MAX + 1];
+static char s_io_val[SCRIBE_VAL_MAX + 1];
+
+static void read_line(const char *prompt, char *buf, size_t bufsz) {
+    uprint(prompt);
+    size_t i = 0;
+    while (i + 1 < bufsz) {
+        int c = console_getchar();
+        if (c < 0) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
+        if (c == '\r' || c == '\n') break;
+        if (c == 8 || c == 127) {
+            if (i > 0) { i--; uprint("\b \b"); }
+            continue;
+        }
+        buf[i++] = (char)c;
+        char ch[2] = { (char)c, 0 };
+        uprint(ch);
+    }
+    buf[i] = '\0';
+    uprint("\r\n");
+}
+
+/* ( -- ) Interactive: prompts for key + value, stores. */
+static void w_scribe_store(void) {
+    read_line("\r\nkey: ",   s_io_key, sizeof(s_io_key));
+    read_line("value: ",     s_io_val, sizeof(s_io_val));
+    int rc = scribe_store(s_io_key, s_io_val);
+    if (rc == 0) {
+        uprintf("stored '%s' = '%s'\r\n", s_io_key, s_io_val);
+        buzz(1500, 30);
+    } else {
+        uprintf("scribe-store failed rc=%d\r\n", rc);
+    }
+}
+
+/* ( -- ) Interactive: prompts for key, prints stored value. */
+static void w_scribe_recall(void) {
+    read_line("\r\nkey: ", s_io_key, sizeof(s_io_key));
+    int rc = scribe_recall(s_io_key, s_io_val, sizeof(s_io_val));
+    if (rc == 0) {
+        uprintf("'%s' = '%s'\r\n", s_io_key, s_io_val);
+        buzz(2200, 30);
+    } else if (rc == -1) {
+        uprintf("not found\r\n");
+    } else {
+        uprintf("scribe-recall failed rc=%d\r\n", rc);
+    }
+}
+
+static void list_cb(const char *key, const char *value, void *ctx) {
+    (void)ctx;
+    uprintf("  %-15s = %s\r\n", key, value);
+}
+
+static void w_scribe_list(void) {
+    uprint("\r\nscribe entries:\r\n");
+    int n = scribe_iter(list_cb, NULL);
+    uprintf("(%d entries)\r\n", n);
+}
+
+static void w_scribe_erase(void) {
+    read_line("\r\nkey to erase: ", s_io_key, sizeof(s_io_key));
+    int rc = scribe_erase(s_io_key);
+    if      (rc == 0)  uprintf("erased '%s'\r\n", s_io_key);
+    else if (rc == -2) uprint("not found\r\n");
+    else               uprintf("scribe-erase failed rc=%d\r\n", rc);
+}
+
+static void w_scribe_count(void) {
+    int n = scribe_iter(NULL, NULL);
+    forth_push(n);
+    uprintf("\r\nscribe entries: %d\r\n", n);
+}
+
+static void w_prov_status(void) {
+    char ssid[33], pass[65];
+    bool has = craw_nvs_load_wifi_creds(ssid, pass);
+    uprintf("\r\nble:    %s\r\n", craw_ble_provision_device_name());
+    uprintf("wifi:   %s\r\n", craw_wifi_is_connected() ? "connected" : "down");
+    uprintf("ssid:   %s\r\n", has ? ssid : "(none)");
+    uprintf("ip:     %s\r\n", ip_str);
+    uprintf("time:   %s\r\n", time_synced ? "synced" : "pending");
+    uprintf("host:   %s.local\r\n", hostname);
+    uprintf("hive:   %s\r\n", hive_started ? "joined" : "idle");
+    int n = scribe_iter(NULL, NULL);
+    uprintf("scribe: %d entries in NVS\r\n", n);
+}
+
+static void w_prov_reset(void) {
+    char ssid[33], pass[65];
+    craw_nvs_clear_wifi_creds(ssid, pass);
+    uprint("\r\nWiFi creds cleared. Rebooting to re-enter provisioning...\r\n");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    esp_restart();
+}
+
+static void w_hive_status(void) {
+    const char *labels[] = { "OFFLINE","DISCOVER","CONNECTING","JOINED","BACKOFF" };
+    int st = (int)craw_hive_node_state();
+    if (st < 0 || st > 4) st = 0;
+    const char *sid = craw_hive_node_session_id();
+    uprintf("\r\nhive:    %s\r\n", labels[st]);
+    uprintf("node:    %s\r\n", node_id);
+    uprintf("session: %s\r\n", sid ? sid : "(none)");
+}
+
+static void w_buzz(void) {
+    int dur = (int)forth_pop();
+    int hz  = (int)forth_pop();
+    if (hz <= 0)  return;
+    if (dur < 1)  dur = 1;
+    if (dur > 2000) dur = 2000;
+    buzz((uint16_t)hz, (uint16_t)dur);
+}
+
+/* ( freq dur duty -- ) one-shot tone with explicit volume.
+ * duty 0..128; values above 128 are clamped (the wave inverts past
+ * 50% so there's no point allowing them). */
+static void w_buzz_v(void) {
+    int duty = (int)forth_pop();
+    int dur  = (int)forth_pop();
+    int hz   = (int)forth_pop();
+    if (hz <= 0)  return;
+    if (dur < 1)  dur = 1;
+    if (dur > 2000) dur = 2000;
+    if (duty < 0) duty = 0;
+    if (duty > 128) duty = 128;
+    buzz_v((uint16_t)hz, (uint16_t)dur, (uint8_t)duty);
+}
+
+/* ( duty -- ) set the default buzzer volume for `buzz` + boot ritual. */
+static void w_buzz_vol(void) {
+    int duty = (int)forth_pop();
+    if (duty < 0) duty = 0;
+    if (duty > 128) duty = 128;
+    s_buzz_default_duty = (uint8_t)duty;
+    uprintf("\r\n[buzz] default duty = %d (%.0f%% of max)\r\n",
+            duty, (float)duty * 100.0f / 128.0f);
+}
+
+/* Hive KV REPL helpers — distinct from `scribe-*` words which hit the
+ * local NVS namespace. These ride the existing hive session to the ruler.
+ * In Milestone C step 2, the Scribe's on_kv_get callback will let it serve
+ * the ruler's KV requests from this same NVS namespace, unifying the two. */
+static char s_hive_kv_key[CRAW_HIVE_KV_KEY_MAX + 1];
+static char s_hive_kv_val[CRAW_HIVE_KV_VALUE_MAX + 1];
+
+static void w_hive_kv_get(void) {
+    read_line("\r\nkey: ", s_hive_kv_key, sizeof(s_hive_kv_key));
+    int rc = craw_hive_node_kv_get(s_hive_kv_key,
+                                   s_hive_kv_val, sizeof(s_hive_kv_val), 3000);
+    if (rc == 0)       uprintf("'%s' = '%s'\r\n", s_hive_kv_key, s_hive_kv_val);
+    else if (rc == 1)  uprint("not found\r\n");
+    else if (rc == -2) uprint("timeout\r\n");
+    else               uprintf("kv-get failed rc=%d\r\n", rc);
+}
+
+static void w_hive_kv_put(void) {
+    read_line("\r\nkey:   ", s_hive_kv_key, sizeof(s_hive_kv_key));
+    read_line("value: ",     s_hive_kv_val, sizeof(s_hive_kv_val));
+    int rc = craw_hive_node_kv_put(s_hive_kv_key, s_hive_kv_val);
+    if (rc == 0) uprintf("sent KV_PUT '%s'\r\n", s_hive_kv_key);
+    else         uprintf("kv-put failed rc=%d\r\n", rc);
+}
+
+/* ( -- ) Manual bundle install. Prompts for a KV key, fetches the JSON
+ * envelope from the ruler, runs craw_role_bundle_install_from_json. Same
+ * code path as the auto-install via on_role_grant — just without the
+ * ROLE_GRANT trigger. Useful for testing without involving the Dial. */
+static void w_bundle_install(void) {
+    read_line("\r\nbundle key: ", s_hive_kv_key, sizeof(s_hive_kv_key));
+    bundle_install_job_t *job = malloc(sizeof(*job));
+    if (!job) { uprint("malloc failed\r\n"); return; }
+    strncpy(job->bundle_key, s_hive_kv_key, sizeof(job->bundle_key) - 1);
+    job->bundle_key[sizeof(job->bundle_key) - 1] = '\0';
+    strncpy(job->role, "manual", sizeof(job->role) - 1);
+    if (xTaskCreate(bundle_install_worker, "bundle_inst", 8192, job, 4, NULL) != pdPASS) {
+        uprint("failed to spawn worker\r\n");
+        free(job);
+    }
+}
+
+static int bundle_list_cb(const char *name, const char *version, void *ctx) {
+    (void)ctx;
+    uprintf("  %-20s v%s\r\n", name, version);
+    return 0;
+}
+
+/* ( -- ) List all bundles persisted in NVS. */
+static void w_bundle_list(void) {
+    uprint("\r\npersisted bundles:\r\n");
+    int n = craw_role_bundle_iterate(bundle_list_cb, NULL);
+    uprintf("(%d entries)\r\n", n);
+}
+
+/* ( -- ) Wipe all persisted bundles. */
+/* ---- MQTT bridge Forth words ---- */
+static char s_mqtt_io_a[128];
+static char s_mqtt_io_b[CRAW_HIVE_KV_VALUE_MAX + 1];
+
+static void w_mqtt_broker_set(void) {
+    read_line("\r\nbroker uri (mqtt://host:port): ", s_mqtt_io_a, sizeof(s_mqtt_io_a));
+    if (!s_mqtt_io_a[0]) { uprint("(unchanged)\r\n"); return; }
+    strncpy(s_mqtt_broker, s_mqtt_io_a, sizeof(s_mqtt_broker) - 1);
+    s_mqtt_broker[sizeof(s_mqtt_broker) - 1] = '\0';
+    mqtt_nvs_save_str(MQTT_KEY_BROKER, s_mqtt_broker);
+    if (s_mqtt_started) craw_mqtt_set_broker(s_mqtt_broker);
+    uprintf("broker = %s\r\n", s_mqtt_broker);
+}
+
+static void w_mqtt_broker_get(void) {
+    uprintf("\r\nbroker: %s\r\n", s_mqtt_broker);
+    uprintf("connected: %s\r\n", craw_mqtt_is_connected() ? "yes" : "no");
+}
+
+static void w_mqtt_pub(void) {
+    read_line("\r\ntopic:   ", s_mqtt_io_a, sizeof(s_mqtt_io_a));
+    read_line("payload: ",     s_mqtt_io_b, sizeof(s_mqtt_io_b));
+    int rc = craw_mqtt_publish(s_mqtt_io_a, s_mqtt_io_b, 0, false);
+    uprintf("\r\nmqtt-pub rc=%d\r\n", rc);
+}
+
+static void w_bridge_add(void) {
+    read_line("\r\nhive KV key to bridge: ", s_mqtt_io_a, sizeof(s_mqtt_io_a));
+    if (!s_mqtt_io_a[0]) return;
+    if (s_bridge_keys[0]) {
+        size_t cur = strlen(s_bridge_keys);
+        if (cur + strlen(s_mqtt_io_a) + 2 >= sizeof(s_bridge_keys)) {
+            uprint("subscription list full\r\n"); return;
+        }
+        strncat(s_bridge_keys, ",", sizeof(s_bridge_keys) - cur - 1);
+    }
+    strncat(s_bridge_keys, s_mqtt_io_a, sizeof(s_bridge_keys) - strlen(s_bridge_keys) - 1);
+    mqtt_nvs_save_str(MQTT_KEY_KEYS, s_bridge_keys);
+    uprintf("bridging: %s\r\n", s_bridge_keys);
+}
+
+static void w_bridge_remove(void) {
+    read_line("\r\nkey to remove: ", s_mqtt_io_a, sizeof(s_mqtt_io_a));
+    if (!s_mqtt_io_a[0]) return;
+    char tmp[MQTT_BRIDGE_KEYS_MAX + 1] = "";
+    char in[MQTT_BRIDGE_KEYS_MAX + 1];
+    strncpy(in, s_bridge_keys, sizeof(in) - 1);
+    in[sizeof(in) - 1] = '\0';
+    char *save = NULL;
+    char *tok = strtok_r(in, ",", &save);
+    while (tok) {
+        while (*tok == ' ') tok++;
+        if (strcmp(tok, s_mqtt_io_a) != 0) {
+            if (tmp[0]) strncat(tmp, ",", sizeof(tmp) - strlen(tmp) - 1);
+            strncat(tmp, tok, sizeof(tmp) - strlen(tmp) - 1);
+        }
+        tok = strtok_r(NULL, ",", &save);
+    }
+    strncpy(s_bridge_keys, tmp, sizeof(s_bridge_keys) - 1);
+    s_bridge_keys[sizeof(s_bridge_keys) - 1] = '\0';
+    mqtt_nvs_save_str(MQTT_KEY_KEYS, s_bridge_keys);
+    uprintf("bridging: %s\r\n", s_bridge_keys[0] ? s_bridge_keys : "(empty)");
+}
+
+static void w_bridge_list(void) {
+    uprintf("\r\nbridging: %s\r\n", s_bridge_keys[0] ? s_bridge_keys : "(empty)");
+    uprintf("period:   %u s\r\n", (unsigned)s_bridge_period_s);
+    for (int i = 0; i < s_dedup_count; i++) {
+        uprintf("  %-20s last='%s'\r\n", s_dedup[i].key, s_dedup[i].last);
+    }
+}
+
+static void w_bridge_period(void) {
+    int n = (int)forth_pop();
+    if (n < 1 || n > 255) { uprintf("\r\nperiod out of range (1..255)\r\n"); return; }
+    s_bridge_period_s = (uint8_t)n;
+    mqtt_nvs_save_u8(MQTT_KEY_PERIOD, s_bridge_period_s);
+    uprintf("\r\nperiod = %d s\r\n", n);
+}
+
+static void w_bridge_on(void)  { bridge_start(); }
+static void w_bridge_off(void) { bridge_stop();  uprint("[bridge] stopping\r\n"); }
+
+static void w_bridge_status(void) {
+    uprintf("\r\nbroker:    %s\r\n", s_mqtt_broker);
+    uprintf("connected: %s\r\n", craw_mqtt_is_connected() ? "yes" : "no");
+    uprintf("running:   %s\r\n", s_bridge_running ? "yes" : "no");
+    uprintf("nvs on:    %s\r\n", s_bridge_on ? "yes" : "no");
+    uprintf("period:    %u s\r\n", (unsigned)s_bridge_period_s);
+    uprintf("keys:      %s\r\n", s_bridge_keys[0] ? s_bridge_keys : "(empty)");
+}
+
+static void w_bundle_forget_all(void) {
+    int rc = craw_role_bundle_forget_all();
+    uprintf("\r\nbundle-forget-all rc=%d\r\n", rc);
+}
+
+/* ---------- Redis-style server (Phase 4 — sidecar) ---------- */
+
+#define REDIS_NS              "scribe_redis"
+#define REDIS_KEY_PROFILE     "profile"
+#define REDIS_KEY_BIND        "bind"
+#define REDIS_KEY_PORT        "port"
+
+static craw_redis_profile_t s_redis_profile = CRAW_REDIS_PROFILE_LAN;
+static craw_redis_config_t  s_redis_cfg     = { .bind = "0.0.0.0", .port = CRAW_REDIS_DEFAULT_PORT };
+static char                 s_redis_self_id[40] = "";   /* "MagNET-biologic-XXXX" */
+static volatile bool        s_redis_hb_running = false;
+
+static void redis_nvs_load(void) {
+    nvs_handle_t h;
+    if (nvs_open(REDIS_NS, NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t profile = (uint8_t)s_redis_profile;
+    nvs_get_u8(h, REDIS_KEY_PROFILE, &profile);
+    s_redis_profile = (craw_redis_profile_t)profile;
+    /* Apply preset first so a stored "custom" override slots cleanly. */
+    craw_redis_profile_apply(s_redis_profile, &s_redis_cfg);
+    if (s_redis_profile == CRAW_REDIS_PROFILE_CUSTOM) {
+        size_t sz = sizeof(s_redis_cfg.bind);
+        nvs_get_str(h, REDIS_KEY_BIND, s_redis_cfg.bind, &sz);
+        uint16_t port = s_redis_cfg.port;
+        nvs_get_u16(h, REDIS_KEY_PORT, &port);
+        s_redis_cfg.port = port;
+    }
+    nvs_close(h);
+}
+
+static void redis_nvs_save_profile(void) {
+    nvs_handle_t h;
+    if (nvs_open(REDIS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, REDIS_KEY_PROFILE, (uint8_t)s_redis_profile);
+    if (s_redis_profile == CRAW_REDIS_PROFILE_CUSTOM) {
+        nvs_set_str(h, REDIS_KEY_BIND, s_redis_cfg.bind);
+        nvs_set_u16(h, REDIS_KEY_PORT, s_redis_cfg.port);
+    }
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+/* Self-id from MAC for the heartbeat KV. */
+static void redis_derive_self_id(void) {
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(s_redis_self_id, sizeof(s_redis_self_id),
+             "MagNET-biologic-%02x%02x", mac[4], mac[5]);
+}
+
+/* Heartbeat: while the server is up and we're joined to a hive, publish
+ * "redis:status" → "<self-id>:<port>:<clients>" every 5s. The Dial reads
+ * this KV to render its small purple/cyan indicator dot. */
+static void redis_hb_task(void *arg) {
+    (void)arg;
+    s_redis_hb_running = true;
+    while (s_redis_hb_running) {
+        if (craw_redis_server_running() && craw_hive_node_session_id()) {
+            craw_redis_stats_t st;
+            craw_redis_server_stats(&st);
+            char val[80];
+            snprintf(val, sizeof(val), "%s:%u:%d",
+                     s_redis_self_id, st.port, st.clients);
+            craw_hive_node_kv_put("redis:status", val);
+        }
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+    vTaskDelete(NULL);
+}
+
+static void redis_publish_status(bool on) {
+    if (!craw_hive_node_session_id()) return;
+    if (on) {
+        craw_redis_stats_t st;
+        craw_redis_server_stats(&st);
+        char val[80];
+        snprintf(val, sizeof(val), "%s:%u:%d",
+                 s_redis_self_id, st.port, st.clients);
+        craw_hive_node_kv_put("redis:status", val);
+    } else {
+        craw_hive_node_kv_put("redis:status", "");
+    }
+}
+
+/* ( -- ) start server using current config */
+static void w_redis_on(void) {
+    int rc = craw_redis_server_start(&s_redis_cfg, craw_redis_storage_nvs());
+    if (rc == 0) {
+        uprintf("\r\n[redis] up on %s:%u\r\n", s_redis_cfg.bind, s_redis_cfg.port);
+        if (strcmp(s_redis_cfg.bind, "127.0.0.1") != 0) {
+            uprint("[WARN] exposed on LAN, no encryption\r\n");
+        }
+        if (!s_redis_hb_running) {
+            xTaskCreate(redis_hb_task, "rds_hb", 3072, NULL, 3, NULL);
+        }
+        redis_publish_status(true);
+    } else if (rc == -1) {
+        uprint("\r\n[redis] already running\r\n");
+    } else {
+        uprintf("\r\n[redis] start failed rc=%d\r\n", rc);
+    }
+}
+
+/* ( -- ) stop server */
+static void w_redis_off(void) {
+    craw_redis_server_stop();
+    s_redis_hb_running = false;   /* heartbeat task self-deletes on next tick */
+    redis_publish_status(false);
+    uprint("\r\n[redis] stopping\r\n");
+}
+
+/* ( -- ) status block */
+static void w_redis_status(void) {
+    craw_redis_stats_t st;
+    craw_redis_server_stats(&st);
+    uprintf("\r\nrunning:   %s\r\n", st.running ? "yes" : "no");
+    uprintf("profile:   %s\r\n",     craw_redis_profile_name(s_redis_profile));
+    uprintf("bind:      %s\r\n",     st.bind);
+    uprintf("port:      %u\r\n",     st.port);
+    uprintf("clients:   %d / %d\r\n", st.clients, CRAW_REDIS_MAX_CLIENTS);
+    uprintf("commands:  %llu\r\n",   (unsigned long long)st.commands_total);
+    uprintf("rx bytes:  %llu\r\n",   (unsigned long long)st.bytes_in);
+    uprintf("tx bytes:  %llu\r\n",   (unsigned long long)st.bytes_out);
+}
+
+/* ( n -- ) apply profile preset; persists. n: 0=local 1=lan 2=quiet 3=custom */
+static void w_redis_profile_set(void) {
+    int n = (int)forth_pop();
+    if (n < 0 || n > 3) { uprint("\r\nbad profile (0..3)\r\n"); return; }
+    s_redis_profile = (craw_redis_profile_t)n;
+    craw_redis_profile_apply(s_redis_profile, &s_redis_cfg);
+    redis_nvs_save_profile();
+    uprintf("\r\nprofile = %s  bind=%s port=%u (apply on next redis-on)\r\n",
+            craw_redis_profile_name(s_redis_profile),
+            s_redis_cfg.bind, s_redis_cfg.port);
+    if (s_redis_profile != CRAW_REDIS_PROFILE_LOCAL) {
+        uprint("[WARN] non-local profile — server will be reachable on the LAN\r\n");
+    }
+}
+
+/* ( -- ) print active profile */
+static void w_redis_profile_get(void) {
+    uprintf("\r\nprofile: %s  bind=%s  port=%u\r\n",
+            craw_redis_profile_name(s_redis_profile),
+            s_redis_cfg.bind, s_redis_cfg.port);
+}
+
+/* ( -- ) interactive: prompt for bind addr → switches to "custom" */
+static void w_redis_bind(void) {
+    char buf[16];
+    read_line("\r\nbind addr (e.g. 192.168.1.50): ", buf, sizeof(buf));
+    if (!buf[0]) { uprint("(unchanged)\r\n"); return; }
+    strncpy(s_redis_cfg.bind, buf, sizeof(s_redis_cfg.bind) - 1);
+    s_redis_cfg.bind[sizeof(s_redis_cfg.bind) - 1] = '\0';
+    s_redis_profile = CRAW_REDIS_PROFILE_CUSTOM;
+    redis_nvs_save_profile();
+    uprintf("bind = %s (profile=custom; apply on next redis-on)\r\n", s_redis_cfg.bind);
+}
+
+/* ( n -- ) set port; switches to "custom" if differs from preset */
+static void w_redis_port(void) {
+    int n = (int)forth_pop();
+    if (n < 1 || n > 65535) { uprint("\r\nbad port\r\n"); return; }
+    s_redis_cfg.port = (uint16_t)n;
+    s_redis_profile = CRAW_REDIS_PROFILE_CUSTOM;
+    redis_nvs_save_profile();
+    uprintf("\r\nport = %u (profile=custom; apply on next redis-on)\r\n", s_redis_cfg.port);
+}
+
+/* ( -- ) FLUSHDB equivalent without going through the wire */
+static void w_redis_flush(void) {
+    craw_redis_storage_t *st = craw_redis_storage_nvs();
+    int rc = st->flush_all();
+    uprintf("\r\nredis-flush rc=%d\r\n", rc);
+}
+
+/* ( c-addr u -- ) interactive: send a command to localhost and pretty-print
+ * the reply. Stack args ignored — we always prompt. (Pure-stack form is
+ * awkward for multi-token commands; the prompt is the friendlier path.) */
+static void redis_print_sink(const char *s, void *ctx) { (void)ctx; uprint(s); }
+
+static void w_redis_do(void) {
+    char cmd[CRAW_REDIS_INLINE_MAX];
+    read_line("\r\nredis> ", cmd, sizeof(cmd));
+    if (!cmd[0]) return;
+    char reply[CRAW_REDIS_REPLY_MAX];
+    int rc = craw_redis_client_exec("127.0.0.1", s_redis_cfg.port, cmd,
+                                    reply, sizeof(reply));
+    if (rc != 0) { uprintf("(client error rc=%d)\r\n", rc); return; }
+    craw_redis_pretty_print(reply, strlen(reply), redis_print_sink, NULL);
+}
+
+/* ----------------------------------------------------------------------
+ *  IMU Forth surface
+ *
+ *  The BMI270 driver + httpd are off by default at boot (same pattern as
+ *  Redis). `imu-on` starts the sample task and brings up the HTTP
+ *  endpoint on :80; `imu-off` reverses both. mDNS service is advertised
+ *  while the IMU is up so dataspace clients can find it on the LAN.
+ * --------------------------------------------------------------------*/
+
+static bool s_imu_mdns_published = false;
+
+static void w_imu_on(void) {
+    /* Init is idempotent — first call brings up I2C + BMI270, later
+     * calls return ESP_OK. We init lazily here (rather than at boot)
+     * so the I2C bus stays asleep until the user opts in. */
+    esp_err_t rc = craw_imu_init(NULL);
+    if (rc != ESP_OK) {
+        uprintf("\r\n[imu] init failed rc=%d\r\n", rc);
+        return;
+    }
+    rc = craw_imu_start();
+    if (rc != ESP_OK) {
+        uprintf("\r\n[imu] start failed rc=%d\r\n", rc);
+        return;
+    }
+    rc = craw_imu_http_start();
+    if (rc != ESP_OK) {
+        /* Sampler is running but the HTTP endpoint isn't reachable —
+         * surface clearly so the user doesn't think the LAN URL works. */
+        uprintf("\r\n[imu] httpd start failed rc=%d (sampler still running)\r\n", rc);
+        return;
+    }
+    if (!s_imu_mdns_published && mdns_published) {
+        mdns_txt_item_t txt[] = {
+            { "path",  "/api/v1/sensor/imu" },
+            { "shape", "imu" },
+            { "ver",   "1" },
+        };
+        mdns_service_add(NULL, "_magnet-imu", "_tcp", 80, txt,
+                         sizeof(txt)/sizeof(txt[0]));
+        s_imu_mdns_published = true;
+    }
+    uprintf("\r\n[imu] up on http://%s.local/api/v1/sensor/imu\r\n", hostname);
+}
+
+static void w_imu_off(void) {
+    craw_imu_http_stop();
+    craw_imu_stop();
+    if (s_imu_mdns_published) {
+        mdns_service_remove("_magnet-imu", "_tcp");
+        s_imu_mdns_published = false;
+    }
+    uprint("\r\n[imu] stopped\r\n");
+}
+
+static void w_imu_status(void) {
+    craw_imu_stats_t st;
+    craw_imu_stats(&st);
+    craw_imu_snapshot_t s;
+    craw_imu_snapshot(&s);
+    uprintf("\r\ninitialized:  %s\r\n", st.initialized ? "yes" : "no");
+    uprintf("sampler:      %s @ %d Hz\r\n",
+            st.running ? "running" : "stopped", st.sample_hz);
+    uprintf("httpd:        %s\r\n", craw_imu_http_running() ? "running" : "stopped");
+    uprintf("samples:      %llu\r\n", (unsigned long long)st.samples);
+    uprintf("yaw zero:     %.3f rad (%.1f°)\r\n",
+            st.yaw_zero_rad, st.yaw_zero_rad * 57.29578f);
+    uprintf("orientation:  roll=%.2f° pitch=%.2f° yaw=%.2f°\r\n",
+            s.roll_rad  * 57.29578f,
+            s.pitch_rad * 57.29578f,
+            s.yaw_rad   * 57.29578f);
+    uprintf("accel (m/s²): x=%.2f y=%.2f z=%.2f\r\n",
+            s.accel_x, s.accel_y, s.accel_z);
+    uprintf("gyro (rad/s): x=%.3f y=%.3f z=%.3f\r\n",
+            s.gyro_x, s.gyro_y, s.gyro_z);
+}
+
+static void w_imu_zero(void) {
+    craw_imu_zero();
+    uprint("\r\n[imu] yaw zeroed\r\n");
+}
+
+/* ( sda scl -- ) Linux-style i2cdetect on the given pins.
+ * Quick recipe for the M5Capsule:
+ *   8 10 imu-scan      → internal bus (BMI270 + RTC)
+ *   13 15 imu-scan     → external Grove bus
+ * Prints a 16x8 grid of responding addresses. Useful when `imu-on`
+ * NACKs and we need to distinguish "wrong pin map" from "wrong
+ * address" from "dead chip". */
+static void w_imu_scan(void) {
+    int scl = (int)forth_pop();
+    int sda = (int)forth_pop();
+    uprintf("\r\nscanning sda=%d scl=%d ...\r\n", sda, scl);
+    esp_err_t rc = craw_imu_bus_scan(sda, scl);
+    if (rc != ESP_OK) {
+        uprintf("[imu-scan] failed rc=%d\r\n", rc);
+    }
+}
+
+static void register_forth_words(void) {
+    forth_register_word("scribe-store",  w_scribe_store);
+    forth_register_word("scribe-recall", w_scribe_recall);
+    forth_register_word("scribe-list",   w_scribe_list);
+    forth_register_word("scribe-erase",  w_scribe_erase);
+    forth_register_word("scribe-count",  w_scribe_count);
+    forth_register_word("prov-status",   w_prov_status);
+    forth_register_word("prov-reset",    w_prov_reset);
+    forth_register_word("hive-status",   w_hive_status);
+    forth_register_word("buzz",          w_buzz);
+    forth_register_word("kv-get",        w_hive_kv_get);
+    forth_register_word("kv-put",        w_hive_kv_put);
+    forth_register_word("bundle-install", w_bundle_install);
+    forth_register_word("bundle-list",   w_bundle_list);
+    forth_register_word("bundle-forget-all", w_bundle_forget_all);
+    forth_register_word("mqtt-broker",       w_mqtt_broker_set);
+    forth_register_word("mqtt-broker?",      w_mqtt_broker_get);
+    forth_register_word("mqtt-pub",          w_mqtt_pub);
+    forth_register_word("bridge-add",        w_bridge_add);
+    forth_register_word("bridge-remove",     w_bridge_remove);
+    forth_register_word("bridge-list",       w_bridge_list);
+    forth_register_word("bridge-period",     w_bridge_period);
+    forth_register_word("bridge-on",         w_bridge_on);
+    forth_register_word("bridge-off",        w_bridge_off);
+    forth_register_word("bridge-status",     w_bridge_status);
+    forth_register_word("redis-on",          w_redis_on);
+    forth_register_word("redis-off",         w_redis_off);
+    forth_register_word("redis-status",      w_redis_status);
+    forth_register_word("redis-profile",     w_redis_profile_get);
+    forth_register_word("redis-profile!",    w_redis_profile_set);
+    forth_register_word("redis-bind",        w_redis_bind);
+    forth_register_word("redis-port",        w_redis_port);
+    forth_register_word("redis-flush",       w_redis_flush);
+    forth_register_word("redis-do",          w_redis_do);
+    forth_register_word("imu-on",            w_imu_on);
+    forth_register_word("imu-off",           w_imu_off);
+    forth_register_word("imu-status",        w_imu_status);
+    forth_register_word("imu-zero",          w_imu_zero);
+    forth_register_word("imu-scan",          w_imu_scan);
+    forth_register_word("buzz-v",            w_buzz_v);
+    forth_register_word("buzz-vol",          w_buzz_vol);
+}
+
+/* ---------- Boot ritual + WiFi-down chirp ----------
+ *
+ * Auto-IMU bringup with a buzzer countdown so the user knows to lay
+ * the device flat. The IMU itself doesn't need 30 seconds to settle —
+ * Madgwick converges in ~1 s and the gyro has no meaningful warmup —
+ * but five 1-Hz pings give the user a clear window to set the
+ * Capsule down without watching for a visual cue.
+ *
+ * Sequence (boot_ritual_task):
+ *   t+0.0  task starts, ~2 s after boot so early logs are out of the way
+ *   t+2.0  first reminder ping (rising pitch as a countdown)
+ *   t+3.0  second ping
+ *   t+4.0  third ping
+ *   t+5.0  fourth ping
+ *   t+6.0  fifth ping
+ *   t+6.5  IMU init + sampler + httpd + (mDNS if WiFi up)
+ *   t+8.0  Madgwick has converged → auto craw_imu_zero
+ *   t+8.2  success chime (two quick pings)
+ *
+ * WiFi-down monitor (wifi_monitor_task):
+ *   - Polls craw_wifi_is_connected() every 10 s.
+ *   - Single chirp (lower pitch, half default volume so it doesn't
+ *     overshadow the IMU boot ritual) when disconnected.
+ *   - Silent while connected — no nagging when things are working.
+ */
+
+/* Forward-shared with the `imu-on`/`imu-off` Forth words above —
+ * `s_imu_mdns_published` is the same file-scope static the user-
+ * triggered path uses. Defining the publish helper down here (next
+ * to the boot ritual that needs it) keeps the wifi-came-up retry
+ * path colocated with the boot ritual it backstops. */
+static void publish_imu_mdns_if_ready(void) {
+    if (s_imu_mdns_published) return;
+    if (!mdns_published)      return;
+    mdns_txt_item_t txt[] = {
+        { "path",  "/api/v1/sensor/imu" },
+        { "shape", "imu" },
+        { "ver",   "1" },
+    };
+    mdns_service_add(NULL, "_magnet-imu", "_tcp", 80, txt,
+                     sizeof(txt)/sizeof(txt[0]));
+    s_imu_mdns_published = true;
+}
+
+static void boot_ritual_task(void *arg) {
+    (void)arg;
+    /* Let the early-boot log spam (BLE prov, NVS migrate, etc.) settle
+     * so the user actually hears the pings instead of missing them
+     * under the log flood. */
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    uprint("\r\n[boot-ritual] 5 pings then IMU on — lay the device flat NOW.\r\n");
+
+    /* Ascending pitch reads as a countdown — the human ear naturally
+     * interprets "rising = building toward something." */
+    const uint16_t pings_hz[5] = { 1200, 1400, 1600, 1800, 2200 };
+    for (int i = 0; i < 5; i++) {
+        buzz(pings_hz[i], 80);                       /* short ping at default vol */
+        vTaskDelay(pdMS_TO_TICKS(920));              /* gap to make a 1-Hz cadence */
+    }
+
+    uprint("[boot-ritual] starting IMU...\r\n");
+    esp_err_t rc = craw_imu_init(NULL);
+    if (rc == ESP_OK) rc = craw_imu_start();
+    if (rc == ESP_OK) rc = craw_imu_http_start();
+
+    if (rc != ESP_OK) {
+        /* Failure tone: three low buzzes, slightly louder so the user
+         * notices the boot didn't complete the auto-IMU step. */
+        for (int i = 0; i < 3; i++) {
+            buzz_v(400, 200, 96);
+            vTaskDelay(pdMS_TO_TICKS(150));
+        }
+        uprintf("[boot-ritual] IMU init failed rc=%d — try `imu-on` manually.\r\n", rc);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    /* Let Madgwick converge — gyro + accel feed the filter for ~1 s
+     * before the orientation is meaningful. After that, snap the
+     * heading datum to zero so the user's "set flat, USB-C forward"
+     * pose reads as HDG 000°. */
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    craw_imu_zero();
+    publish_imu_mdns_if_ready();
+
+    /* Success chime: two quick high pings. */
+    buzz(2400,  60);
+    vTaskDelay(pdMS_TO_TICKS(80));
+    buzz(2800, 100);
+    uprint("[boot-ritual] IMU up. heading zeroed.\r\n");
+
+    vTaskDelete(NULL);
+}
+
+static void wifi_monitor_task(void *arg) {
+    (void)arg;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        if (!craw_wifi_is_connected()) {
+            /* Lower-pitch, half-volume chirp. Distinct from the boot
+             * ritual pings so the user knows what it means without
+             * looking — "WiFi's down" not "IMU did something." */
+            buzz_v(600, 120, 32);
+        } else {
+            /* WiFi came up since the last loss — try to publish the
+             * IMU mDNS service if we missed the window on first boot
+             * (IMU ritual finishes BEFORE WiFi connects on cold start). */
+            publish_imu_mdns_if_ready();
+        }
+    }
+}
+
+/* ---------- app_main ---------- */
+void app_main(void) {
+    console_init();
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    uprint("\r\n\r\n====================================\r\n");
+    uprint(  "  M5Capsule Hive Scribe + Redis (Role 4)\r\n");
+    uprintf( "  ESPIDFORTH %s\r\n", ESPIDFORTH_VERSION_STRING);
+    uprintf( "  MagNET gen %s\r\n", MAGNET_GEN_STR);
+    uprint(  "  Hive scribe + RESP2 sidecar (off by default)\r\n");
+    uprint(  "====================================\r\n");
+
+    buzzer_init();
+    buzz(1200, 50);
+    buzz(1800, 50);   /* boot chirp */
+
+    craw_nvs_init_flash();
+    craw_nvs_migrate_wifi_profiles();
+    mqtt_nvs_load();    /* pick up persisted broker / bridge_on / period / keys */
+    redis_nvs_load();   /* pick up persisted redis profile / bind / port */
+    redis_derive_self_id();
+    craw_wifi_init("MagNET-biologic", on_wifi_event, NULL);
+
+    craw_ble_provision_config_t pcfg = {
+        .name_prefix = "MagNET-biologic",
+        .role        = "scribe",
+    };
+    craw_ble_provision_init(&pcfg, on_prov_event, NULL);
+    uprintf("BLE: %s\r\n", craw_ble_provision_device_name());
+
+    forth_init(FORTH_HEAP_SIZE);
+    register_forth_words();
+    uprintf("Forth ready. Free heap: %lu bytes\r\n",
+            (unsigned long)esp_get_free_heap_size());
+
+    /* Re-install any role bundles persisted from previous boots. Order
+     * matters: forth_init must be done first so bundle source has a
+     * vocabulary to register words into. */
+    craw_role_bundle_init();
+    int reapplied = craw_role_bundle_apply_saved(NODE_CAPS, N_NODE_CAPS);
+    if (reapplied > 0) {
+        uprintf("[bundle] re-applied %d persisted bundle(s) from NVS\r\n",
+                reapplied);
+    }
+
+    xTaskCreate(housekeeping_task, "keep", 6144, NULL, 3, NULL);
+
+    char ssid[33], pass[65];
+    if (craw_nvs_load_wifi_creds(ssid, pass) && ssid[0]) {
+        uprintf("Stored WiFi '%s' — auto-connect\r\n", ssid);
+        craw_ble_provision_set_status(CRAW_BLE_PROV_CONNECTING);
+        craw_wifi_connect(ssid, pass);
+    } else {
+        uprint("No stored WiFi — provision via BLE.\r\n");
+    }
+
+    uprint("\r\nForth commands:\r\n");
+    uprint("  scribe-store / scribe-recall / scribe-list\r\n");
+    uprint("  scribe-erase / scribe-count\r\n");
+    uprint("  prov-status / prov-reset / hive-status\r\n");
+    uprint("  HZ DUR_MS buzz   /   HZ DUR_MS DUTY buzz-v   /   DUTY buzz-vol\r\n");
+    uprint("  imu-on / imu-off / imu-status / imu-zero / imu-scan\r\n");
+    uprint("  redis-on / redis-off / redis-status / redis-do\r\n");
+    uprint("  N redis-profile! (0=local 1=lan 2=quiet 3=custom)\r\n");
+    uprint("  N redis-port  /  redis-bind  /  redis-flush\r\n\r\n");
+
+    /* Boot ritual: 5 reminder pings then auto-IMU. Runs once and
+     * self-deletes — no need to wait for it from here, FreeRTOS
+     * scheduling handles it in parallel with the Forth REPL. */
+    xTaskCreate(boot_ritual_task,  "boot_rit", 4096, NULL, 4, NULL);
+
+    /* WiFi-down chirp: low-pitch ping every 10 s while disconnected.
+     * Long-running — never self-deletes. Low priority since it does
+     * essentially nothing 99 % of the time. */
+    xTaskCreate(wifi_monitor_task, "wifi_mon", 3072, NULL, 2, NULL);
+
+    forth_repl(console_getchar, console_putchar);
+    forth_deinit();
+}

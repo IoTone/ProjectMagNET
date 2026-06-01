@@ -1,0 +1,36 @@
+# Local Wi-Fi secrets (do not commit)
+secrets.py
+scripts/secrets.py
+secrets.json
+scripts/secrets.json
+
+# PlatformIO build artifacts
+.pio/
+.gcc-flags.json
+.clangd
+.pio-home/
+
+# Firmware binaries and maps
+firmware/*.bin
+firmware/*.elf
+firmware/*.map
+
+# VS Code workspace files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+
+# Python cache/venv
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.python-version
+
+# macOS
+.DS_Store
+
+# IDEs
+.idea/
+*.code-workspace

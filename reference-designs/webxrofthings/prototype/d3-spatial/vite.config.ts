@@ -1,0 +1,594 @@
+import { defineConfig } from 'vite';
+import http from 'http';
+import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve as pathResolve } from 'node:path';
+import { createProxyDiag, diagMiddleware } from './server/proxy-diag';
+
+// One collector per device. Both attach to their respective proxy entries
+// in `configure` below, and both get a Connect middleware mount in the plugin.
+//
+// Vitals also gets per-URL value extractors so the diag snapshot reports
+// rolling stats (mean/min/max/p50/p95) on the actual sensor scalars over
+// a 5-minute window — useful for "is the device producing reasonable
+// readings?" without correlating browser logs with serial output.
+const vitalsDiag = createProxyDiag('vitals', {
+  valueExtractors: {
+    // Only count BPM when presence=true; otherwise the device returns 0
+    // and the mean would skew toward zero whenever the chair is empty.
+    '/api/v1/vitals/heart-rate': (j: any) =>
+      ({ bpm: j?.presence && typeof j?.bpm === 'number' && j.bpm > 0 ? j.bpm : undefined }),
+    '/api/v1/vitals/breathing': (j: any) =>
+      ({ rpm: typeof j?.rpm === 'number' && j.rpm > 0 ? j.rpm : undefined }),
+    '/api/v1/vitals/targets': (j: any) => {
+      const out: Record<string, number | undefined> = {
+        target_count: typeof j?.count === 'number' ? j.count : undefined,
+      };
+      // Distance to the nearest target — telemetry-friendly proxy for "is
+      // someone close?". Skip when no targets are present.
+      const ts = Array.isArray(j?.targets) ? j.targets : [];
+      let nearest = Infinity;
+      for (const t of ts) {
+        if (typeof t?.x_m === 'number' && typeof t?.y_m === 'number') {
+          const d = Math.hypot(t.x_m, t.y_m);
+          if (d < nearest) nearest = d;
+        }
+      }
+      if (Number.isFinite(nearest)) out.nearest_m = nearest;
+      return out;
+    },
+    '/api/v1/vitals/presence': (j: any) =>
+      ({ presence: typeof j?.presence === 'boolean' ? (j.presence ? 1 : 0) : undefined }),
+    '/api/v1/vitals/lux': (j: any) =>
+      ({ lux: typeof j?.lux === 'number' ? j.lux : undefined }),
+  },
+  // 5-minute rolling window — long enough to smooth out per-second jitter,
+  // short enough that snapshots reflect "right now" rather than "since boot".
+  valueWindowMs: 5 * 60_000,
+});
+const cameraDiag = createProxyDiag('camera');
+const lightingDiag = createProxyDiag('lighting');
+const boomboxDiag = createProxyDiag('boombox');
+const envDiag = createProxyDiag('env');
+
+/**
+ * Defensive normalizer for *_HOST env vars. http-proxy's URL parser yields
+ * `hostname: null` for a bare IP / hostname (no scheme), and the downstream
+ * `setupOutgoing` then dies with `Cannot read properties of null (reading
+ * 'split')`. Auto-prefix `http://` so `LIGHTING_HOST=10.0.0.144 npm run dev`
+ * Just Works without crashing the dev server.
+ */
+const normalizeHost = (h: string | undefined, fallback: string): string => {
+  const s = (h && h.trim()) || fallback;
+  return /^https?:\/\//.test(s) ? s : `http://${s}`;
+};
+
+/* ─── mDNS device discovery (additive) ────────────────────────────────
+ *
+ * Run `tools/discover-magnet-devices.mjs` once at dev-server startup
+ * to find every MagNET device on the LAN by browsing Bonjour. Each
+ * device's mDNS TXT records (`role=…`, `caps=…`) get mapped onto the
+ * `*_HOST` env-var slots below.
+ *
+ * Precedence per slot:
+ *   1. process.env[X_HOST]  — explicit operator override, ALWAYS WINS.
+ *                              Preserves the long-standing workflow of
+ *                              `IMU_HOST=http://10.0.0.119 npm run dev`
+ *                              and keeps the join-server path stable.
+ *   2. discovered (mDNS)    — automatic fill-in when no env override.
+ *   3. .local fallback      — hardcoded mDNS hostname as last resort.
+ *
+ * Earlier iteration of this block had (discovered > env > fallback) —
+ * "mDNS wins over env." That broke a pinned-IP workflow in the field
+ * (user reported broken DEMO01-04 sign-in after the flip — symptom was
+ * unclear, but reverting to env-first restored it). Keeping
+ * `discovered` strictly additive is the safer default.
+ *
+ * Kill switch: `MAGNET_DISCOVERY=0 npm run dev` skips the scan
+ * entirely if you want a clean baseline.
+ *
+ * Discovery is best-effort — if the script fails, times out, or
+ * returns no devices, the cascade drops to env/fallback exactly as
+ * before. Only macOS is supported for v1 (dns-sd); other platforms
+ * get an empty map. */
+type DiscoveredDevice = {
+  hostname: string;
+  host:     string;
+  ip:       string;
+  port:     number;
+  services: string[];
+  txt:      Record<string, string>;
+};
+
+function discoverHostsSync(): Record<string, string> {
+  if (process.platform !== 'darwin') {
+    /* Linux equivalent (avahi-browse) is out of scope for v1; fall
+     * through to env-var + .local cascade silently rather than warn
+     * on every dev-server start. */
+    return {};
+  }
+  /* Kill switch — `MAGNET_DISCOVERY=0` skips the mDNS scan entirely. */
+  const flag = (process.env.MAGNET_DISCOVERY ?? '').toLowerCase();
+  if (flag === '0' || flag === 'false' || flag === 'no' || flag === 'off') {
+    console.log('[vite] mDNS discovery disabled by MAGNET_DISCOVERY env var');
+    return {};
+  }
+  try {
+    const here   = dirname(fileURLToPath(import.meta.url));
+    const script = pathResolve(here, 'tools/discover-magnet-devices.mjs');
+    const out    = execSync(`node "${script}" --json --timeout 3`, {
+      timeout:  8000,
+      encoding: 'utf8',
+      stdio:    ['ignore', 'pipe', 'pipe'],   // suppress script's stderr
+    });
+    const devs: DiscoveredDevice[] = JSON.parse(out);
+    const map: Record<string, string> = {};
+    /* TXT role + caps disambiguate which device fills which env-var
+     * slot. The Capsule advertises _magnet-imu._tcp ONLY when
+     * `imu-on` has been run — its `caps` TXT picks up "imu" then,
+     * so we key off caps rather than hostname-prefix-only. */
+    for (const d of devs) {
+      const url  = `http://${d.ip}`;
+      const role = (d.txt.role ?? '').toLowerCase();
+      const cap  = (d.txt.caps ?? '').toLowerCase();
+      if (role === 'spy'        || cap.includes('camera'))   map.CAMERA_HOST   = url;
+      if (role === 'boombox'    || cap.includes('speaker'))  map.BOOMBOX_HOST  = url;
+      if (role === 'lighting'   || cap.includes('neopixel') || cap.includes('ws2813'))
+                                                             map.LIGHTING_HOST = url;
+      if (role === 'vitals'     || cap.includes('heart'))    map.VITALS_HOST   = url;
+      if (role === 'env-sensor' || cap.includes('aht')    || cap.includes('environment'))
+                                                             map.ENV_HOST      = url;
+      if (cap.includes('imu')   || d.services.includes('_magnet-imu._tcp'))
+                                                             map.IMU_HOST      = url;
+    }
+    const found = Object.keys(map);
+    if (found.length > 0) {
+      console.log(`[vite] mDNS discovery: ${devs.length} device(s) found, mapped ${found.length} host slot(s) → ${found.join(', ')}`);
+    } else if (devs.length > 0) {
+      console.log(`[vite] mDNS discovery: ${devs.length} device(s) found but none matched a known host slot.`);
+    }
+    return map;
+  } catch (e) {
+    console.warn(`[vite] mDNS discovery skipped: ${(e as Error).message}`);
+    return {};
+  }
+}
+
+const discovered = discoverHostsSync();
+
+/** Pick the best host for a `*_HOST` slot.
+ *  Precedence:
+ *    1. process.env[envKey] — operator override always wins.
+ *    2. discovered (mDNS)   — automatic fill-in for unset env vars.
+ *    3. fallback            — hardcoded `.local` hostname.
+ *  Also logs the chosen target so the startup banner shows exactly
+ *  where each device proxy is pointed — invaluable when a `npm run dev`
+ *  + DEMO sign-in flow misbehaves and you need to triage which proxy
+ *  rule is misdirected. */
+const pickHost = (envKey: string, fallback: string): string => {
+  const fromEnv  = (process.env[envKey] && process.env[envKey]!.trim()) || undefined;
+  const fromMdns = discovered[envKey];
+  const raw      = fromEnv ?? fromMdns ?? fallback;
+  const source   = fromEnv ? 'env' : fromMdns ? 'mdns' : 'fallback';
+  const url      = normalizeHost(raw, fallback);
+  console.log(`[vite]   ${envKey.padEnd(14)} → ${url}  (${source})`);
+  return url;
+};
+
+const cameraAgent = new http.Agent({ family: 4, keepAlive: false, timeout: 30000 });
+
+/**
+ * Lighting device agent — XIAO ESP32-C3 running esp_http_server.
+ * Same shape as the vitals agent: single socket, no keep-alive, IPv4-only.
+ * The C3 has even less RAM than the C6 and tolerates concurrent fetches
+ * even worse. Funnel the UC2 actuator panel through one connection.
+ */
+const lightingAgent = new http.Agent({
+  family: 4,
+  keepAlive: false,
+  maxSockets: 1,
+  timeout: 15000,
+});
+
+/**
+ * Boombox device agent — XIAO ESP32-S3 running esp_http_server.
+ * Same single-socket, no-keep-alive, IPv4 pattern as the other ESP-IDF
+ * device agents — the speaker endpoint is invoked one chime at a time
+ * from the UC2 panel and never needs concurrency.
+ */
+const boomboxAgent = new http.Agent({
+  family: 4,
+  keepAlive: false,
+  maxSockets: 1,
+  timeout: 15000,
+});
+
+/**
+ * Environment-sensor (AHT20) device agent — M5 Atom Echo + Hex.
+ * Same single-socket pattern. Polled cadence from the dataspace is low
+ * (sensor task on the device samples at 0.5 Hz; UI panel reads at 1–5 s).
+ */
+const envAgent = new http.Agent({
+  family: 4,
+  keepAlive: false,
+  maxSockets: 1,
+  timeout: 15000,
+});
+
+/**
+ * IMU device agent — M5Capsule (ESP32-S3) running esp_http_server.
+ *
+ * Same single-socket / no-keep-alive / IPv4 pattern as the other ESP-IDF
+ * device agents. The Capsule serves at 50 Hz internally but the cell
+ * polls at 5 Hz (0.2 s `refreshInterval` in the UC4 manifest), so a
+ * single socket has plenty of headroom even at sustained load.
+ */
+const imuAgent = new http.Agent({
+  family: 4,
+  keepAlive: false,
+  maxSockets: 1,
+  timeout: 15000,
+});
+const imuDiag = createProxyDiag('imu');
+
+/**
+ * Vitals device agent — XIAO ESP32-C6 running esp_http_server.
+ *
+ * `maxSockets: 1` is the load-bearing setting. Without it, four cells
+ * (HR, BR, phases, targets) can have outbound fetches in flight to the
+ * device simultaneously, which overwhelms the C6's tiny TCP socket pool
+ * and surfaces as `httpd_sock_err: error in send : 11` (EAGAIN — kernel
+ * send buffer full) at roughly the cadence of the most-frequent cell.
+ * Worst case the WiFi task starves IDLE on CPU 0 and the watchdog fires.
+ *
+ * Funneling everything through a single proxy socket guarantees the
+ * device only ever sees one concurrent request, regardless of how many
+ * cells are polling. `keepAlive: false` matches the camera lesson — small
+ * ESP-IDF TCP stacks tend to wedge on the second request of a kept-alive
+ * session. `family: 4` avoids the IPv6 fallback when DNS resolves both.
+ */
+const vitalsAgent = new http.Agent({
+  family: 4,
+  keepAlive: false,
+  maxSockets: 1,
+  timeout: 15000,
+});
+
+export default defineConfig({
+  server: {
+    host: true,
+    https: false,
+    allowedHosts: [
+      '.trycloudflare.com',
+      '.ngrok-free.app',
+      '.ngrok.app',
+      '.ngrok.io',
+      '.loca.lt',
+    ],
+    proxy: {
+      // XIAO_ESP32C3_IOT_LIGHTING — UC2 neopixel actuator.
+      // The device's mDNS hostname is MAC-suffixed to match its BLE name
+      // (e.g. magnet-lighting-b7c0.local). The default below probably will
+      // NOT resolve on a multi-device LAN — set LIGHTING_HOST explicitly:
+      //   LIGHTING_HOST=http://magnet-lighting-b7c0.local  npm run dev
+      //   LIGHTING_HOST=http://192.168.1.42                npm run dev
+      // Must appear BEFORE the generic '/api/v1' entry so this more-specific
+      // prefix matches first. The device exposes the URL verbatim
+      // (/api/v1/actuator/neopixel) so no rewrite. The other actuator paths
+      // (light, thermostat, speaker) fall through to the mock-join-server.
+      '/api/v1/actuator/neopixel': {
+        target: pickHost('LIGHTING_HOST', 'http://magnet-lighting.local'),
+        changeOrigin: true,
+        agent: lightingAgent,
+        configure: (proxy: any) => {
+          lightingDiag.attachToProxy(proxy);
+          proxy.on('proxyReq', (proxyReq: any) => {
+            // Same race guard + header strip as the vitals/camera proxies —
+            // ESP-IDF httpd's small header buffer can't hold full browser
+            // headers; CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024 helps but stripping
+            // the noisy headers is belt-and-braces.
+            if (proxyReq.headersSent) return;
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
+      } as any,
+      // M5Capsule_Hive_Scribe_Redis — UC4 airplane IMU (BMI270, no magnetometer).
+      // The Capsule firmware exposes /api/v1/sensor/imu directly (Forth
+      // `imu-on` must be called once to bring up the sampler + httpd).
+      // mDNS hostname is magnet-scribe-<MAC4>.local — set IMU_HOST to the
+      // device IP or hostname:
+      //   IMU_HOST=http://magnet-scribe-a1b2.local  npm run dev
+      //   IMU_HOST=http://10.0.0.77                  npm run dev
+      // Must appear BEFORE the generic '/api/v1/sensor' entry — that rule
+      // catches /api/v1/sensor/imu otherwise and routes the IMU poll at
+      // the UC2 environment sensor (Atom Echo), which doesn't have this
+      // endpoint and silently returns nothing → UC4's altitude/airspeed/
+      // heading labels stay at '---'. See [project_uc4_capsule_imu] memo.
+      '/api/v1/sensor/imu': {
+        target: pickHost('IMU_HOST', 'http://magnet-scribe.local'),
+        changeOrigin: true,
+        agent: imuAgent,
+        configure: (proxy: any) => {
+          imuDiag.attachToProxy(proxy);
+          proxy.on('proxyReq', (proxyReq: any) => {
+            if (proxyReq.headersSent) return;
+            /* Extended drop list vs the other proxies — when the
+             * dataspace is served behind a cloudflared tunnel, the
+             * tunnel injects Cf-* / X-Forwarded-* / Cdn-Loop headers
+             * on top of the usual browser noise. The Capsule's
+             * esp_http_server (CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
+             * after sdkconfig bump) survives them, but stripping
+             * them here keeps a re-flash optional and matches what
+             * the firmware actually needs. */
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+              'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor',
+              'cf-warp-tag-id', 'cf-ew-via', 'cf-worker',
+              'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto',
+              'x-forwarded-port', 'x-real-ip', 'cdn-loop',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
+      } as any,
+      // Simulated UC2 env-hub sensors (aqi / barometer / pollen). These are
+      // served by mock-join-server on localhost:3001, NOT by the real Atom
+      // Echo at ENV_HOST. Without these explicit carve-outs the generic
+      // '/api/v1/sensor' rule below routes them at the Echo, whose firmware
+      // doesn't recognise the path and RST-resets the connection — surfaces
+      // as `Error: read ECONNRESET` + `[vite] http proxy error` in the dev
+      // console once per refresh cycle, per offline sensor. Same JOIN_SERVER_PORT
+      // override as the '/api/v1' catch-all below so the two stay aligned.
+      // MUST appear BEFORE '/api/v1/sensor'.
+      '/api/v1/sensor/aqi': {
+        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        changeOrigin: true,
+      },
+      '/api/v1/sensor/barometer': {
+        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        changeOrigin: true,
+      },
+      '/api/v1/sensor/pollen': {
+        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        changeOrigin: true,
+      },
+      // M5Atom_Echo_Hex_Hive_ATH20 — UC2 environment sensor (temp + humidity).
+      // The AHT20 firmware exposes /api/v1/sensor/{environment,temperature,
+      // humidity}. Set ENV_HOST to the device IP (mDNS is published via the
+      // hive flow, post-SNTP; IP is the reliable default).
+      //   ENV_HOST=http://10.0.0.55  npm run dev
+      // Must appear BEFORE the generic '/api/v1' entry.
+      '/api/v1/sensor': {
+        target: pickHost('ENV_HOST', 'http://magnet-atom-echo.local'),
+        changeOrigin: true,
+        agent: envAgent,
+        configure: (proxy: any) => {
+          envDiag.attachToProxy(proxy);
+          /* Snapshot listeners attached so far (just envDiag's) before
+           * Vite attaches its own logger. Used by the emit-override below
+           * to keep diag counting transient errors after we suppress them. */
+          const earlyErrorListeners = proxy.listeners('error').slice();
+
+          proxy.on('proxyReq', (proxyReq: any) => {
+            if (proxyReq.headersSent) return;
+            /* Extended drop list — same family as the
+             * [project_esp_httpd_cloudflared_431] memo but the trigger this
+             * time was the browser cache. The Atom Echo's
+             * CONFIG_HTTPD_MAX_REQ_HDR_LEN is already 1024, yet
+             * /humidity/history was failing 17/17 with HTTP 431 (verified
+             * via /__diag/env on 2026-05-25) — total request headers were
+             * exceeding 1024. The culprit: a stale If-None-Match etag from
+             * a previous Vite session, stacked on the usual browser noise.
+             * Strip all cache validators so the chip only ever sees a
+             * clean GET; also pre-emptively drop cf-* and x-forwarded-*
+             * in case env_HOST is ever exposed behind a tunnel (same set
+             * the imu / lighting proxies already strip). */
+            /* Aggressive strip — the Atom Echo is a tiny LAN-only IoT chip
+             * that cares about exactly two pieces of HTTP semantics: the
+             * URI and the method. Every other header is dead weight that
+             * gets it closer to the 1024-byte CONFIG_HTTPD_MAX_REQ_HDR_LEN
+             * cliff. After the 2026-05-25 incident where /humidity/history
+             * returned 100% 431 from browser (but 100% 200 from curl with
+             * identical-looking bytes), we landed on this minimal-strip
+             * policy: drop everything except Host. Auth in particular is
+             * useless (the device doesn't validate), but the full list
+             * removes ~530 bytes of request and eliminates the entire
+             * class of "browser TCP state interacts weirdly with chip
+             * httpd" failures by leaving no headers around to confuse it. */
+            const drop = [
+              'cookie', 'accept', 'accept-language', 'accept-encoding',
+              'referer', 'origin', 'cache-control', 'pragma',
+              'if-none-match', 'if-modified-since', 'if-match',
+              'if-unmodified-since', 'if-range',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+              'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor',
+              'cf-warp-tag-id', 'cf-ew-via', 'cf-worker',
+              'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto',
+              'x-forwarded-port', 'x-real-ip', 'cdn-loop',
+              'authorization', 'user-agent',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+            /* Force the device to close the TCP connection after each
+             * response. The browser sets Connection: keep-alive by default
+             * and that gets forwarded through the proxy; the chip then
+             * tries to honour it, leaving stale parser state when the next
+             * request arrives. Setting Connection: close (and matching
+             * envAgent's keepAlive:false) makes every request a clean
+             * one-shot TCP. */
+            proxyReq.setHeader('connection', 'close');
+          });
+
+          /* Suppress noisy `[vite] http proxy error: ... EPIPE/ECONNRESET`
+           * logs for transient proxy-side socket-reuse races against the
+           * Atom Echo's esp_http_server. Verified 20/20 200s direct-curl
+           * on /humidity/history (2026-05-25) — the device serves reliably;
+           * the EPIPE happens between Vite's Node http.Agent and the chip,
+           * not on the device. With 5-s polls these were firing ~5-10% of
+           * the time and drowning real-device errors in spam.
+           *
+           * Strategy: override proxy.emit('error') to detect these specific
+           * codes, end the client response cleanly with 504, and notify
+           * proxy-diag (so the counter still reflects the failure) — then
+           * return without re-emitting, so Vite's own error listener (which
+           * gets attached AFTER our configure() runs) never sees them.
+           *
+           * Real errors (other codes) emit normally and reach Vite's logger
+           * unchanged. */
+          const origEmit = proxy.emit.bind(proxy);
+          proxy.emit = function (event: string, ...args: any[]) {
+            if (event === 'error') {
+              const err = args[0] as NodeJS.ErrnoException | undefined;
+              if (err && (err.code === 'EPIPE' || err.code === 'ECONNRESET')) {
+                /* Hand the error to diag first so per-mark health counters
+                 * still see it (otherwise the OFFLINE-SENSORS HUD would
+                 * miss real device flakes during a noisy stretch). */
+                for (const l of earlyErrorListeners) {
+                  try { (l as (...a: any[]) => void)(...args); } catch { /* ignore */ }
+                }
+                /* Close the client response so the browser sees a clean
+                 * transient (504) rather than a stalled fetch. */
+                const res = args[2];
+                if (res && !res.headersSent && !res.writableEnded) {
+                  try { res.writeHead(504); res.end(); } catch { /* ignore */ }
+                }
+                return true;   /* suppress emit — Vite's listener never fires */
+              }
+            }
+            return origEmit(event, ...args);
+          };
+        },
+      } as any,
+      // MagNET_ReSpeaker_Boombox — UC2 speaker actuator (chime/doorbell).
+      // The boombox firmware exposes /api/v1/actuator/speaker/play directly,
+      // matching the in-XR panel's existing POST. mDNS hostname is
+      // magnet-boombox-<MAC4>.local but it's published from the hive flow
+      // (post-SNTP); set BOOMBOX_HOST to the IP for reliable bring-up.
+      //   BOOMBOX_HOST=http://10.0.0.55  npm run dev
+      // Must appear BEFORE the generic '/api/v1' entry.
+      '/api/v1/actuator/speaker': {
+        target: pickHost('BOOMBOX_HOST', 'http://magnet-boombox.local'),
+        changeOrigin: true,
+        agent: boomboxAgent,
+        configure: (proxy: any) => {
+          boomboxDiag.attachToProxy(proxy);
+          proxy.on('proxyReq', (proxyReq: any) => {
+            if (proxyReq.headersSent) return;
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
+      } as any,
+      // MagNET Vitals device — UC3 personal-health dataspace.
+      // Override VITALS_HOST in your shell when the device IP changes:
+      //   VITALS_HOST=http://192.168.1.42 npm run dev
+      // Must appear BEFORE the generic '/api/v1' entry so the more-specific
+      // prefix matches first. Strips the prefix so /api/v1/vitals/heart-rate
+      // → /heart-rate on the device. Strips browser headers ESP-IDF's
+      // esp_http_server's default 512-byte header buffer can't hold (cookies,
+      // sec-ch-*, accept-language, referer) — same pattern as the camera proxy.
+      '/api/v1/vitals': {
+        target: pickHost('VITALS_HOST', 'http://magnet-vitals.local'),
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/api\/v1\/vitals/, ''),
+        agent: vitalsAgent,
+        configure: (proxy: any) => {
+          vitalsDiag.attachToProxy(proxy);
+          proxy.on('proxyReq', (proxyReq: any) => {
+            // Race guard: with maxSockets:1 + keepAlive:false, the proxyReq
+            // event can fire on a ClientRequest whose headers already flushed
+            // (especially when http-proxy retries after the device errors).
+            // Calling removeHeader after headersSent throws ERR_HTTP_HEADERS_SENT
+            // and crashes Vite. Skip the strip in that window — the request
+            // is already on the wire so dropping headers wouldn't help anyway.
+            if (proxyReq.headersSent) return;
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
+      } as any,
+      '/api/v1': {
+        /* Port can be overridden via JOIN_SERVER_PORT to sidestep a
+         * collision with an unrelated app on 3001. Run mock-join-server
+         * with the same env var and the two stay aligned. */
+        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        changeOrigin: true,
+      },
+      // ESP32-CAM proxy. Override the host in your shell when DHCP shifts:
+      //   CAMERA_HOST=http://192.168.1.55  npm run dev
+      //   CAMERA_HOST=http://magnet-cam-8610.local  npm run dev
+      // - rewrite drops the `/camera` prefix so /camera/capture → /capture on the device
+      // - cameraAgent forces IPv4 + no keep-alive (the ESP32-CAM's tiny TCP stack
+      //   gives ECONNRESET on the second request of a keep-alive session and
+      //   sometimes resolves over IPv6 with no listener)
+      // - configure/proxyReq drops browser headers the camera's 512-byte header
+      //   buffer can't hold; same pattern as /api/v1/vitals above
+      '/camera': {
+        target: pickHost('CAMERA_HOST', 'http://magnet-cam-8610.local'),
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/camera/, ''),
+        agent: cameraAgent,
+        configure: (proxy: any) => {
+          cameraDiag.attachToProxy(proxy);
+          proxy.on('proxyReq', (proxyReq: any) => {
+            // Same race guard as the vitals proxy — see the long-form note above.
+            if (proxyReq.headersSent) return;
+            const drop = [
+              'cookie', 'accept-language', 'referer', 'origin',
+              'cache-control', 'pragma',
+              'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+              'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+              'upgrade-insecure-requests',
+            ];
+            for (const h of drop) proxyReq.removeHeader(h);
+          });
+        },
+      } as any,
+    },
+  },
+  build: {
+    target: 'es2022',
+    sourcemap: true,
+  },
+  plugins: [
+    {
+      // Diagnostic endpoints — observe what the proxy sees, no firmware needed.
+      // GET  /__diag/vitals          → JSON snapshot of recent traffic to /api/v1/vitals/*
+      // POST /__diag/vitals/reset    → clear counters
+      // (Same for /__diag/camera against the /camera proxy.)
+      // Mount path is stripped by Connect, so the middleware sees req.url='/' or '/reset'.
+      name: 'proxy-diag',
+      configureServer(server) {
+        server.middlewares.use('/__diag/vitals', diagMiddleware(vitalsDiag));
+        server.middlewares.use('/__diag/camera', diagMiddleware(cameraDiag));
+        server.middlewares.use('/__diag/lighting', diagMiddleware(lightingDiag));
+        server.middlewares.use('/__diag/boombox', diagMiddleware(boomboxDiag));
+        server.middlewares.use('/__diag/env', diagMiddleware(envDiag));
+      },
+    },
+  ],
+});

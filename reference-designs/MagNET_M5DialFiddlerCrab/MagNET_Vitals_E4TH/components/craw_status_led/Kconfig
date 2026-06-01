@@ -1,0 +1,11 @@
+menu "MagNET Vitals — Status LED"
+
+config CRAW_LED_GPIO
+    int "GPIO for the WS2812 status LED"
+    default 1
+    help
+        GPIO connected to the kit's onboard WS2812 (single addressable RGB
+        LED). Default 1 matches Seeed's LightRGB example for the XIAO
+        ESP32-C6 mmWave kit (`pixelPin = D1` → GPIO 1).
+
+endmenu

@@ -1,0 +1,757 @@
+{
+  "generatedAt": "2026-05-12T15:52:24.148Z",
+  "shots": [
+    {
+      "id": "m11-overview",
+      "milestone": "M1.1",
+      "title": "All marks · overview",
+      "caption": "line · bar · scatter · arc",
+      "file": "shots/m11-overview.png",
+      "ts": "2026-05-12T15:50:45.509Z"
+    },
+    {
+      "id": "m11-angle",
+      "milestone": "M1.1",
+      "title": "All marks · 3/4 angle",
+      "caption": "3D perspective confirms extruded geometry",
+      "file": "shots/m11-angle.png",
+      "ts": "2026-05-12T15:50:47.779Z"
+    },
+    {
+      "id": "m11-line",
+      "milestone": "M1.1",
+      "title": "Closeup · line (HR ribbon)",
+      "caption": "TubeGeometry along CatmullRomCurve3, d3-scaleTime on x",
+      "file": "shots/m11-line.png",
+      "ts": "2026-05-12T15:50:48.909Z"
+    },
+    {
+      "id": "m11-bar",
+      "milestone": "M1.1",
+      "title": "Closeup · bar (room temp)",
+      "caption": "InstancedMesh of boxes, 12 samples",
+      "file": "shots/m11-bar.png",
+      "ts": "2026-05-12T15:50:49.696Z"
+    },
+    {
+      "id": "m11-scatter",
+      "milestone": "M1.1",
+      "title": "Closeup · scatter (poster points)",
+      "caption": "InstancedMesh of spheres, 180 instances",
+      "file": "shots/m11-scatter.png",
+      "ts": "2026-05-12T15:50:50.539Z"
+    },
+    {
+      "id": "m11-arc",
+      "milestone": "M1.1",
+      "title": "Closeup · arc (breadcrumb)",
+      "caption": "TubeGeometry arc — TBOC breadcrumb primitive",
+      "file": "shots/m11-arc.png",
+      "ts": "2026-05-12T15:50:51.599Z"
+    },
+    {
+      "id": "m2-hover-line",
+      "milestone": "M2",
+      "title": "Hover · line",
+      "caption": "Dramatic feedback: scale 1.05, emissive bump, outline",
+      "file": "shots/m2-hover-line.png",
+      "ts": "2026-05-12T15:50:52.793Z"
+    },
+    {
+      "id": "m2-hover-bar",
+      "milestone": "M2",
+      "title": "Hover · bar",
+      "caption": "Same feedback pattern across mark types",
+      "file": "shots/m2-hover-bar.png",
+      "ts": "2026-05-12T15:50:53.709Z"
+    },
+    {
+      "id": "m2-hover-scatter",
+      "milestone": "M2",
+      "title": "Hover · scatter",
+      "caption": "Outline visible at desktop resolution, legible through passthrough",
+      "file": "shots/m2-hover-scatter.png",
+      "ts": "2026-05-12T15:50:54.476Z"
+    },
+    {
+      "id": "m2-hover-arc",
+      "milestone": "M2",
+      "title": "Hover · arc",
+      "caption": "Breadcrumb arc highlighted",
+      "file": "shots/m2-hover-arc.png",
+      "ts": "2026-05-12T15:50:55.301Z"
+    },
+    {
+      "id": "m3-inspector-line",
+      "milestone": "M3",
+      "title": "Inspector · line",
+      "caption": "ThreeMeshUI.Block panel with troika text, placed adjacent to hovered mark",
+      "file": "shots/m3-inspector-line.png",
+      "ts": "2026-05-12T15:50:56.195Z"
+    },
+    {
+      "id": "m3-inspector-bar",
+      "milestone": "M3",
+      "title": "Inspector · bar",
+      "caption": "Same panel template, different content per mark",
+      "file": "shots/m3-inspector-bar.png",
+      "ts": "2026-05-12T15:50:57.028Z"
+    },
+    {
+      "id": "m3-inspector-scatter",
+      "milestone": "M3",
+      "title": "Inspector · scatter",
+      "caption": "Inspector reads UC3 poster dataspace manifest values",
+      "file": "shots/m3-inspector-scatter.png",
+      "ts": "2026-05-12T15:50:57.875Z"
+    },
+    {
+      "id": "m3-inspector-arc",
+      "milestone": "M3",
+      "title": "Inspector · arc + breadcrumb",
+      "caption": "TBOC breadcrumb arc with chapter trail readout",
+      "file": "shots/m3-inspector-arc.png",
+      "ts": "2026-05-12T15:50:58.689Z"
+    },
+    {
+      "id": "m3-overview",
+      "milestone": "M3",
+      "title": "M3 overview · inspector floating near line",
+      "caption": "Shows spatial relationship: chart left, inspector right. Spatial audio: PositionalAudio at each mark (not audible in screenshot).",
+      "file": "shots/m3-overview.png",
+      "ts": "2026-05-12T15:50:59.597Z"
+    },
+    {
+      "id": "m31-placement-bar",
+      "milestone": "M3.1",
+      "title": "Inspector placement · bar (auto flip left)",
+      "caption": "placeNear auto-selects side with clearance — bar is on the right half, card flips to the left",
+      "file": "shots/m31-placement-bar.png",
+      "ts": "2026-05-12T15:51:00.430Z"
+    },
+    {
+      "id": "m31-placement-line",
+      "milestone": "M3.1",
+      "title": "Inspector placement · line (auto right)",
+      "caption": "line is on the left half, card auto-places to the right",
+      "file": "shots/m31-placement-line.png",
+      "ts": "2026-05-12T15:51:01.251Z"
+    },
+    {
+      "id": "m4-brush-line",
+      "milestone": "M4",
+      "title": "Brush · line (middle 40%)",
+      "caption": "Translucent cyan selection rectangle + count readout in inspector",
+      "file": "shots/m4-brush-line.png",
+      "ts": "2026-05-12T15:51:02.474Z"
+    },
+    {
+      "id": "m4-brush-bar",
+      "milestone": "M4",
+      "title": "Brush · bar (last 30%)",
+      "caption": "Same brush primitive works across mark types",
+      "file": "shots/m4-brush-bar.png",
+      "ts": "2026-05-12T15:51:03.463Z"
+    },
+    {
+      "id": "m4-brush-scatter",
+      "milestone": "M4",
+      "title": "Brush · scatter (left half)",
+      "caption": "Point-in-range filter over InstancedMesh",
+      "file": "shots/m4-brush-scatter.png",
+      "ts": "2026-05-12T15:51:04.559Z"
+    },
+    {
+      "id": "m4-brush-overview",
+      "milestone": "M4",
+      "title": "Brush overview · two marks selected",
+      "caption": "Inspector shows last-brushed count; chart retains selection",
+      "file": "shots/m4-brush-overview.png",
+      "ts": "2026-05-12T15:51:05.353Z"
+    },
+    {
+      "id": "m4a-select-bar",
+      "milestone": "M4.1",
+      "title": "Trigger = activate · bar selected",
+      "caption": "Trigger toggles a latched \"selected\" state. Outline + inspector pin even when you look away. Trigger again to release.",
+      "file": "shots/m4a-select-bar.png",
+      "ts": "2026-05-12T15:51:06.615Z"
+    },
+    {
+      "id": "m5-drag-start",
+      "milestone": "M5",
+      "title": "Drag brush · start",
+      "caption": "Real pointer down on line chart; brush rectangle appears",
+      "file": "shots/m5-drag-start.png",
+      "ts": "2026-05-12T15:51:07.964Z"
+    },
+    {
+      "id": "m5-drag-mid",
+      "milestone": "M5",
+      "title": "Drag brush · mid-drag",
+      "caption": "Rubberband widens as pointer moves right",
+      "file": "shots/m5-drag-mid.png",
+      "ts": "2026-05-12T15:51:11.106Z"
+    },
+    {
+      "id": "m5-drag-end",
+      "milestone": "M5",
+      "title": "Drag brush · released",
+      "caption": "Selection persists; inspector shows sample count",
+      "file": "shots/m5-drag-end.png",
+      "ts": "2026-05-12T15:51:13.816Z"
+    },
+    {
+      "id": "m6-ambient-on",
+      "milestone": "M6",
+      "title": "Ambient bed · ON",
+      "caption": "Omnitone FOA renderer initialized with a procedural 4-channel buffer. Rotation matrix updated per frame.",
+      "file": "shots/m6-ambient-on.png",
+      "ts": "2026-05-12T15:51:14.662Z"
+    },
+    {
+      "id": "m6-ambient-off",
+      "milestone": "M6",
+      "title": "Ambient bed · off",
+      "caption": "Baseline state — bed not started; user must opt in",
+      "file": "shots/m6-ambient-off.png",
+      "ts": "2026-05-12T15:51:15.687Z"
+    },
+    {
+      "id": "m7-focus-uc1",
+      "milestone": "M7",
+      "title": "Dataspace focus · UC1 (wrist)",
+      "caption": "line mark stays bright; room + poster marks dim (0.25 opacity, 0.85 scale)",
+      "file": "shots/m7-focus-uc1.png",
+      "ts": "2026-05-12T15:51:16.893Z"
+    },
+    {
+      "id": "m7-focus-uc2",
+      "milestone": "M7",
+      "title": "Dataspace focus · UC2 (room)",
+      "caption": "bar mark active; wrist and poster dim",
+      "file": "shots/m7-focus-uc2.png",
+      "ts": "2026-05-12T15:51:17.888Z"
+    },
+    {
+      "id": "m7-focus-uc3",
+      "milestone": "M7",
+      "title": "Dataspace focus · UC3 (poster)",
+      "caption": "scatter + arc both belong to UC3 and stay bright together",
+      "file": "shots/m7-focus-uc3.png",
+      "ts": "2026-05-12T15:51:18.947Z"
+    },
+    {
+      "id": "m7-focus-all",
+      "milestone": "M7",
+      "title": "Dataspace focus · all (null)",
+      "caption": "Clearing focus returns every mark to full brightness",
+      "file": "shots/m7-focus-all.png",
+      "ts": "2026-05-12T15:51:19.834Z"
+    },
+    {
+      "id": "m8-gallery-overview",
+      "milestone": "M8",
+      "title": "Viz gallery · overview",
+      "caption": "6 new marks from §9: tree (radial), treemap (extruded), sunburst (stacked), circular packing (spheres), force (3D physics), ridgeline (depth-offset)",
+      "file": "shots/m8-gallery-overview.png",
+      "ts": "2026-05-12T15:51:22.436Z"
+    },
+    {
+      "id": "m8-gallery-angle",
+      "milestone": "M8",
+      "title": "Viz gallery · 3/4 angle",
+      "caption": "Perspective confirms every mark has real z-depth",
+      "file": "shots/m8-gallery-angle.png",
+      "ts": "2026-05-12T15:51:23.404Z"
+    },
+    {
+      "id": "m9-tree-radial",
+      "milestone": "M9",
+      "title": "Tree · radial (§9.1)",
+      "caption": "d3-cluster layout remapped to polar; InstancedMesh spheres + LineSegments edges",
+      "file": "shots/m9-tree-radial.png",
+      "ts": "2026-05-12T15:51:24.251Z"
+    },
+    {
+      "id": "m9-treemap",
+      "milestone": "M9",
+      "title": "Treemap · extruded (§9.2)",
+      "caption": "d3-treemap layout; extrusion height = value (second quantity)",
+      "file": "shots/m9-treemap.png",
+      "ts": "2026-05-12T15:51:25.013Z"
+    },
+    {
+      "id": "m9-sunburst",
+      "milestone": "M9",
+      "title": "Sunburst · stacked discs (§9.5)",
+      "caption": "d3-partition with polar remap; one disc per hierarchy level, +z per level",
+      "file": "shots/m9-sunburst.png",
+      "ts": "2026-05-12T15:51:25.720Z"
+    },
+    {
+      "id": "m10-pack",
+      "milestone": "M10",
+      "title": "Circular packing · nested spheres (§9.9 ★)",
+      "caption": "d3-pack layout; volume encodes value, nesting encodes hierarchy",
+      "file": "shots/m10-pack.png",
+      "ts": "2026-05-12T15:51:26.665Z"
+    },
+    {
+      "id": "m10-force",
+      "milestone": "M10",
+      "title": "Force-directed graph · 3D physics (§9.6)",
+      "caption": "d3-force-3d simulation settled for 200 ticks; nodes and links in full 3D",
+      "file": "shots/m10-force.png",
+      "ts": "2026-05-12T15:51:27.655Z"
+    },
+    {
+      "id": "m10-ridgeline",
+      "milestone": "M10",
+      "title": "Ridgeline · depth-offset (§9.9 ★)",
+      "caption": "6 density rows offset in z instead of y — a mountain range in front of the reader",
+      "file": "shots/m10-ridgeline.png",
+      "ts": "2026-05-12T15:51:28.530Z"
+    },
+    {
+      "id": "m11-gallery-top",
+      "milestone": "M11",
+      "title": "Viz gallery · top-down",
+      "caption": "All six marks from above; treemap and packing read as city footprints",
+      "file": "shots/m11-gallery-top.png",
+      "ts": "2026-05-12T15:51:29.212Z"
+    },
+    {
+      "id": "m11-gallery-wide",
+      "milestone": "M11",
+      "title": "Viz gallery · wide context",
+      "caption": "Reader at ~2m; full gallery fits in frame with surrounding grid",
+      "file": "shots/m11-gallery-wide.png",
+      "ts": "2026-05-12T15:51:30.261Z"
+    },
+    {
+      "id": "m12-force-pre",
+      "milestone": "M12",
+      "title": "Force graph · before interaction",
+      "caption": "Settled baseline before any node is touched",
+      "file": "shots/m12-force-pre.png",
+      "ts": "2026-05-12T15:51:30.968Z"
+    },
+    {
+      "id": "m12-force-hover",
+      "milestone": "M12",
+      "title": "Force graph · hover on node 3",
+      "caption": "Shared halo + billboarded label appear at hovered node; physics keeps running",
+      "file": "shots/m12-force-hover.png",
+      "ts": "2026-05-12T15:51:31.678Z"
+    },
+    {
+      "id": "m12-force-hover2",
+      "milestone": "M12",
+      "title": "Force graph · hover on node 14",
+      "caption": "Same halo + label primitive re-parents to a different node",
+      "file": "shots/m12-force-hover2.png",
+      "ts": "2026-05-12T15:51:32.348Z"
+    },
+    {
+      "id": "m12-force-drag-up",
+      "milestone": "M12",
+      "title": "Force graph · drag node up",
+      "caption": "Node pinned with fx/fy/fz; surrounding graph relaxes via physics",
+      "file": "shots/m12-force-drag-up.png",
+      "ts": "2026-05-12T15:51:33.416Z"
+    },
+    {
+      "id": "m12-force-drag-out",
+      "milestone": "M12",
+      "title": "Force graph · drag node toward reader",
+      "caption": "Pull a node out of the cluster; edges tension visibly",
+      "file": "shots/m12-force-drag-out.png",
+      "ts": "2026-05-12T15:51:34.493Z"
+    },
+    {
+      "id": "m12-force-after",
+      "milestone": "M12",
+      "title": "Force graph · after release (physics relaxed)",
+      "caption": "Unpin; the graph settles into a new low-energy layout",
+      "file": "shots/m12-force-after.png",
+      "ts": "2026-05-12T15:51:36.255Z"
+    },
+    {
+      "id": "m13a-tree-pre",
+      "milestone": "M13a",
+      "title": "Tree · radial baseline",
+      "caption": "Per-node hover + pinch-select now wired, same pattern as the force graph",
+      "file": "shots/m13a-tree-pre.png",
+      "ts": "2026-05-12T15:51:36.996Z"
+    },
+    {
+      "id": "m13a-tree-hover-leaf",
+      "milestone": "M13a",
+      "title": "Tree · hover on a leaf",
+      "caption": "Halo + billboarded label over the hovered node (leaf \"gateway\")",
+      "file": "shots/m13a-tree-hover-leaf.png",
+      "ts": "2026-05-12T15:51:37.771Z"
+    },
+    {
+      "id": "m13a-tree-hover-internal",
+      "milestone": "M13a",
+      "title": "Tree · hover on an internal node",
+      "caption": "Same infrastructure works for non-leaves (\"compute\")",
+      "file": "shots/m13a-tree-hover-internal.png",
+      "ts": "2026-05-12T15:51:38.511Z"
+    },
+    {
+      "id": "m13a-tree-select-one",
+      "milestone": "M13a",
+      "title": "Tree · one node selected",
+      "caption": "Pinch latches a mint-green selection halo; persists when you look away",
+      "file": "shots/m13a-tree-select-one.png",
+      "ts": "2026-05-12T15:51:39.279Z"
+    },
+    {
+      "id": "m13a-tree-select-many",
+      "milestone": "M13a",
+      "title": "Tree · multiple nodes selected",
+      "caption": "Multi-select — each pinch toggles independently",
+      "file": "shots/m13a-tree-select-many.png",
+      "ts": "2026-05-12T15:51:39.983Z"
+    },
+    {
+      "id": "m13b-treemap-pre",
+      "milestone": "M13b",
+      "title": "Treemap · baseline",
+      "caption": "Extruded treemap with per-cell hover + pinch-select now wired",
+      "file": "shots/m13b-treemap-pre.png",
+      "ts": "2026-05-12T15:51:40.676Z"
+    },
+    {
+      "id": "m13b-treemap-hover",
+      "milestone": "M13b",
+      "title": "Treemap · hover on cell 2",
+      "caption": "Shared halo + billboarded label at hovered treemap cell",
+      "file": "shots/m13b-treemap-hover.png",
+      "ts": "2026-05-12T15:51:41.351Z"
+    },
+    {
+      "id": "m13b-treemap-select",
+      "milestone": "M13b",
+      "title": "Treemap · cell selected",
+      "caption": "Mint-green selection halo on treemap cell",
+      "file": "shots/m13b-treemap-select.png",
+      "ts": "2026-05-12T15:51:42.029Z"
+    },
+    {
+      "id": "m13b-treemap-select-many",
+      "milestone": "M13b",
+      "title": "Treemap · multiple cells selected",
+      "caption": "Multi-select across treemap cells",
+      "file": "shots/m13b-treemap-select-many.png",
+      "ts": "2026-05-12T15:51:42.901Z"
+    },
+    {
+      "id": "m13b-sunburst-pre",
+      "milestone": "M13b",
+      "title": "Sunburst · baseline",
+      "caption": "Stacked sunburst with per-segment hover + pinch-select",
+      "file": "shots/m13b-sunburst-pre.png",
+      "ts": "2026-05-12T15:51:43.679Z"
+    },
+    {
+      "id": "m13b-sunburst-hover",
+      "milestone": "M13b",
+      "title": "Sunburst · hover on segment 3",
+      "caption": "Shared halo + label at hovered sunburst segment centroid",
+      "file": "shots/m13b-sunburst-hover.png",
+      "ts": "2026-05-12T15:51:45.020Z"
+    },
+    {
+      "id": "m13b-sunburst-select",
+      "milestone": "M13b",
+      "title": "Sunburst · segment selected",
+      "caption": "Selection marker on sunburst segment",
+      "file": "shots/m13b-sunburst-select.png",
+      "ts": "2026-05-12T15:51:45.969Z"
+    },
+    {
+      "id": "m13b-pack-pre",
+      "milestone": "M13b",
+      "title": "Circular packing · baseline",
+      "caption": "Nested spheres with per-node hover + pinch-select",
+      "file": "shots/m13b-pack-pre.png",
+      "ts": "2026-05-12T15:51:46.993Z"
+    },
+    {
+      "id": "m13b-pack-hover",
+      "milestone": "M13b",
+      "title": "Pack · hover on node 4",
+      "caption": "Halo + label on hovered pack node",
+      "file": "shots/m13b-pack-hover.png",
+      "ts": "2026-05-12T15:51:47.903Z"
+    },
+    {
+      "id": "m13b-pack-select",
+      "milestone": "M13b",
+      "title": "Pack · node selected",
+      "caption": "Mint-green selection halo around packed sphere",
+      "file": "shots/m13b-pack-select.png",
+      "ts": "2026-05-12T15:51:48.765Z"
+    },
+    {
+      "id": "m14-tree-drill-pre",
+      "milestone": "M14",
+      "title": "Tree · before drill-in",
+      "caption": "Full tree baseline before drilling into a subtree",
+      "file": "shots/m14-tree-drill-pre.png",
+      "ts": "2026-05-12T15:51:49.495Z"
+    },
+    {
+      "id": "m14-tree-drill-in",
+      "milestone": "M14",
+      "title": "Tree · drilled into \"sensors\" subtree",
+      "caption": "Tree re-lays-out with the sensors node as root, animated transition",
+      "file": "shots/m14-tree-drill-in.png",
+      "ts": "2026-05-12T15:51:50.620Z"
+    },
+    {
+      "id": "m14-tree-drill-out",
+      "milestone": "M14",
+      "title": "Tree · drilled back out",
+      "caption": "Tree returns to full hierarchy after drillOut",
+      "file": "shots/m14-tree-drill-out.png",
+      "ts": "2026-05-12T15:51:51.836Z"
+    },
+    {
+      "id": "m14-treemap-drill-pre",
+      "milestone": "M14",
+      "title": "Treemap · before drill-in",
+      "caption": "Full treemap baseline",
+      "file": "shots/m14-treemap-drill-pre.png",
+      "ts": "2026-05-12T15:51:52.960Z"
+    },
+    {
+      "id": "m14-treemap-drill-in",
+      "milestone": "M14",
+      "title": "Treemap · drilled into subtree",
+      "caption": "Treemap re-lays-out with a parent node as root",
+      "file": "shots/m14-treemap-drill-in.png",
+      "ts": "2026-05-12T15:51:54.016Z"
+    },
+    {
+      "id": "m14-treemap-drill-out",
+      "milestone": "M14",
+      "title": "Treemap · drilled back out",
+      "caption": "Treemap returns to full layout",
+      "file": "shots/m14-treemap-drill-out.png",
+      "ts": "2026-05-12T15:51:55.052Z"
+    },
+    {
+      "id": "m14-sunburst-drill-in",
+      "milestone": "M14",
+      "title": "Sunburst · drilled into subtree",
+      "caption": "Sunburst re-partitions with focused subtree",
+      "file": "shots/m14-sunburst-drill-in.png",
+      "ts": "2026-05-12T15:51:56.150Z"
+    },
+    {
+      "id": "m14-sunburst-drill-out",
+      "milestone": "M14",
+      "title": "Sunburst · drilled back out",
+      "caption": "Sunburst returns to full partition",
+      "file": "shots/m14-sunburst-drill-out.png",
+      "ts": "2026-05-12T15:51:57.283Z"
+    },
+    {
+      "id": "m14-pack-drill-in",
+      "milestone": "M14",
+      "title": "Pack · drilled into subtree",
+      "caption": "Pack re-layouts with focused subtree, animated transition",
+      "file": "shots/m14-pack-drill-in.png",
+      "ts": "2026-05-12T15:51:58.410Z"
+    },
+    {
+      "id": "m14-pack-drill-out",
+      "milestone": "M14",
+      "title": "Pack · drilled back out",
+      "caption": "Pack returns to full hierarchy",
+      "file": "shots/m14-pack-drill-out.png",
+      "ts": "2026-05-12T15:51:59.569Z"
+    },
+    {
+      "id": "m15-force-two-hover",
+      "milestone": "M15",
+      "title": "Force · two-hand hover",
+      "caption": "Two different nodes hovered simultaneously — each hand gets its own halo + label",
+      "file": "shots/m15-force-two-hover.png",
+      "ts": "2026-05-12T15:52:00.351Z"
+    },
+    {
+      "id": "m15-force-two-drag",
+      "milestone": "M15",
+      "title": "Force · two-hand drag",
+      "caption": "Two nodes pinned at different positions simultaneously — physics reacts to both",
+      "file": "shots/m15-force-two-drag.png",
+      "ts": "2026-05-12T15:52:01.417Z"
+    },
+    {
+      "id": "m16-sankey-overview",
+      "milestone": "M16",
+      "title": "Sankey · overview in gallery",
+      "caption": "3D Sankey diagram with tube flows and box nodes — 7th cell in viz gallery",
+      "file": "shots/m16-sankey-overview.png",
+      "ts": "2026-05-12T15:52:02.424Z"
+    },
+    {
+      "id": "m16-sankey-closeup",
+      "milestone": "M16",
+      "title": "Sankey · close-up tube flows",
+      "caption": "CatmullRomCurve3 tubes with radius proportional to flow value; nodes colored by group",
+      "file": "shots/m16-sankey-closeup.png",
+      "ts": "2026-05-12T15:52:03.315Z"
+    },
+    {
+      "id": "m16-ridgeline-animated",
+      "milestone": "M16",
+      "title": "Ridgeline · animated curves",
+      "caption": "Ridgeline with time-shifted density curves — BufferGeometry updated each frame",
+      "file": "shots/m16-ridgeline-animated.png",
+      "ts": "2026-05-12T15:52:04.390Z"
+    },
+    {
+      "id": "m18-morph-tree",
+      "milestone": "M18",
+      "title": "Morph · tree layout",
+      "caption": "Morph demo showing hierarchy data in radial tree layout",
+      "file": "shots/m18-morph-tree.png",
+      "ts": "2026-05-12T15:52:05.570Z"
+    },
+    {
+      "id": "m18-morph-sunburst",
+      "milestone": "M18",
+      "title": "Morph · sunburst layout",
+      "caption": "Same data morphed to sunburst (ring) arrangement",
+      "file": "shots/m18-morph-sunburst.png",
+      "ts": "2026-05-12T15:52:07.037Z"
+    },
+    {
+      "id": "m18-morph-treemap",
+      "milestone": "M18",
+      "title": "Morph · treemap layout",
+      "caption": "Same data morphed to treemap (area) arrangement",
+      "file": "shots/m18-morph-treemap.png",
+      "ts": "2026-05-12T15:52:08.452Z"
+    },
+    {
+      "id": "m18-morph-pack",
+      "milestone": "M18",
+      "title": "Morph · pack layout",
+      "caption": "Same data morphed to circular packing arrangement",
+      "file": "shots/m18-morph-pack.png",
+      "ts": "2026-05-12T15:52:09.885Z"
+    },
+    {
+      "id": "m19-tidy-tree",
+      "milestone": "M19",
+      "title": "Tidy tree · cylindrical",
+      "caption": "Reingold-Tilford tree layout wrapped onto a cylinder surface",
+      "file": "shots/m19-tidy-tree.png",
+      "ts": "2026-05-12T15:52:10.951Z"
+    },
+    {
+      "id": "m19-tangled-tree",
+      "milestone": "M19",
+      "title": "Tangled tree · z-separated arcs",
+      "caption": "Tree spine with CatmullRom cross-link arcs routing through +z",
+      "file": "shots/m19-tangled-tree.png",
+      "ts": "2026-05-12T15:52:11.785Z"
+    },
+    {
+      "id": "m19-parallel",
+      "milestone": "M19",
+      "title": "Parallel coordinates",
+      "caption": "5-axis parallel coordinates with 18 data points colored by group",
+      "file": "shots/m19-parallel.png",
+      "ts": "2026-05-12T15:52:13.122Z"
+    },
+    {
+      "id": "m19-edge-bundle",
+      "milestone": "M19",
+      "title": "Hierarchical edge bundling",
+      "caption": "Nodes on circle with beta=0.85 bundled CatmullRom tube edges",
+      "file": "shots/m19-edge-bundle.png",
+      "ts": "2026-05-12T15:52:13.825Z"
+    },
+    {
+      "id": "m16-breadcrumb-drilled",
+      "milestone": "M16b",
+      "title": "Breadcrumb · drilled into sensors",
+      "caption": "Breadcrumb trail shows \"root > sensors\" after drilling into the sensors subtree on the tree mark",
+      "file": "shots/m16-breadcrumb-drilled.png",
+      "ts": "2026-05-12T15:52:14.810Z"
+    },
+    {
+      "id": "m16-vizhud-back",
+      "milestone": "M16b",
+      "title": "VizHud · Back button visible",
+      "caption": "Per-cell HUD with Back button appears below the tree mark when drilled in",
+      "file": "shots/m16-vizhud-back.png",
+      "ts": "2026-05-12T15:52:16.355Z"
+    },
+    {
+      "id": "m17-xr-brush",
+      "milestone": "M17",
+      "title": "XR brush · batch-select force nodes",
+      "caption": "Simulated brush selection across multiple force graph nodes (3, 5, 7, 9)",
+      "file": "shots/m17-xr-brush.png",
+      "ts": "2026-05-12T15:52:17.303Z"
+    },
+    {
+      "id": "m17-live-data",
+      "milestone": "M17",
+      "title": "Live data · HR line chart updated",
+      "caption": "Heart rate line chart after one data-shift cycle — new sample on right, oldest scrolled off left",
+      "file": "shots/m17-live-data.png",
+      "ts": "2026-05-12T15:52:19.078Z"
+    },
+    {
+      "id": "m20-join-idle",
+      "milestone": "M20",
+      "title": "Join panel · idle",
+      "caption": "Join-code onboarding panel with empty slots, warm palette, no blue",
+      "file": "shots/m20-join-idle.png",
+      "ts": "2026-05-12T15:52:19.661Z"
+    },
+    {
+      "id": "m20-join-partial",
+      "milestone": "M20",
+      "title": "Join panel · partial code",
+      "caption": "3 of 6 characters filled via programmatic fillCode",
+      "file": "shots/m20-join-partial.png",
+      "ts": "2026-05-12T15:52:20.323Z"
+    },
+    {
+      "id": "m20-join-accepted",
+      "milestone": "M20",
+      "title": "Join panel · accepted",
+      "caption": "Success state after submitting a complete 6-char code",
+      "file": "shots/m20-join-accepted.png",
+      "ts": "2026-05-12T15:52:21.394Z"
+    },
+    {
+      "id": "m21-dataspace-menu-floating",
+      "milestone": "M21",
+      "title": "Dataspace menu · floating panel",
+      "caption": "Per-dataspace context menu visible as a floating panel below the demo gallery, warm palette",
+      "file": "shots/m21-dataspace-menu-floating.png",
+      "ts": "2026-05-12T15:52:22.707Z"
+    },
+    {
+      "id": "m21-dataspace-menu-items",
+      "milestone": "M21",
+      "title": "Dataspace menu · close-up items",
+      "caption": "Close-up showing default menu items: Recenter, Reset, Leave — vertical stack with emoji icons",
+      "file": "shots/m21-dataspace-menu-items.png",
+      "ts": "2026-05-12T15:52:23.841Z"
+    }
+  ]
+}

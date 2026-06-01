@@ -1,0 +1,27 @@
+# XIAO ESP32-S3 + ReSpeaker Lite Voice Kit
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# No PSRAM on the XIAO ESP32-S3 base SKU
+# CONFIG_SPIRAM is not set
+
+# Console: native USB-serial-JTAG over the XIAO USB-C port
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Partition table — same shape as the scribe (room for role bundles in NVS)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# BLE — NimBLE only, used for WiFi provisioning then torn down
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+
+# Save RAM — IPv6 unused
+CONFIG_LWIP_IPV6=n
+
+# HTTP server (UC2 speaker actuator API) — same shape as the lighting node.
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024

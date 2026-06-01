@@ -1,0 +1,33 @@
+flowchart TB
+  User((User))
+  Owner((Owner))
+
+  Client["<b>WebXR client</b> — R8, R12, R33<br/>Join keypad · toolbar · HUD · spatial audio (R28)<br/>d3-spatial renderer · three.js + WebXR<br/>Per-mark cells: line · arc · stream · IMU · video<br/>Health monitor · DEMO mode · fake-data fallback"]
+
+  Identity["<b>Identity &amp; access control</b><br/>Join code issuance — R20 (ttl · max_uses · scope)<br/>PKI / OIDC — R23 · shared secret — R24<br/>Short-lived scoped JWT per session"]
+
+  HCE["<b>Hyperlocal Context Engine</b> — R19, R21<br/>Manifest store (UDM + USM + marks)<br/>Device proxy &amp; discovery — mDNS · LAN · HTTPS tunnel<br/>Telemetry bus — HTTP today, MQTT planned<br/>Policy engine — R17 · Audit log — R16 · Export — R18"]
+
+  Devices["<b>IoT devices &amp; services</b> — R10, R13, R24<br/>Sensors: vitals · env · camera · IMU<br/>Actuators: lighting · audio · thermostat<br/>People avatars — R26 (future)"]
+
+  User  -. "enters code" .->          Client
+  Owner -. "policy + invites" .->     Identity
+
+  Identity -- "authorise"           --> HCE
+  Client   -- "manifest + data"     --> HCE
+  HCE      ==>|"scoped sub-tokens<br/>per request"| Devices
+
+  Devices  -. "telemetry"          .-> HCE
+  HCE      -. "responses"          .-> Client
+  HCE      -. "audit introspect (R16)<br/>user export (R18)" .-> User
+
+  classDef actor   fill:#fff,stroke:#333,stroke-width:1.5px
+  classDef client  fill:#fff8dc,stroke:#a88c2a,stroke-width:2px,padding:12px
+  classDef sec     fill:#fdf3f3,stroke:#a44,stroke-width:2px,padding:12px
+  classDef hce     fill:#e8f0fb,stroke:#3a5a8a,stroke-width:2px,padding:12px
+  classDef dev     fill:#f0f6ec,stroke:#3a7a4a,stroke-width:2px,padding:12px
+  class User,Owner actor
+  class Client client
+  class Identity sec
+  class HCE hce
+  class Devices dev

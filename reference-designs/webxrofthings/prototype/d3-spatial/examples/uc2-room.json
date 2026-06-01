@@ -1,0 +1,565 @@
+{
+  "version": "1",
+  "name": "kords-livingroom",
+  "displayTitle": "WebXR of Things  -  UC2  Home",
+  "scaleTag": "room",
+  "owner": "dkords@gmail.com",
+  "acousticEnvironment": "indoor",
+
+  "udm_version": "1.0",
+  "udm_doc_version": "0.1.0",
+
+  "udm_devices": [
+    {
+      "udm_key": "magnet-cam-80e4",
+      "udm_uuid": "urn:device:esp32-cam:80e4",
+      "udm_model_name": "ESP32-CAM",
+      "udm_model_number": "AI-Thinker",
+      "udm_vendor": "AI-Thinker",
+      "udm_mktg_name": "Magnet Cam",
+      "udm_type": "camera",
+      "udm_class": ["camera", "iot", "wifi"],
+      "udm_capabilities": ["mjpeg-stream", "single-frame-capture", "ov2640"],
+      "udm_chipset_details": { "vendor": "Espressif", "type": "ESP32", "frequency": "240MHz", "core_count": 2 },
+      "udm_memory_volatile": "520KB SRAM + 4MB PSRAM",
+      "udm_memory_non_volatile": "4MB Flash",
+      "udm_sensors": ["camera-ov2640"],
+      "udm_services_link": ["cam-stream", "cam-capture"],
+      "udm_tags": ["room", "lan-only", "no-tls"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.6, "z": -1.2 }
+    },
+    {
+      "udm_key": "magnet-stamp-c3u-a1b2",
+      "udm_uuid": "urn:device:m5stamp-c3u:a1b2",
+      "udm_model_name": "M5StampC3U",
+      "udm_vendor": "M5Stack",
+      "udm_mktg_name": "Stamp C3U",
+      "udm_type": "compute-node",
+      "udm_class": ["mcu", "iot", "wifi"],
+      "udm_capabilities": ["wifi-station", "ble", "internal-temp-sensor", "json-http"],
+      "udm_chipset_details": { "vendor": "Espressif", "type": "ESP32-C3", "frequency": "160MHz", "core_count": 1 },
+      "udm_memory_volatile": "400KB SRAM",
+      "udm_memory_non_volatile": "4MB Flash",
+      "udm_sensors": ["esp32c3-internal-temp"],
+      "udm_services_link": ["temp-current", "temp-history", "humidity-history"],
+      "udm_tags": ["room", "lan-only"],
+      "udm_spatial_anchor_x": { "x": -0.6, "y": 1.0, "z": -0.8 }
+    },
+    {
+      "udm_key": "smart-light-001",
+      "udm_uuid": "urn:device:smart-bulb:001",
+      "_comment": "Simulated smart bulb. Mutable via POST /api/v1/actuator/light. Real hardware would be a Matter / Zigbee / WiFi-IP-controlled bulb.",
+      "udm_model_name": "Smart Bulb (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Living-room ceiling",
+      "udm_type": "actuator",
+      "udm_class": ["actuator", "lighting", "iot"],
+      "udm_capabilities": ["on-off", "brightness", "color-rgb", "ramp"],
+      "udm_services_link": ["light-state", "light-history"],
+      "udm_tags": ["room", "actuator", "simulated"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 2.4, "z": 0.0 }
+    },
+    {
+      "udm_key": "thermostat-001",
+      "udm_uuid": "urn:device:thermostat:001",
+      "_comment": "Simulated thermostat. Mutable via POST /api/v1/actuator/thermostat. Server drifts current_c toward setpoint_c at ~0.1°C/min.",
+      "udm_model_name": "Thermostat (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Living-room thermostat",
+      "udm_type": "actuator",
+      "udm_class": ["actuator", "thermostat", "iot"],
+      "udm_capabilities": ["setpoint", "mode-heat-cool-off", "current-temperature"],
+      "udm_services_link": ["thermostat-state"],
+      "udm_tags": ["room", "actuator", "simulated"],
+      "udm_spatial_anchor_x": { "x": -1.2, "y": 1.4, "z": -0.2 }
+    },
+    {
+      "udm_key": "speaker-001",
+      "udm_uuid": "urn:device:smart-speaker:001",
+      "_comment": "Simulated smart speaker for audio notifications. POST /api/v1/actuator/speaker/play {sound_id} to trigger.",
+      "udm_model_name": "Smart Speaker (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Living-room speaker",
+      "udm_type": "actuator",
+      "udm_class": ["actuator", "audio", "iot"],
+      "udm_capabilities": ["audio-notification", "preset-sounds"],
+      "udm_services_link": ["speaker-state"],
+      "udm_tags": ["room", "actuator", "simulated"],
+      "udm_spatial_anchor_x": { "x": 1.2, "y": 1.0, "z": -0.4 }
+    },
+    {
+      "udm_key": "neopixel-strip-001",
+      "udm_uuid": "urn:device:neopixel-strip:001",
+      "_comment": "Simulated 60-LED NeoPixel-style addressable RGB strip. Mutable via POST /api/v1/actuator/neopixel. Real hardware would be a WS2812B/SK6812 strip driven by an ESP32 over a single GPIO; the on/off + brightness + color + pattern shape matches that firmware's typical control surface.",
+      "udm_model_name": "NeoPixel Strip (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Accent lighting · shelf-back strip",
+      "udm_type": "actuator",
+      "udm_class": ["actuator", "lighting", "addressable-led", "iot"],
+      "udm_capabilities": ["on-off", "brightness", "color-rgb", "pattern", "addressable"],
+      "udm_services_link": ["neopixel-state"],
+      "udm_tags": ["room", "actuator", "simulated", "neopixel"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 2.0, "z": -1.4 }
+    },
+    {
+      "udm_key": "envhub-001",
+      "udm_uuid": "urn:device:env-sensor-hub:001",
+      "_comment": "Simulated environmental sensor hub. Backed by mock-join-server for the demo; real hardware would be a multi-sensor I2C board (e.g. BME680 + AQI + pollen counter).",
+      "udm_model_name": "Env Sensor Hub (sim)",
+      "udm_vendor": "MagNET (sim)",
+      "udm_mktg_name": "Env Hub",
+      "udm_type": "environmental-sensor",
+      "udm_class": ["environmental-sensor", "iot"],
+      "udm_capabilities": ["air-quality", "barometric-pressure", "pollen-count", "json-http"],
+      "udm_sensors": ["aqi-pm25", "barometer", "pollen-counter"],
+      "udm_services_link": ["aqi-history", "aqi-current", "barometer-history", "barometer-current", "pollen-history", "pollen-current"],
+      "udm_tags": ["room", "environmental", "simulated"],
+      "udm_spatial_anchor_x": { "x": 0.6, "y": 1.4, "z": -0.8 }
+    }
+  ],
+
+  "usm_services": [
+    {
+      "usm_key": "cam-stream",
+      "usm_uuid": "urn:service:mjpeg:cam-80e4",
+      "usm_service_name": "Camera live MJPEG stream",
+      "usm_type": "video",
+      "usm_class": ["video", "mjpeg", "live"],
+      "usm_service_endpoint": {
+        "GET": { "url": "http://magnet-cam-80e4.local/stream", "content-type": "multipart/x-mixed-replace" }
+      },
+      "usm_version": "1",
+      "usm_capabilities": { "framerate_hz": [5, 10], "resolution": "VGA 640x480" },
+      "characteristics": [
+        { "usm_characteristic_id": "frame", "usm_characteristic_format": "image/jpeg" }
+      ],
+      "usm_tags": ["lan-only", "live"]
+    },
+    {
+      "usm_key": "cam-capture",
+      "usm_uuid": "urn:service:single-jpeg:cam-80e4",
+      "usm_service_name": "Camera single-frame capture",
+      "usm_type": "image",
+      "usm_class": ["image", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "http://magnet-cam-80e4.local/capture", "content-type": "image/jpeg" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "frame", "usm_characteristic_format": "image/jpeg" }
+      ]
+    },
+    {
+      "usm_key": "temp-current",
+      "usm_uuid": "urn:service:temperature:stamp-a1b2",
+      "usm_service_name": "Internal temperature (current)",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "temperature", "read-only"],
+      "usm_service_endpoint": {
+        "GET": { "url": "http://magnet-stamp-c3u-a1b2.local/temperature", "content-type": "application/json" }
+      },
+      "usm_version": "1",
+      "usm_capabilities": { "poll_interval_seconds": 2, "accuracy_celsius": "±5" },
+      "characteristics": [
+        { "usm_characteristic_id": "celsius", "usm_characteristic_format": "number", "usm_characteristic_constraints": { "min": -40, "max": 125 } },
+        { "usm_characteristic_id": "timestamp", "usm_characteristic_format": "iso8601" }
+      ],
+      "usm_tags": ["live", "low-accuracy", "esp32c3-internal"]
+    },
+    {
+      "usm_key": "temp-history",
+      "usm_uuid": "urn:service:temperature-series:stamp-a1b2",
+      "usm_service_name": "Temperature history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "temperature"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/temperature/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>" }
+      ]
+    },
+    {
+      "usm_key": "humidity-history",
+      "usm_uuid": "urn:service:humidity-series:aht20",
+      "usm_service_name": "Humidity history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "humidity"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/humidity/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>" }
+      ]
+    },
+    {
+      "usm_key": "aqi-history",
+      "usm_uuid": "urn:service:aqi-series:envhub-001",
+      "usm_service_name": "Air quality index history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "air-quality"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/aqi/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "us-aqi", "t_unit": "ms_since_epoch" } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "aqi-current",
+      "usm_uuid": "urn:service:aqi-snapshot:envhub-001",
+      "usm_service_name": "Air quality index snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "air-quality", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/aqi", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 10 },
+      "characteristics": [
+        { "usm_characteristic_id": "aqi",      "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 500 } },
+        { "usm_characteristic_id": "category", "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["good", "moderate", "unhealthy-for-sensitive", "unhealthy", "very-unhealthy", "hazardous"] } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "barometer-history",
+      "usm_uuid": "urn:service:barometer-series:envhub-001",
+      "usm_service_name": "Barometric pressure history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "barometric-pressure"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/barometer/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "hPa", "t_unit": "ms_since_epoch" } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "barometer-current",
+      "usm_uuid": "urn:service:barometer-snapshot:envhub-001",
+      "usm_service_name": "Barometric pressure snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "barometric-pressure", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/barometer", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 30 },
+      "characteristics": [
+        { "usm_characteristic_id": "hpa",   "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 870, "max": 1085 } },
+        { "usm_characteristic_id": "trend", "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["rising", "falling", "steady"] } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "pollen-history",
+      "usm_uuid": "urn:service:pollen-series:envhub-001",
+      "usm_service_name": "Pollen count history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "pollen"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/pollen/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "grains/m3 (scaled 0-12)", "t_unit": "ms_since_epoch" } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "pollen-current",
+      "usm_uuid": "urn:service:pollen-snapshot:envhub-001",
+      "usm_service_name": "Pollen count snapshot",
+      "usm_type": "sensor",
+      "usm_class": ["sensor", "pollen", "snapshot"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/sensor/pollen", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 60 },
+      "characteristics": [
+        { "usm_characteristic_id": "count", "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 12 } },
+        { "usm_characteristic_id": "level", "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["low", "moderate", "high", "very-high"] } }
+      ],
+      "usm_tags": ["live", "environmental", "simulated"]
+    },
+    {
+      "usm_key": "light-state",
+      "usm_uuid": "urn:service:light-state:001",
+      "usm_service_name": "Smart bulb state",
+      "usm_type": "actuator",
+      "usm_class": ["actuator", "lighting", "mutable"],
+      "usm_service_endpoint": {
+        "GET":  { "url": "/api/v1/actuator/light",  "content-type": "application/json" },
+        "POST": { "url": "/api/v1/actuator/light",  "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 5 },
+      "characteristics": [
+        { "usm_characteristic_id": "on",             "usm_characteristic_format": "boolean" },
+        { "usm_characteristic_id": "brightness_pct", "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 100 } },
+        { "usm_characteristic_id": "color",          "usm_characteristic_format": "{r,g,b}" },
+        { "usm_characteristic_id": "ramp_ms",        "usm_characteristic_format": "number" }
+      ],
+      "usm_tags": ["actuator", "mutable", "simulated"]
+    },
+    {
+      "usm_key": "light-history",
+      "usm_uuid": "urn:service:light-series:001",
+      "usm_service_name": "Smart bulb brightness history (last 60 min)",
+      "usm_type": "timeseries",
+      "usm_class": ["timeseries", "lighting"],
+      "usm_service_endpoint": {
+        "GET": { "url": "/api/v1/actuator/light/history", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "samples", "usm_characteristic_format": "array<{t,v}>",
+          "usm_characteristic_constraints": { "v_unit": "brightness_pct (0-100, 0 when off)", "t_unit": "ms_since_epoch" } }
+      ],
+      "usm_tags": ["live", "simulated"]
+    },
+    {
+      "usm_key": "thermostat-state",
+      "usm_uuid": "urn:service:thermostat-state:001",
+      "usm_service_name": "Thermostat state",
+      "usm_type": "actuator",
+      "usm_class": ["actuator", "thermostat", "mutable"],
+      "usm_service_endpoint": {
+        "GET":  { "url": "/api/v1/actuator/thermostat", "content-type": "application/json" },
+        "POST": { "url": "/api/v1/actuator/thermostat", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 5 },
+      "characteristics": [
+        { "usm_characteristic_id": "setpoint_c", "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 10, "max": 32 } },
+        { "usm_characteristic_id": "current_c", "usm_characteristic_format": "number" },
+        { "usm_characteristic_id": "mode",      "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["heat", "cool", "off"] } }
+      ],
+      "usm_tags": ["actuator", "mutable", "simulated"]
+    },
+    {
+      "usm_key": "speaker-state",
+      "usm_uuid": "urn:service:speaker-state:001",
+      "usm_service_name": "Smart speaker state",
+      "usm_type": "actuator",
+      "usm_class": ["actuator", "audio", "trigger"],
+      "usm_service_endpoint": {
+        "GET":  { "url": "/api/v1/actuator/speaker",      "content-type": "application/json" },
+        "POST": { "url": "/api/v1/actuator/speaker/play", "content-type": "application/json" }
+      },
+      "characteristics": [
+        { "usm_characteristic_id": "last_played_id",     "usm_characteristic_format": "string|null" },
+        { "usm_characteristic_id": "last_played_ago_ms", "usm_characteristic_format": "number|null" },
+        { "usm_characteristic_id": "available_sounds",   "usm_characteristic_format": "array<string>" }
+      ],
+      "usm_tags": ["actuator", "trigger", "simulated"]
+    },
+    {
+      "usm_key": "neopixel-state",
+      "usm_uuid": "urn:service:neopixel-state:001",
+      "usm_service_name": "NeoPixel strip state",
+      "usm_type": "actuator",
+      "usm_class": ["actuator", "lighting", "addressable-led", "mutable"],
+      "usm_service_endpoint": {
+        "GET":  { "url": "/api/v1/actuator/neopixel", "content-type": "application/json" },
+        "POST": { "url": "/api/v1/actuator/neopixel", "content-type": "application/json" }
+      },
+      "usm_polling_x": { "interval_seconds": 5 },
+      "characteristics": [
+        { "usm_characteristic_id": "on",                 "usm_characteristic_format": "boolean" },
+        { "usm_characteristic_id": "brightness_pct",     "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 100 } },
+        { "usm_characteristic_id": "color",              "usm_characteristic_format": "{r,g,b}",
+          "usm_characteristic_constraints": { "channel_min": 0, "channel_max": 255 } },
+        { "usm_characteristic_id": "pattern",            "usm_characteristic_format": "enum",
+          "usm_characteristic_constraints": { "values": ["solid", "breathing", "rainbow", "chase", "twinkle"] } },
+        { "usm_characteristic_id": "pattern_speed_pct",  "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "min": 0, "max": 100 } },
+        { "usm_characteristic_id": "led_count",          "usm_characteristic_format": "number",
+          "usm_characteristic_constraints": { "readonly": true } },
+        { "usm_characteristic_id": "available_patterns", "usm_characteristic_format": "array<string>",
+          "usm_characteristic_constraints": { "readonly": true } }
+      ],
+      "usm_tags": ["actuator", "mutable", "simulated", "neopixel"]
+    }
+  ],
+
+  "marks": [
+    {
+      "id": "front-cam",
+      "type": "video",
+      "title": "Camera · live",
+      "subtitle": "ESP32-CAM · /capture polled at 1 fps",
+      "data": {
+        "source": "url",
+        "url": "/camera/capture",
+        "shape": "video"
+      },
+      "config": {
+        "type": "frames",
+        "width": 0.4,
+        "aspectRatio": 1.333,
+        "frameIntervalMs": 1000,
+        "_comment_fallback": "Shown when the ESP32-CAM can't be reached. Vincent Foster (Sony A6) — same source library as the UC3 stippling image. Triggered by the videoPanel's onerror handler; the panel stops polling once the fallback is in place to keep onerror from firing again on every dead poll.",
+        "fallbackImageUrl": "/spatial/_DSC9751.jpeg"
+      },
+      "deviceRef": "magnet-cam-80e4",
+      "serviceRef": "cam-capture",
+      "hoverable": true
+    },
+    {
+      "id": "room-temp",
+      "type": "line",
+      "title": "Temperature · last 60 min",
+      "subtitle": "AHT20 on M5 Atom Echo",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/temperature/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "_comment": "Was 5 s — that's 12× faster than room temperature changes meaningfully and was hammering the chip's httpd. 30 s gives ~120 samples/hour, still smooth visually.",
+      "config": { "vMin": 15, "vMax": 35, "color": 16753664 },
+      "deviceRef": "magnet-stamp-c3u-a1b2",
+      "serviceRef": "temp-history",
+      "hoverable": true
+    },
+    {
+      "id": "room-humidity",
+      "type": "line",
+      "title": "Humidity · last 60 min",
+      "subtitle": "AHT20 on M5 Atom Echo",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/humidity/history",
+        "shape": "series",
+        "refreshInterval": 30,
+        "startDelayMs": 15000
+      },
+      "_comment": "Same 30 s cadence as room-temp but offset by 15 s so the two AHT20 polls never hit the device at the same instant. This is the same physical sensor; alternating reads at 15 s spacing gives the chip plenty of headroom between requests.",
+      "config": { "vMin": 0, "vMax": 100, "color": 5570559 },
+      "deviceRef": "magnet-stamp-c3u-a1b2",
+      "serviceRef": "humidity-history",
+      "hoverable": true
+    },
+    {
+      "id": "aqi-line",
+      "type": "line",
+      "title": "Air quality · AQI",
+      "subtitle": "last 60 min · simulated",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/aqi/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "config": { "vMin": 0, "vMax": 150, "color": 16753280 },
+      "deviceRef": "envhub-001",
+      "serviceRef": "aqi-history",
+      "hoverable": true
+    },
+    {
+      "id": "barometer-line",
+      "type": "line",
+      "title": "Pressure · hPa",
+      "subtitle": "last 60 min · simulated",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/barometer/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "config": { "vMin": 1005, "vMax": 1025, "color": 12106432 },
+      "deviceRef": "envhub-001",
+      "serviceRef": "barometer-history",
+      "hoverable": true
+    },
+    {
+      "id": "pollen-line",
+      "type": "line",
+      "title": "Pollen · count",
+      "subtitle": "last 60 min · simulated",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/sensor/pollen/history",
+        "shape": "series",
+        "refreshInterval": 30
+      },
+      "config": { "vMin": 0, "vMax": 12, "color": 11533744 },
+      "deviceRef": "envhub-001",
+      "serviceRef": "pollen-history",
+      "hoverable": true
+    },
+    {
+      "id": "light-brightness",
+      "type": "line",
+      "title": "Light · brightness",
+      "subtitle": "last 60 min · 0=off",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/actuator/light/history",
+        "shape": "series",
+        "refreshInterval": 5
+      },
+      "config": { "vMin": 0, "vMax": 100, "color": 16769280 },
+      "deviceRef": "smart-light-001",
+      "serviceRef": "light-history",
+      "hoverable": true
+    },
+    {
+      "id": "room-controls",
+      "type": "actuator-panel",
+      "title": "Room controls",
+      "subtitle": "tap to actuate · light · thermostat · strip · speaker",
+      "data": { "source": "inline" },
+      "config": {},
+      "deviceRef": "smart-light-001",
+      "hoverable": true
+    },
+    {
+      "id": "room-devices",
+      "type": "tree",
+      "title": "Room devices",
+      "subtitle": "Topology",
+      "data": {
+        "source": "inline",
+        "hierarchy": {
+          "name": "kords-livingroom",
+          "children": [
+            { "name": "sensors", "children": [
+              { "name": "cam (mjpeg)", "value": 5 },
+              { "name": "temp (c3 internal)", "value": 2 }
+            ]},
+            { "name": "compute", "children": [
+              { "name": "stamp-c3u", "value": 1 }
+            ]},
+            { "name": "network", "children": [
+              { "name": "router", "value": 1 },
+              { "name": "ap", "value": 1 }
+            ]}
+          ]
+        }
+      },
+      "config": { "form": "radial" },
+      "drillable": true,
+      "hoverable": true
+    }
+  ],
+
+  "hud": {
+    "items": [
+      { "id": "refresh", "label": "Refresh", "icon": "🔄", "action": "reload-marks" },
+      { "id": "recenter", "label": "Recenter", "icon": "⊕", "action": "recenter" },
+      { "id": "leave", "label": "Leave room", "icon": "🚪", "action": "leave-dataspace" }
+    ],
+    "position": "bottom"
+  }
+}

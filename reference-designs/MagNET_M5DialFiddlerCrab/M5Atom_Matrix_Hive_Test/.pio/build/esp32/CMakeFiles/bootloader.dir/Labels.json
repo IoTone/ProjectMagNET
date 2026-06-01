@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/CMakeFiles/bootloader"
+		},
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/CMakeFiles/bootloader.rule"
+		},
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/CMakeFiles/bootloader-complete.rule"
+		},
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule"
+		},
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule"
+		},
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule"
+		},
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule"
+		},
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule"
+		},
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule"
+		},
+		{
+			"file" : "/Users/dkords/dev/projects/iotone/ProjectMagNET/reference-designs/MagNET_M5DialFiddlerCrab/M5Atom_Matrix_Hive_Test/.pio/build/esp32/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"bootloader"
+		],
+		"name" : "bootloader"
+	}
+}

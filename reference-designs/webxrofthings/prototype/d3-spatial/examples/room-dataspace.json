@@ -1,0 +1,118 @@
+{
+  "version": "1",
+  "name": "lab-room-alpha",
+  "scaleTag": "room",
+  "owner": "labadmin@example.com",
+  "acousticEnvironment": "indoor",
+  "marks": [
+    {
+      "id": "device-tree",
+      "type": "tree",
+      "title": "Device Topology",
+      "subtitle": "All connected IoT devices",
+      "data": {
+        "source": "inline",
+        "hierarchy": {
+          "name": "gateway",
+          "children": [
+            {
+              "name": "sensors",
+              "children": [
+                { "name": "temp-living", "value": 22 },
+                { "name": "temp-bedroom", "value": 19 },
+                { "name": "humidity-living", "value": 45 },
+                { "name": "motion-hallway", "value": 1 }
+              ]
+            },
+            {
+              "name": "actuators",
+              "children": [
+                { "name": "light-ceiling", "value": 80 },
+                { "name": "light-desk", "value": 60 },
+                { "name": "thermostat", "value": 21 }
+              ]
+            },
+            {
+              "name": "media",
+              "children": [
+                { "name": "speaker-left", "value": 40 },
+                { "name": "speaker-right", "value": 40 }
+              ]
+            }
+          ]
+        }
+      },
+      "config": { "form": "radial" },
+      "drillable": true,
+      "hoverable": true
+    },
+    {
+      "id": "sensor-map",
+      "type": "treemap",
+      "title": "Sensor Readings",
+      "subtitle": "Current values by device",
+      "data": {
+        "source": "inline",
+        "hierarchy": {
+          "name": "sensors",
+          "children": [
+            { "name": "temp-living", "value": 22 },
+            { "name": "temp-bedroom", "value": 19 },
+            { "name": "humidity", "value": 45 },
+            { "name": "motion", "value": 1 },
+            { "name": "light-level", "value": 80 },
+            { "name": "CO2", "value": 420 }
+          ]
+        }
+      },
+      "drillable": true,
+      "hoverable": true
+    },
+    {
+      "id": "network-graph",
+      "type": "force",
+      "title": "Network Map",
+      "subtitle": "Device connectivity",
+      "data": {
+        "source": "inline",
+        "graph": {
+          "nodes": [
+            { "id": "gateway",       "group": 0 },
+            { "id": "ap-living",     "group": 1 },
+            { "id": "ap-bedroom",    "group": 1 },
+            { "id": "temp-living",   "group": 2 },
+            { "id": "temp-bedroom",  "group": 2 },
+            { "id": "light-ceiling", "group": 3 },
+            { "id": "light-desk",    "group": 3 },
+            { "id": "thermostat",    "group": 3 },
+            { "id": "speaker-left",  "group": 4 },
+            { "id": "speaker-right", "group": 4 }
+          ],
+          "links": [
+            { "source": "gateway",    "target": "ap-living",     "value": 10 },
+            { "source": "gateway",    "target": "ap-bedroom",    "value": 10 },
+            { "source": "ap-living",  "target": "temp-living",   "value": 5 },
+            { "source": "ap-living",  "target": "light-ceiling", "value": 5 },
+            { "source": "ap-living",  "target": "light-desk",    "value": 5 },
+            { "source": "ap-living",  "target": "thermostat",    "value": 5 },
+            { "source": "ap-living",  "target": "speaker-left",  "value": 3 },
+            { "source": "ap-living",  "target": "speaker-right", "value": 3 },
+            { "source": "ap-bedroom", "target": "temp-bedroom",  "value": 5 }
+          ]
+        }
+      },
+      "hoverable": true,
+      "draggable": true
+    }
+  ],
+  "hud": {
+    "items": [
+      { "id": "refresh", "label": "Refresh data", "icon": "\ud83d\udd04", "action": "reload-marks" },
+      { "id": "audio", "label": "Ambient sound", "icon": "\ud83d\udd0a", "action": "toggle-ambient" },
+      { "id": "share", "label": "Share code", "icon": "\ud83d\udce4", "action": "show-join-code" },
+      { "id": "recenter", "label": "Recenter", "icon": "\u2295", "action": "recenter" },
+      { "id": "leave", "label": "Leave room", "icon": "\ud83d\udeaa", "action": "leave-dataspace" }
+    ],
+    "position": "wrist"
+  }
+}
