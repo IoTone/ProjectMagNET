@@ -31,6 +31,7 @@ extern "C" {
 typedef enum {
     CRAW_CAMERA_BOARD_AI_THINKER = 0,  // ESP32 + OV2640 (AI-Thinker ESP32-CAM)
     CRAW_CAMERA_BOARD_M5CAMS3    = 1,  // ESP32-S3 + OV2640 (M5Stack Unit CamS3)
+    CRAW_CAMERA_BOARD_M5CAMERAX  = 2,  // ESP32 + OV3660 (M5Stack M5Camera X)
     // Add new boards here. Each needs a pins_<name>.h in this component.
 } craw_camera_board_t;
 

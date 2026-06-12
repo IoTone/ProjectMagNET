@@ -6,6 +6,7 @@
 #include "craw_camera.h"
 #include "pins_ai_thinker.h"
 #include "pins_m5cams3.h"
+#include "pins_m5camerax.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -87,6 +88,27 @@ static void build_cfg(const craw_camera_config_t *in, camera_config_t *out) {
         out->pin_pclk     = M5CAMS3_PCLK_GPIO;
         s_led_gpio        = M5CAMS3_LED_GPIO;
         s_led_invert      = M5CAMS3_LED_INVERT;
+        break;
+
+    case CRAW_CAMERA_BOARD_M5CAMERAX:
+        out->pin_pwdn     = M5CAMERAX_PWDN_GPIO;
+        out->pin_reset    = M5CAMERAX_RESET_GPIO;
+        out->pin_xclk     = M5CAMERAX_XCLK_GPIO;
+        out->pin_sccb_sda = M5CAMERAX_SIOD_GPIO;
+        out->pin_sccb_scl = M5CAMERAX_SIOC_GPIO;
+        out->pin_d7       = M5CAMERAX_Y9_GPIO;
+        out->pin_d6       = M5CAMERAX_Y8_GPIO;
+        out->pin_d5       = M5CAMERAX_Y7_GPIO;
+        out->pin_d4       = M5CAMERAX_Y6_GPIO;
+        out->pin_d3       = M5CAMERAX_Y5_GPIO;
+        out->pin_d2       = M5CAMERAX_Y4_GPIO;
+        out->pin_d1       = M5CAMERAX_Y3_GPIO;
+        out->pin_d0       = M5CAMERAX_Y2_GPIO;
+        out->pin_vsync    = M5CAMERAX_VSYNC_GPIO;
+        out->pin_href     = M5CAMERAX_HREF_GPIO;
+        out->pin_pclk     = M5CAMERAX_PCLK_GPIO;
+        s_led_gpio        = M5CAMERAX_LED_GPIO;
+        s_led_invert      = M5CAMERAX_LED_INVERT;
         break;
     }
 
@@ -246,6 +268,7 @@ const char *craw_camera_board_name(void) {
     switch (s_board) {
     case CRAW_CAMERA_BOARD_AI_THINKER: return "AI-Thinker ESP32-CAM";
     case CRAW_CAMERA_BOARD_M5CAMS3:    return "M5Stack Unit CamS3";
+    case CRAW_CAMERA_BOARD_M5CAMERAX:  return "M5Stack M5Camera X";
     default:                           return "unknown";
     }
 }

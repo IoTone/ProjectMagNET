@@ -1,0 +1,59 @@
+# M5Stack M5Camera X (classic ESP32 + OV3660, 4 MB flash, 4 MB QSPI PSRAM).
+# Same SoC family as the AI-Thinker target, but with an onboard CP2104
+# USB-UART bridge — no external adapter needed for flashing/console.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Console: UART0 via the onboard USB-UART bridge.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# PSRAM — required by esp32-camera for anything above QQVGA. The M5Camera
+# carries older QSPI-style (Quad) PSRAM, same as AI-Thinker.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_TYPE_ESPPSRAM64=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# BLE controller: BLE-only (classic BT off to save RAM).
+CONFIG_BT_CTRL_MODE_EFF_BLE_ONLY=y
+
+# --- Internal-DRAM relief for rev-1 ESP32-D0WD silicon ---------------------
+# This unit is an older ESP32 rev v1.0, which loses more internal DRAM to the
+# mandatory SPIRAM cache workaround than the rev-3 AI-Thinker modules. With
+# the stock 16 KB ALWAYSINTERNAL threshold, startup-time allocations (lwIP,
+# PHY, coexist, NimBLE host) pile into internal RAM and fragment the one big
+# block below the 16 KB the main-task stack needs — esp_startup_start_app then
+# asserts at app_startup.c:86 (main task fails to allocate) before app_main
+# even runs. Spill mid-size allocations to PSRAM to keep a contiguous
+# internal block for the main stack.
+#
+# NOTE: deliberately NOT setting CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP. It was
+# used briefly as boot-headroom, but it routes every TCP segment/pbuf touch
+# through 40 MHz QSPI PSRAM (with the rev-1 cache workaround on top), which
+# multiplied the lwIP task's per-tick work and deepened a tiT task-WDT
+# starvation observed on-bench. The Forth-BSS-to-PSRAM move below freed
+# ~74 KB of internal DRAM, which both replaces the headroom and absorbs the
+# WiFi/lwIP buffers staying internal.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+
+# The shared sdkconfig.defaults asks for a 16 KB main-task stack. On this
+# rev-1 ESP32 the internal heap is too starved (Forth dictionary ~55 KB BSS +
+# BT-controller DRAM reserve + cache workaround) to find a contiguous 16 KB
+# internal block at startup, so xTaskCreate(main) fails and the kernel asserts
+# at app_startup.c:86 before app_main runs. app_main only does shallow init
+# (WiFi/BLE/camera all run in their own tasks), so 8 KB is plenty here.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Classic ESP32 can't DMA into PSRAM (PSRAM-DMA is S2/S3 only), so esp32-camera
+# needs a contiguous *internal* DMA ring. In JPEG mode that ring is HARDCODED
+# at 32 KB (target/esp32/ll_cam.c: 8 half-buffers x 4 KB — the
+# CAMERA_DMA_BUFFER_SIZE_MAX Kconfig is dead code in this component version
+# and does not shrink it). After Forth's ~54 KB static BSS + WiFi statics, the
+# largest free internal block was ~28 KB -> cam_dma_config fails 0xffffffff.
+#
+# Fix: allow .bss objects tagged EXT_RAM_BSS_ATTR to live in PSRAM, and tag
+# Forth's dictionary[]/code[] (forth_core.cpp) with it. That returns ~54 KB
+# of contiguous internal DRAM, comfortably fitting the camera's 32 KB ring.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y

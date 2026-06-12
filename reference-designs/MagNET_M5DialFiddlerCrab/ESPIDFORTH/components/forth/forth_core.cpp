@@ -40,6 +40,7 @@
 #include "esp_mac.h"
 #include "esp_idf_version.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR (empty unless BSS-in-PSRAM is on)
 
 // ----- Configuration -----
 #define MAX_STACK     256
@@ -80,10 +81,19 @@ static int     dsp = -1;  // data stack pointer
 static cell_t  rstack[MAX_RSTACK];
 static int     rsp = -1;  // return stack pointer
 
-static DictEntry dictionary[MAX_WORDS];
+/* dictionary[] + code[] are the two big static consumers (~38 KB + 16 KB).
+ * On boards that enable CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY (e.g.
+ * m5camerax, where esp32-camera needs a 32 KB contiguous *internal* DMA ring
+ * that this BSS would otherwise crowd out), EXT_RAM_BSS_ATTR places them in
+ * PSRAM. Everywhere else the attribute expands to nothing and they stay in
+ * internal BSS exactly as before. Both are task-context-only interpreter
+ * data (never touched from ISRs), so PSRAM-through-cache is safe; lookups
+ * get marginally slower, which a REPL/hive-script workload won't notice.
+ * The hot VM state (dstack/rstack/pointers) deliberately stays internal. */
+static EXT_RAM_BSS_ATTR DictEntry dictionary[MAX_WORDS];
 static int dict_count = 0;
 
-static cell_t  code[MAX_DICT_CODE];  // compiled code space
+static EXT_RAM_BSS_ATTR cell_t code[MAX_DICT_CODE];  // compiled code space
 static int     code_ptr = 0;
 
 static uint8_t *heap_mem = nullptr;

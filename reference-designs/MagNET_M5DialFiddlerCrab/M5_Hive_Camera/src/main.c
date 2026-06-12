@@ -69,8 +69,13 @@ static const char *TAG = "m5cam_hive";
   /* AI-Thinker's only addressable LED is the blinding white flash on
    * GPIO4 — not suitable for continuous status. Leave HAS_STATUS_LED
    * undefined; the status_led_* helpers compile to nothing. */
+#elif defined(CAMERA_BOARD_M5CAMERAX)
+  #define BOARD_ENUM  CRAW_CAMERA_BOARD_M5CAMERAX
+  #define BOARD_SLUG  "m5camerax"
+  /* M5Camera X has no status LED broken out (pins_m5camerax.h sets
+   * LED_GPIO -1). Leave HAS_STATUS_LED undefined. */
 #else
-  #error "Define CAMERA_BOARD_AI_THINKER or CAMERA_BOARD_M5CAMS3 via platformio.ini"
+  #error "Define CAMERA_BOARD_AI_THINKER, CAMERA_BOARD_M5CAMS3, or CAMERA_BOARD_M5CAMERAX via platformio.ini"
 #endif
 
 #define FORTH_HEAP_SIZE (32 * 1024)
@@ -148,7 +153,14 @@ static void mdns_publish(void) {
     mdns_init();
     mdns_hostname_set(hostname);                /* → <hostname>.local */
     mdns_instance_name_set("MagNET Hive Camera");
-    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    /* TXT stream_port: MJPEG lives on its own httpd instance on :81
+     * (http_stream.c) so a parked viewer can't wedge the :80 control plane.
+     * Clients that only know _http find the stream via this key. */
+    mdns_txt_item_t http_txt[] = {
+        {"stream_port", "81"},
+    };
+    mdns_service_add(NULL, "_http", "_tcp", 80,
+                     http_txt, sizeof(http_txt)/sizeof(http_txt[0]));
     /* Advertise the MagNET node type too so hive-aware clients can find it
      * without knowing the http service. TXT: role=spy, caps=camera+jpeg. */
     mdns_txt_item_t node_txt[] = {
@@ -159,7 +171,7 @@ static void mdns_publish(void) {
     mdns_service_add(NULL, "_magnet-node", "_tcp", 0,
                      node_txt, sizeof(node_txt)/sizeof(node_txt[0]));
     mdns_published = true;
-    uprintf("[mDNS] %s.local  _http._tcp:80\r\n", hostname);
+    uprintf("[mDNS] %s.local  _http._tcp:80 (stream_port=81)\r\n", hostname);
 }
 
 /* -------------------- WiFi / BLE provisioning --------- */
@@ -475,7 +487,8 @@ static void w_cam_xclk_mhz(void) {
 
 static void w_stream_url(void) {
     if (!http_started) { uprint("\r\n(no WiFi yet)\r\n"); return; }
-    uprintf("\r\nhttp://%s.local/stream\r\nhttp://%s/stream\r\n", hostname, ip_str);
+    /* MJPEG stream is on :81 (own httpd instance — see http_stream.c). */
+    uprintf("\r\nhttp://%s.local:81/stream\r\nhttp://%s:81/stream\r\n", hostname, ip_str);
 }
 
 static void w_prov_status(void) {
