@@ -2,8 +2,10 @@
  * M5_Hive_Camera — OV2640 MagNET hive camera node.
  *
  * Targets:
- *   [env:esp32cam]  AI-Thinker ESP32-CAM (classic ESP32, UART0 console)
- *   [env:m5cams3]   M5Stack Unit CamS3    (ESP32-S3, native USB-serial-JTAG)
+ *   [env:esp32cam]  AI-Thinker ESP32-CAM   (classic ESP32, UART0 console)
+ *   [env:m5cams3]   M5Stack Unit CamS3     (ESP32-S3, native USB-serial-JTAG)
+ *   [env:m5camerax] M5Stack M5Camera X     (classic ESP32, CP2104 UART)
+ *   [env:atoms3r]   M5Stack AtomS3R CAM M12 (ESP32-S3R8, native USB-serial-JTAG)
  *
  * Preserves the stock ESP32 CameraWebServer behavior on the HTTP side
  * (/stream, /capture, /control, /status) while adding MagNET provisioning
@@ -74,8 +76,14 @@ static const char *TAG = "m5cam_hive";
   #define BOARD_SLUG  "m5camerax"
   /* M5Camera X has no status LED broken out (pins_m5camerax.h sets
    * LED_GPIO -1). Leave HAS_STATUS_LED undefined. */
+#elif defined(CAMERA_BOARD_ATOMS3R)
+  #define BOARD_ENUM  CRAW_CAMERA_BOARD_ATOMS3R
+  #define BOARD_SLUG  "atoms3r"
+  /* AtomS3R CAM M12 has an onboard RGB (WS2812) that requires RMT,
+   * not a simple GPIO level — not wired as a status LED here.
+   * Leave HAS_STATUS_LED undefined. */
 #else
-  #error "Define CAMERA_BOARD_AI_THINKER, CAMERA_BOARD_M5CAMS3, or CAMERA_BOARD_M5CAMERAX via platformio.ini"
+  #error "Define CAMERA_BOARD_AI_THINKER, CAMERA_BOARD_M5CAMS3, CAMERA_BOARD_M5CAMERAX, or CAMERA_BOARD_ATOMS3R via platformio.ini"
 #endif
 
 #define FORTH_HEAP_SIZE (32 * 1024)
@@ -146,6 +154,7 @@ static bool     http_started           = false;
 static bool     mdns_published         = false;
 static bool     hive_started           = false;
 static bool     camera_ready           = false;
+static bool     camera_init_failed     = false;  /* one-shot: stop retrying after first failure */
 
 /* -------------------- mDNS advertisement -------------------- */
 static void mdns_publish(void) {
@@ -371,7 +380,7 @@ static void housekeeping_task(void *arg) {
                 uprintf("[SNTP] time synced: %s UTC\r\n", buf);
             }
         }
-        if (ble_torn_down && !camera_ready) {
+        if (ble_torn_down && !camera_ready && !camera_init_failed) {
             /* Now that the BLE stack is gone, internal RAM is unfragmented
              * and there's plenty of headroom for esp32-camera DMA.
              *
@@ -398,7 +407,9 @@ static void housekeeping_task(void *arg) {
                 uprintf("[cam] %s ready  (defaults VGA/q12, NVS overrides applied)  flash GPIO=%d\r\n",
                         craw_camera_board_name(), craw_camera_flash_gpio());
             } else {
-                uprintf("[cam] init failed rc=0x%x — check wiring / PSRAM\r\n", rc);
+                camera_init_failed = true;
+                uprintf("[cam] init failed rc=0x%x — sensor not detected.\r\n"
+                        "      Check wiring. Use 'cam-reinit' to retry after fixing.\r\n", rc);
             }
         }
         if (camera_ready && craw_wifi_is_connected() && !http_started) {
@@ -483,6 +494,14 @@ static void w_cam_xclk_mhz(void) {
     int mhz = (int)forth_pop();
     craw_camera_set_xclk_mhz(mhz);
     uprintf("\r\ncam-xclk-mhz=%d saved. Reboot to apply.\r\n", mhz);
+}
+
+/* ( -- ) Re-attempt camera init after a previous failure (e.g. cable re-seat). */
+static void w_cam_reinit(void) {
+    if (camera_ready) { uprint("\r\ncamera already ready\r\n"); return; }
+    if (!ble_torn_down) { uprint("\r\ncam-reinit: wait for BLE teardown first\r\n"); return; }
+    camera_init_failed = false;   /* unlock the housekeeping gate */
+    uprint("\r\nretrying camera init on next housekeeping tick...\r\n");
 }
 
 static void w_stream_url(void) {
@@ -576,6 +595,7 @@ static void register_forth_words(void) {
     forth_register_word("cam-vflip",     w_cam_vflip);
     forth_register_word("cam-hmirror",   w_cam_hmirror);
     forth_register_word("cam-reset-settings", w_cam_reset_settings);
+    forth_register_word("cam-reinit",         w_cam_reinit);
     forth_register_word("cam-xclk-mhz",       w_cam_xclk_mhz);
     forth_register_word("kv-get",             w_kv_get);
     forth_register_word("kv-put",             w_kv_put);

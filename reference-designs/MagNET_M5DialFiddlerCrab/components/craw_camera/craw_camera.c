@@ -7,8 +7,11 @@
 #include "pins_ai_thinker.h"
 #include "pins_m5cams3.h"
 #include "pins_m5camerax.h"
+#include "pins_atoms3r.h"
 
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "nvs.h"
@@ -39,9 +42,11 @@ static bool nvs_load_u8(const char *key, uint8_t *out) {
     return err == ESP_OK;
 }
 
-static craw_camera_board_t s_board     = CRAW_CAMERA_BOARD_AI_THINKER;
-static int                 s_led_gpio  = -1;
+static craw_camera_board_t s_board      = CRAW_CAMERA_BOARD_AI_THINKER;
+static int                 s_led_gpio   = -1;
 static bool                s_led_invert = false;
+static int                 s_power_gpio = -1;  /* active-LOW enable; -1 = not present */
+static int                 s_manual_reset_gpio = -1;  /* manual reset pulse; -1 = none */
 static bool                s_initialized = false;
 
 static void build_cfg(const craw_camera_config_t *in, camera_config_t *out) {
@@ -110,6 +115,29 @@ static void build_cfg(const craw_camera_config_t *in, camera_config_t *out) {
         s_led_gpio        = M5CAMERAX_LED_GPIO;
         s_led_invert      = M5CAMERAX_LED_INVERT;
         break;
+
+    case CRAW_CAMERA_BOARD_ATOMS3R:
+        out->pin_pwdn     = ATOMS3R_PWDN_GPIO;
+        out->pin_reset    = ATOMS3R_RESET_GPIO;
+        out->pin_xclk     = ATOMS3R_XCLK_GPIO;
+        out->pin_sccb_sda = ATOMS3R_SIOD_GPIO;
+        out->pin_sccb_scl = ATOMS3R_SIOC_GPIO;
+        out->pin_d7       = ATOMS3R_Y9_GPIO;
+        out->pin_d6       = ATOMS3R_Y8_GPIO;
+        out->pin_d5       = ATOMS3R_Y7_GPIO;
+        out->pin_d4       = ATOMS3R_Y6_GPIO;
+        out->pin_d3       = ATOMS3R_Y5_GPIO;
+        out->pin_d2       = ATOMS3R_Y4_GPIO;
+        out->pin_d1       = ATOMS3R_Y3_GPIO;
+        out->pin_d0       = ATOMS3R_Y2_GPIO;
+        out->pin_vsync    = ATOMS3R_VSYNC_GPIO;
+        out->pin_href     = ATOMS3R_HREF_GPIO;
+        out->pin_pclk     = ATOMS3R_PCLK_GPIO;
+        s_led_gpio        = ATOMS3R_LED_GPIO;
+        s_led_invert      = ATOMS3R_LED_INVERT;
+        s_power_gpio      = ATOMS3R_POWER_GPIO;
+        s_manual_reset_gpio = ATOMS3R_RESET_N_GPIO;
+        break;
     }
 
     out->xclk_freq_hz = in->xclk_freq_hz ? in->xclk_freq_hz : 20000000;
@@ -144,6 +172,47 @@ int craw_camera_init(const craw_camera_config_t *cfg) {
 
     camera_config_t c;
     build_cfg(cfg, &c);
+
+    /* AtomS3R M12 power-up + reset sequence (matches M5Stack's own driver).
+     *
+     * POWER_N (GPIO 18) is an active-LOW enable for the shared internal 3.3V
+     * rail (camera + IMU). RESET (GPIO 38) is the OV3660 hardware reset, pulsed
+     * manually here because the sensor needs a ~100 ms reset-low + ~1 s settle
+     * that the esp32-camera driver's built-in 10 ms pulse is too short to give.
+     *
+     * Sequence: power on → wait for rail/sensor to stabilize → assert reset →
+     * release reset → settle → THEN esp_camera_init (which starts XCLK + probes
+     * SCCB). Skipping the settle delays or the reset pulse is the #1 cause of
+     * the 0x106 "Detected camera not supported" no-ACK seen on this board. */
+    if (s_power_gpio >= 0) {
+        gpio_config_t pwr = {
+            .pin_bit_mask = 1ULL << s_power_gpio,
+            .mode         = GPIO_MODE_OUTPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&pwr);
+        gpio_set_level((gpio_num_t)s_power_gpio, 0);  /* active-LOW: LOW = power ON */
+        vTaskDelay(pdMS_TO_TICKS(500));  /* rail + OV3660 power-on stabilization */
+        ESP_LOGI(TAG, "camera POWER_N (GPIO %d) driven LOW → rail powered", s_power_gpio);
+    }
+
+    if (s_manual_reset_gpio >= 0) {
+        gpio_config_t rst = {
+            .pin_bit_mask = 1ULL << s_manual_reset_gpio,
+            .mode         = GPIO_MODE_OUTPUT,
+            .pull_up_en   = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type    = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&rst);
+        gpio_set_level((gpio_num_t)s_manual_reset_gpio, 0);  /* assert reset */
+        vTaskDelay(pdMS_TO_TICKS(100));
+        gpio_set_level((gpio_num_t)s_manual_reset_gpio, 1);  /* release reset */
+        vTaskDelay(pdMS_TO_TICKS(1000));                     /* sensor settle */
+        ESP_LOGI(TAG, "camera RESET (GPIO %d) pulsed", s_manual_reset_gpio);
+    }
 
     /* If NVS has an XCLK override (set via craw_camera_set_xclk_mhz), apply
      * it before esp_camera_init. XCLK cannot be changed after init. */
@@ -269,6 +338,7 @@ const char *craw_camera_board_name(void) {
     case CRAW_CAMERA_BOARD_AI_THINKER: return "AI-Thinker ESP32-CAM";
     case CRAW_CAMERA_BOARD_M5CAMS3:    return "M5Stack Unit CamS3";
     case CRAW_CAMERA_BOARD_M5CAMERAX:  return "M5Stack M5Camera X";
+    case CRAW_CAMERA_BOARD_ATOMS3R:    return "M5Stack AtomS3R CAM M12";
     default:                           return "unknown";
     }
 }
