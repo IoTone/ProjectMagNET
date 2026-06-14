@@ -9,7 +9,7 @@
   "udm_version": "1.0",
   "udm_doc_version": "0.1.0",
 
-  "_comment": "UC4 airplane dataspace — simulated in-flight experience. Four mutually-exclusive content modes selectable from the dataspace HUD: IMU attitude / music / video / spatial photos. Only one renders at a time; the others stay loaded in the scene graph but hidden + paused.",
+  "_comment": "UC4 airplane dataspace — simulated in-flight experience. Five mutually-exclusive content modes selectable from the dataspace HUD: IMU attitude / music / video / spatial photos (Gaussian splats) / photo carousel (flat ring). Only one renders at a time; the others stay loaded in the scene graph but hidden + paused. Photos uses the splat path on splat-capable runtimes (Quest, Android XR, desktop); carousel is the flat-image ring that works everywhere.",
 
   "udm_devices": [
     {
@@ -68,6 +68,20 @@
       "udm_services_link": [],
       "udm_tags":         ["vehicle", "photo", "spatial"],
       "udm_spatial_anchor_x": { "x": 0.0, "y": 1.2, "z": -1.0 }
+    },
+    {
+      "udm_key":   "cabin-carousel-001",
+      "udm_uuid":  "urn:device:photo-carousel:cabin-001",
+      "_comment":  "Flat-image photo carousel — the same travel photos as cabin-spatial-gallery, rendered as a curved ring of textured panels (one draw call per photo) instead of Gaussian splats. This is the splat-gallery cell forced into renderMode:'carousel' (see liveSplatGalleryCell.ts). It runs everywhere — splat-capable or not — so it's a lightweight always-works alternative to the splat Photos mode. Spectacles-class devices auto-fall-back to this same carousel for the Photos mode; here it's exposed as its own selectable HUD item.",
+      "udm_model_name":   "Photo Carousel (flat)",
+      "udm_vendor":       "MagNET (sim)",
+      "udm_mktg_name":    "Cabin Photo Carousel",
+      "udm_type":         "display",
+      "udm_class":        ["display", "photo", "carousel"],
+      "udm_capabilities": ["textured-ring", "auto-advance", "manual-navigation"],
+      "udm_services_link": [],
+      "udm_tags":         ["vehicle", "photo", "flat"],
+      "udm_spatial_anchor_x": { "x": 0.0, "y": 1.2, "z": -1.0 }
     }
   ],
 
@@ -112,7 +126,7 @@
     }
   ],
 
-  "_marks_note": "All four marks load but only one renders at a time — the dataspace HUD below switches via `show-only:<id>` actions. IMU is the default visible mode on entry; the others start hidden + (where applicable) paused.",
+  "_marks_note": "All five marks load but only one renders at a time — the dataspace HUD below switches via `show-only:<id>` actions. IMU is the default visible mode on entry; the others start hidden + (where applicable) paused.",
 
   "marks": [
     {
@@ -221,6 +235,45 @@
       "deviceRef": "cabin-spatial-gallery-001",
       "hoverable": true,
       "defaultVisible": false
+    },
+    {
+      "id": "cabin-carousel",
+      "type": "splat-gallery",
+      "title": "Travel Carousel",
+      "subtitle": "flat photo ring  -  ArrowL / ArrowR to navigate",
+      "data": { "source": "inline" },
+      "_comment_carousel": "Same splat-gallery cell as cabin-spatial-gallery but pinned to renderMode:'carousel' — a curved ring of flat textured panels (the photos' imageUrl) instead of Gaussian splats. Renders on every device including non-splat-capable ones (Spectacles-class auto-uses this same path for Photos; here it's its own HUD mode). Keeps the .ply `url` for SplatPhoto type-compatibility but never loads it in carousel mode — only `imageUrl` is fetched.",
+      "config": {
+        "renderMode": "carousel",
+        "photos": [
+          {
+            "url": "/spatial/_DSC2913.compressed.ply",
+            "imageUrl": "/spatial/_DSC2913.jpg",
+            "title": "Visit Kyoto",
+            "location": "Kyoto, Japan",
+            "description": "A moss-covered temple garden in late autumn. Stone paths thread between cedar trunks centuries older than the shrine itself; a koi pond just out of frame. Slip your shoes off at the gate, take the unhurried tour, leave with rain in your hair."
+          },
+          {
+            "url": "/spatial/_DSC8994.compressed.ply",
+            "imageUrl": "/spatial/_DSC8994.webp",
+            "title": "Visit Haystack Rock",
+            "location": "Cannon Beach, Oregon, USA",
+            "description": "Two hundred thirty-five feet of basalt sea stack at the Pacific's edge — tide pools at its base, tufted puffins nesting on its shoulders, a long beach to walk the cold sand at low water. Stand close enough to feel the spray, but only at low tide; the Pacific takes the shore back twice a day."
+          },
+          {
+            "url": "/spatial/_DSC1624.compressed.ply",
+            "imageUrl": "/spatial/_DSC1624.webp",
+            "title": "Visit Banff",
+            "location": "Banff National Park, Alberta, Canada",
+            "description": "Pitch the tent under the larches as they go gold, brew coffee on the camp stove at first light, listen for elk in the meadow at dusk. Banff is wild edges and big silence — pack warm, pack curious, leave time for a paddle on the lake."
+          }
+        ],
+        "autoAdvanceMs": 18000,
+        "splatY": 0
+      },
+      "deviceRef": "cabin-carousel-001",
+      "hoverable": true,
+      "defaultVisible": false
     }
   ],
 
@@ -231,6 +284,7 @@
       { "id": "uc4-music",   "label": "Music",    "icon": ">", "action": "show-only:cabin-boombox" },
       { "id": "uc4-video",   "label": "Video",    "icon": "*", "action": "show-only:cabin-display" },
       { "id": "uc4-photos",  "label": "Photos",   "icon": ".", "action": "show-only:cabin-spatial-gallery" },
+      { "id": "uc4-carousel","label": "carousel", "icon": "o", "action": "show-only:cabin-carousel" },
       { "id": "recenter",    "label": "Recenter", "icon": "@", "action": "recenter" },
       { "id": "leave",       "label": "Leave",    "icon": "x", "action": "leave-dataspace" }
     ]

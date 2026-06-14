@@ -522,6 +522,10 @@ export function registerAllBuilders() {
       scenePosition: cfg.scenePosition as [number, number, number] | undefined,
       sceneRotation: cfg.sceneRotation as [number, number, number, number] | undefined,
       sceneScale:    cfg.sceneScale    as [number, number, number] | undefined,
+      // `renderMode: 'carousel' | 'splat'` pins the view; omitted = auto
+      // (splat on Quest/Android XR/desktop, carousel on Spectacles-class).
+      // UC4 uses a forced-carousel mark as a standalone HUD mode.
+      forceRenderMode: cfg.renderMode as 'splat' | 'carousel' | undefined,
     });
     return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
   });

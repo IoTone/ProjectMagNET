@@ -31,24 +31,28 @@
 import * as THREE from 'three';
 import { Text } from 'troika-three-text';
 import { TEXT } from '../ui/palette';
-import { isQuest } from '../platform';
+import { isQuest, isAndroidXR } from '../platform';
 
 /**
  * Spectacles-class detection. Spectacles' browser UA masquerades (it
  * can't be sniffed directly — see platform.ts), and it can't render
  * mkkellogg Gaussian splats. The fail-safe signal is "an XR session is
- * live AND it isn't Quest" → treat as Spectacles-class and use the
- * flat-image carousel instead of the splat path. Desktop / smoke
- * (no XR session) and Quest are unaffected and keep the splats. Read
- * lazily at activation time (the user is in XR by the time they open
- * the Photos mode) via the `window.__demo.renderer` bridge main.ts
- * exposes.
+ * live AND it isn't a known splat-capable Chromium runtime (Quest or
+ * Android XR)" → treat as Spectacles-class and use the flat-image
+ * carousel instead of the splat path. Desktop / smoke (no XR session),
+ * Quest, and Android XR are unaffected and keep the splats. Read lazily
+ * at activation time (the user is in XR by the time they open the Photos
+ * mode) via the `window.__demo.renderer` bridge main.ts exposes.
+ *
+ * Android XR (Chrome 138 on Android 10) is Chromium-based and renders the
+ * WebGL float-texture splat path fine, so it must NOT fall into the
+ * carousel branch — `isAndroidXR()` is excluded here for that reason.
  */
 function isSpectaclesClass(): boolean {
   if (typeof window === 'undefined') return false;
   const r = (window as unknown as { __demo?: { renderer?: { xr?: { isPresenting?: boolean } } } })
     .__demo?.renderer;
-  return !!r?.xr?.isPresenting && !isQuest();
+  return !!r?.xr?.isPresenting && !isQuest() && !isAndroidXR();
 }
 
 // `@mkkellogg/gaussian-splats-3d` is lazy-loaded the first time a splat
@@ -121,6 +125,17 @@ export interface LiveSplatGalleryOpts {
   scenePosition?: [number, number, number];
   sceneRotation?: [number, number, number, number];
   sceneScale?: [number, number, number];
+  /**
+   * Pin the render path instead of auto-detecting it. Default `'auto'`:
+   * splats on Quest / Android XR / desktop, flat-image carousel on
+   * Spectacles-class devices (see `isSpectaclesClass`). Set `'carousel'`
+   * to always render the curved flat-image ring (UC4 exposes this as its
+   * own "carousel" HUD mode — a lightweight view that works on every
+   * device, splat-capable or not), or `'splat'` to force the Gaussian
+   * path everywhere. A forced carousel still needs each photo's
+   * `imageUrl`.
+   */
+  forceRenderMode?: 'splat' | 'carousel';
 }
 
 export interface LiveSplatGalleryCell {
@@ -166,6 +181,7 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
     scenePosition = [0, 0, 0],
     sceneRotation = [0, 1, 0, 0],
     sceneScale    = [1, 1, 1],
+    forceRenderMode,
   } = opts;
 
   if (photos.length === 0) {
@@ -254,9 +270,11 @@ export function buildLiveSplatGalleryCell(opts: LiveSplatGalleryOpts): LiveSplat
     dispose(): void;
   };
   let carousel: CarouselHandle | null = null;
-  /** Decided once on first activation: 'splat' (Quest/desktop) or
-   *  'carousel' (Spectacles-class). Null until then. */
-  let renderMode: 'splat' | 'carousel' | null = null;
+  /** Decided once on first activation: 'splat' (Quest / Android XR /
+   *  desktop) or 'carousel' (Spectacles-class). When the manifest pins
+   *  `forceRenderMode` it's set up-front and the platform check is skipped;
+   *  otherwise it stays null until the first `setActive(true)`. */
+  let renderMode: 'splat' | 'carousel' | null = forceRenderMode ?? null;
 
   function buildCarousel(): CarouselHandle {
     const cg = new THREE.Group();
