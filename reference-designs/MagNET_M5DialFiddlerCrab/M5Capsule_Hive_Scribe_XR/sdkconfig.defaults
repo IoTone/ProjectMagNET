@@ -1,0 +1,32 @@
+# M5Capsule (ESP32-S3FN8 — 8 MB flash, no PSRAM)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# No PSRAM on this SKU
+# CONFIG_SPIRAM is not set
+
+# Console: native USB-serial-JTAG
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Custom partition table (extra room for hive components)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# BLE — NimBLE only (S3 has no classic BT anyway)
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+
+# Save RAM
+CONFIG_LWIP_IPV6=n
+
+# esp_http_server (craw_imu HTTP endpoint) — bump the request-header
+# buffer from the 512-byte default. Browser fetches via a cloudflared
+# tunnel arrive with Cf-* / X-Forwarded-* tunnel-added headers stacked
+# on top of the usual sec-ch-* / sec-fetch-* / cookie noise; the Vite
+# proxy strips most of it but cloudflared's adds slip past. 2048 is
+# what M5_Hive_Camera settled on for the same problem; matches the
+# headroom AHT20 uses (1024) with comfortable margin.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048
