@@ -23,6 +23,12 @@ int forth_init(int heap_size_bytes);
 // Run the Forth REPL (blocking, reads from provided getchar/putchar)
 void forth_repl(int (*get_char)(void), void (*put_char)(int));
 
+// Set I/O callbacks WITHOUT entering the blocking REPL, so forth_eval()'s
+// output (., .s, ." ...) is routed. Use when an external dispatcher owns the
+// input stream and drives the engine line-by-line via forth_eval().
+// (Added for the MagNET dual-mode HCP/Forth link, design proposal §12.4.)
+void forth_set_io(int (*get_char)(void), void (*put_char)(int));
+
 // Execute a Forth string
 int forth_eval(const char *text);
 

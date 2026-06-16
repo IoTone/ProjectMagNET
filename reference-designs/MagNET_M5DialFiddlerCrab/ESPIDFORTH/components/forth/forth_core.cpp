@@ -1236,6 +1236,11 @@ void forth_repl(int (*get_char)(void), void (*put_char)(int)) {
     put_string("Bye!\n");
 }
 
+void forth_set_io(int (*get_char)(void), void (*put_char)(int)) {
+    io_getchar = get_char;
+    io_putchar = put_char;
+}
+
 int forth_eval(const char *text) {
     if (!heap_mem) return -1;
     interpret_line(text);
