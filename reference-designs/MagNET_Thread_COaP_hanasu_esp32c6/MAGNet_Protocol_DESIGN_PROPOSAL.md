@@ -1764,10 +1764,10 @@ blocking `forth_repl()`. Instead it reads one line at a time and routes by mode:
   through **one serialized TX writer** (a mutex-guarded queue) so an async `!CHAT` can never interleave
   mid-line with a `+OK` or with Forth output.
 
-**Required tiny ESPIDFORTH change:** add `forth_set_io(getchar, putchar)` so `forth_eval()` output is
-routed without entering the blocking `forth_repl()`; point `put_char` at the serialized TX writer. Also
-ensure `s"` / `type` exist (the stub lists `."` but FFI string args need `s"` → counted string on the
-stack). If absent, add them early (see Phase E-A) rather than waiting on the full engine port.
+**Required tiny ESPIDFORTH changes (done):** `forth_set_io(getchar, putchar)` so `forth_eval()` output
+is routed without entering the blocking `forth_repl()` (point `put_char` at the serialized TX writer);
+and `s"` / `type` so FFI string args can be driven from the REPL (the stub had only `."`). Both landed
+in `components/forth/forth_core.{h,cpp}` — `s" hello team" mn-chat` now works.
 
 ### 12.5 Memory budget & bringup order (C6, no PSRAM)
 
@@ -1829,7 +1829,7 @@ in, since the unified-role logic is small and Thread's self-healing is identical
 
 | Phase | Goal | Key deliverable / exit test |
 |-------|------|-----------------------------|
-| **E-A: Skeleton + coexistence spike** | Prove ESPIDFORTH + esp_openthread fit and run together on C6 | `ok>` over USB-CDC **and** Thread attaches; `mem` shows healthy free heap with the radio up. De-risks the #1 unknown (RAM + IDF Thread). Add `s"`/`type`/`forth_set_io` here. |
+| **E-A: Skeleton + coexistence spike** | Prove ESPIDFORTH + esp_openthread fit and run together on C6 | `ok>` over USB-CDC **and** Thread attaches; `mem` shows healthy free heap with the radio up. De-risks the #1 unknown (RAM + IDF Thread). `s"`/`type`/`forth_set_io` added ✓; build links clean ✓ (flash 28.6%, static RAM 31%); on-HW attach + runtime heap still to confirm. |
 | **E-B: MagNET C core (plaintext)** | Unified single-role node (§6 Phase 0 logic in C), `/magnet` CoAP resource, v2.1 envelope unencrypted, multicast chat | 3-node failover + multicast chat; `mn-chat`/`mn-status`/`mn-peers` FFI words work at `ok>`. |
 | **E-C: HCP dispatcher + dual-mode** | Realize §11.3 — sigil framing, tags, error codes, CAPS/HELP, serialized TX writer, event pump; `FORTH` escape | LLM-style transcript (§11.3.7) drives chat over USB-CDC; `FORTH` drops to REPL and back. |
 | **E-D: Crypto + identity** | §11.1: KDF, epoch keys, AES-CCM with nonce discipline + NVS counter blocks, Ed25519 identity, signed/allow-listed admin | `mn-join` private channel; two channels isolate; replay rejected; only allow-listed key can `set-channel`. |

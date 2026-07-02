@@ -1459,24 +1459,53 @@ scene.add(joinPanelAnchor);
 const splashLogo = buildSplashLogo();
 scene.add(splashLogo.group);
 
+/* DEMO join codes → bundled example manifests, served statically by Vite at
+ * /examples/*. Mirrors mock-join-server's fixedCodes map, but resolved
+ * client-side so the DEMO codes still open their dataspace when the join
+ * server is unreachable (offline demo, dropped tunnel). Kept in sync with
+ * server/mock-join-server.ts. */
+const DEMO_MANIFESTS: Record<string, string> = {
+  DEMO01: '/examples/uc1-vitals.json',
+  DEMO02: '/examples/uc2-room.json',
+  DEMO03: '/examples/uc3-poster.json',
+  DEMO04: '/examples/uc4-airplane.json',
+};
+
 const joinPanel = createJoinPanel({
-  onAccepted: async (_code: string, token?: string, manifestUrl?: string, _dataspace?: string) => {
-    if (token && manifestUrl) {
-      // Real server flow: fetch manifest with token, then render via the controller.
-      await manifestController.loadFromUrl(manifestUrl, token);
-    }
-    // Wait 1s, then hide panel and reveal the viz. Re-place at reveal
+  onAccepted: async (code: string, token?: string, manifestUrl?: string, _dataspace?: string) => {
+    // Resolve a manifest to load. The real server flow supplies `manifestUrl`
+    // (+ token). The mock-accept fallback fires onAccepted with NEITHER when
+    // /api/v1/join is unreachable — no mock-join-server running, or a
+    // cloudflared tunnel that drops the POST (see JoinPanel's .catch). In
+    // that case map the DEMO code to its bundled example manifest, which Vite
+    // serves statically at /examples/* and which renders with synthesized
+    // data offline (no sensors, no server). Without this the reveal below
+    // un-hid an EMPTY vizAnchor → the "blank dataspace" symptom.
+    const src = manifestUrl ?? DEMO_MANIFESTS[code.toUpperCase()];
+    if (src) await manifestController.loadFromUrl(src, token);
+
+    // Brief beat to let the "✓ ACCEPTED" panel state register, then hide
+    // the panel and reveal — but ONLY if a manifest actually loaded
+    // (mirrors the ?manifest= path's hasActive() guard). Re-place at reveal
     // time (not just on load) so the dataspace lands where the user is
-    // actually looking now — they may have turned during the 1 s, and
-    // on the mock-accept path no manifest loaded so onLoaded never ran.
+    // looking now — they may have turned during the delay. If nothing
+    // loaded (unknown code + no server), fall back to the demo gallery
+    // instead of stranding the user on a blank dataspace.
+    // 400 ms (was 1000 ms): the manifest is already awaited above, so this
+    // is purely the accepted-state flourish — 1 s just tacked dead time
+    // onto every join.
     setTimeout(() => {
       hideJoinPanel();
-      galleryRoot.visible = false;
-      uiAnchor.visible = false;
-      vizAnchor.visible = true;
-      placeDataspaceInFrontOfUser();
-      showDataspaceMenu();
-    }, 1000);
+      if (manifestController.hasActive()) {
+        galleryRoot.visible = false;
+        uiAnchor.visible = false;
+        vizAnchor.visible = true;
+        placeDataspaceInFrontOfUser();
+        showDataspaceMenu();
+      } else {
+        showVizGallery(true);
+      }
+    }, 400);
   },
   onRejected: (_code: string, _reason: string) => {
     // Panel handles visual feedback internally

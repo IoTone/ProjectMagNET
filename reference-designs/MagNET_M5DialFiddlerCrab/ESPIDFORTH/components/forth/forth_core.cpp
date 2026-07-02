@@ -251,6 +251,14 @@ static void w_fetch(void)   { cell_t *addr = (cell_t *)pop(); push(*addr); }
 static void w_cstore(void)  { uint8_t *addr = (uint8_t *)pop(); *addr = (uint8_t)pop(); }
 static void w_cfetch(void)  { uint8_t *addr = (uint8_t *)pop(); push(*addr); }
 
+// ( c-addr u -- ) print u bytes starting at c-addr
+static void w_type(void) {
+    cell_t u = pop();
+    const char *s = (const char *)pop();
+    if (!s) return;
+    for (cell_t i = 0; i < u; i++) io_putchar(s[i]);
+}
+
 // ----- Dictionary Helpers -----
 static void add_primitive(const char *name, word_fn_t fn, bool imm = false) {
     if (dict_count >= MAX_WORDS) return;
@@ -317,6 +325,7 @@ static bool parse_number(const char *word, cell_t *val) {
 #define CODE_LOOP     (-6)   // loop increment, next cell is branch target
 #define CODE_PLOOP    (-7)   // +loop increment, next cell is branch target
 #define CODE_DOTQUOTE (-8)   // next cell is string length, then chars
+#define CODE_SQUOTE   (-9)   // s" : next cell is length, then chars; pushes (addr len)
 
 static void execute_code(int start) {
     int ip = start;
@@ -366,6 +375,15 @@ static void execute_code(int start) {
             int len = (int)code[ip++];
             const char *str = (const char *)&code[ip];
             for (int i = 0; i < len; i++) io_putchar(str[i]);
+            ip += (len + sizeof(cell_t) - 1) / sizeof(cell_t);
+        } else if (op == CODE_SQUOTE) {
+            // Push address of the inline string and its length, then skip it.
+            // The string lives in the (persistent) code array, so the address
+            // is stable for the life of the colon definition.
+            int len = (int)code[ip++];
+            const char *str = (const char *)&code[ip];
+            push((cell_t)str);
+            push((cell_t)len);
             ip += (len + sizeof(cell_t) - 1) / sizeof(cell_t);
         } else if (op >= 0 && op < dict_count) {
             execute_word((int)op);
@@ -523,6 +541,34 @@ static void interpret_token(const char *token) {
             code_ptr += cells_needed;
         } else {
             put_string(str);
+        }
+        return;
+    }
+
+    // Handle s" — push ( c-addr u ) for the string up to the closing ".
+    // Works in both modes. Interpret mode copies into a small rotating set of
+    // transient buffers so the address survives long enough to be consumed on
+    // the same line (e.g.  s" hi" type  or  s" hi" mn-chat ).
+    if (strcasecmp(token, "s\"") == 0) {
+        char str[256];
+        int len = read_until('"', str, sizeof(str));
+        if (compiling) {
+            code[code_ptr++] = CODE_SQUOTE;
+            code[code_ptr++] = len;
+            int cells_needed = (len + sizeof(cell_t) - 1) / sizeof(cell_t);
+            memset(&code[code_ptr], 0, cells_needed * sizeof(cell_t));
+            memcpy(&code[code_ptr], str, len);
+            code_ptr += cells_needed;
+        } else {
+            static char sbuf[4][256];
+            static int  sbuf_idx = 0;
+            char *dst = sbuf[sbuf_idx];
+            sbuf_idx = (sbuf_idx + 1) & 3;
+            if (len > 255) len = 255;
+            memcpy(dst, str, len);
+            dst[len] = '\0';
+            push((cell_t)dst);
+            push((cell_t)len);
         }
         return;
     }
@@ -1159,6 +1205,7 @@ int forth_init(int heap_size_bytes) {
     add_primitive("@", w_fetch);
     add_primitive("c!", w_cstore);
     add_primitive("c@", w_cfetch);
+    add_primitive("type", w_type);
 
     add_primitive("mem", w_mem);
     add_primitive("free-heap", w_free_heap);

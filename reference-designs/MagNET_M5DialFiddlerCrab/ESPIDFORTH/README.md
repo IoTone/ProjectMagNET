@@ -125,6 +125,10 @@ ok>
 
 ### String
 - `."` print string literal (e.g. `." hello world"`)
+- `s"` push a string as `( c-addr u )` (e.g. `s" hello" type`). Works in interpret
+  and compile mode. Interpret-mode strings use a 4-deep rotating transient buffer
+  (good for same-line consumption); compiled strings are stored inline and permanent.
+- `type` print `u` bytes from `c-addr` (e.g. `s" hi" type`)
 
 ### Number Formats
 - Decimal: `42`, `-7`

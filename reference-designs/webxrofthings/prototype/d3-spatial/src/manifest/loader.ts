@@ -149,7 +149,14 @@ export async function loadManifest(
 
   async function fetchInto(spec: MarkSpec, url: string, shape: string): Promise<boolean> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    /* 2.5 s (was 5 s). The cold-start pre-fetch BLOCKS the dataspace reveal
+     * (loadManifest awaits Promise.allSettled of these), so this timeout is
+     * a direct additive cost to join latency whenever a sensor is down. A
+     * reachable device answers in <1 s even through a cloudflared tunnel
+     * (memory: ~2-3 Hz effective), so 2.5 s keeps margin for a slow-but-
+     * alive device while halving the offline-sensor stall. Periodic refresh
+     * ticks reuse this same bound, which is also fine. */
+    const timer = setTimeout(() => controller.abort(), 2500);
     try {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
