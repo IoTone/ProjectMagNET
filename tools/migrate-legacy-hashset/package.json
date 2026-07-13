@@ -1,0 +1,17 @@
+{
+  "name": "udm-migrate-legacy-hashset",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Migrate iotonekit-style colon-path HASH-SET (UDM 0.9.1 legacy) to UDM-MagNET v1.0 JSON.",
+  "scripts": {
+    "migrate": "tsx migrate.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.1.9"
+  }
+}

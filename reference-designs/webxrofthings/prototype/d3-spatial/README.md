@@ -27,6 +27,7 @@ Per-UC walkthroughs with device wiring + smoke tests are under `examples/<uc>.md
 | [`DESIGN_NOTES.md`](./DESIGN_NOTES.md) | History of key design decisions and their tradeoffs. |
 | [`examples/*.md`](./examples/) | Per-use-case walkthroughs (`uc2-room.md`, `uc3-poster.md`, `uc4-airplane.md`). |
 | [`XR_UX_BEST_PRACTICES.md`](./XR_UX_BEST_PRACTICES.md) | Lessons learned from on-device testing (Quest 3, Spectacles). |
+| [`docs/discovery-and-tunnel-free-https.md`](./docs/discovery-and-tunnel-free-https.md) | Why mDNS discovery misbehaves over a tunnel + a tunnel-free local-DNS/Let's-Encrypt HTTPS path for Quest 3. |
 | `../*.md` (repo root) | The original spec set — `PROPOSAL.md`, `XR_UX-proposal1.md`, `USECASE_SPECS.md`. |
 
 ## Quick start

@@ -91,6 +91,7 @@ Each use case is a real manifest-driven dataspace joined via the join-code flow 
 | [`CONTRIBUTING.md`](./prototype/d3-spatial/CONTRIBUTING.md) | How to extend d3-spatial itself — new marks, palette rules, code style. |
 | [`XR_UX_BEST_PRACTICES.md`](./prototype/d3-spatial/XR_UX_BEST_PRACTICES.md) | Lessons learned on-device (Quest 3, Spectacles). |
 | [`CAMERA_SETUP.md`](./prototype/d3-spatial/CAMERA_SETUP.md) | ESP32-CAM → cloudflared → Vite-proxy video pipeline. |
+| [`docs/discovery-and-tunnel-free-https.md`](./prototype/d3-spatial/docs/discovery-and-tunnel-free-https.md) | Fixing mDNS discovery over a tunnel + tunnel-free local-DNS + Let's Encrypt HTTPS for on-LAN Quest 3. |
 | [`DESIGN_NOTES.md`](./prototype/d3-spatial/DESIGN_NOTES.md) · [`test-plan.md`](./prototype/d3-spatial/test-plan.md) · [`examples/`](./prototype/d3-spatial/examples/) | Design-decision history, on-device test scripts, per-UC walkthroughs. |
 
 ---
