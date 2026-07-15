@@ -1,0 +1,39 @@
+{
+  "version": "1",
+  "name": "uc5-japan-temps",
+  "displayTitle": "Japan Now — Live Temperatures",
+  "scaleTag": "region",
+  "owner": "demo",
+  "_doc": "UC5 — pixel-Japan tile-grid map with an instantaneous-temperature column per prefecture. Data: /api/v1/geo/japan-temps (Phase 1 simulated; Phase 2 live JMA AMeDAS behind the same URL). Design: docs/uc5-uc6-geo-dataspaces.md",
+  "marks": [
+    {
+      "id": "japan-temp-map",
+      "type": "geo-scene",
+      "title": "Japan — instantaneous temperature",
+      "subtitle": "47 prefectures · capital stations",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/geo/japan-temps",
+        "shape": "geo-points",
+        "refreshInterval": 300
+      },
+      "config": {
+        "basemap": "japan-tile-grid",
+        "width": 1.0,
+        "tileScale": "uniform",
+        "tilt_deg": 55,
+        "position": { "x": 0, "y": 0.72, "z": -1.0 },
+        "maxColumnH": 0.16
+      },
+      "hoverable": true,
+      "defaultVisible": true
+    }
+  ],
+  "hud": {
+    "position": "bottom",
+    "items": [
+      { "id": "recenter", "label": "Recenter", "icon": "⊕", "action": "recenter" },
+      { "id": "leave", "label": "Leave", "icon": "✕", "action": "leave-dataspace" }
+    ]
+  }
+}

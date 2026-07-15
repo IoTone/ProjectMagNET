@@ -194,7 +194,7 @@ export async function loadManifest(
    * whole manifest is ~5 s regardless of how many marks are unreachable.
    * (Sequentially this was N×5 s — e.g. env down → temp + humidity =
    * 10 s before the camera mark even got a chance to render.) */
-  const SELF_FETCHING_SHAPES = new Set(['video', 'imu', 'targets']);
+  const SELF_FETCHING_SHAPES = new Set(['video', 'imu', 'targets', 'geo-points']);
   const urlSpecs = new Map<MarkSpec, { url: string; shape: string; refreshInterval: number; startDelayMs: number }>();
   const startTimeouts: Array<ReturnType<typeof setTimeout>> = [];
   const prefetchJobs: Promise<unknown>[] = [];

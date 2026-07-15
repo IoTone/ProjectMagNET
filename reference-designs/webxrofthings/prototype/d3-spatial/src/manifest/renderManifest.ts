@@ -85,7 +85,7 @@ export function renderManifestToScene(
   // their own world placement (moon-phases-arc wraps the user from in
   // front around to behind; can't be a 0.38 × 0.30 grid cell). They
   // bypass both the grid loop and the per-cell wrapping group below.
-  const SELF_POSITIONED = new Set(['moon-phases-arc', 'owls-to-the-max', 'force-tree-3d']);
+  const SELF_POSITIONED = new Set(['moon-phases-arc', 'owls-to-the-max', 'force-tree-3d', 'geo-scene']);
   const gridMarks = marks.filter(m =>
     m.type !== 'actuator-panel' && !SELF_POSITIONED.has(m.type),
   );

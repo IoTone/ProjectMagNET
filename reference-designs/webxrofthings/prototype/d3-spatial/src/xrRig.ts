@@ -183,6 +183,14 @@ export class XRRig {
 
         this.raycaster.ray.origin.copy(origin);
         this.raycaster.ray.direction.copy(direction);
+        /* Sprite.raycast() throws when raycaster.camera is unset — the
+         * beam ray is built by hand (not setFromCamera), so provide the
+         * XR camera defensively. Label sprites also opt out individually
+         * (labelSprite.ts), but any future sprite in the scene must not
+         * be able to kill the render loop. */
+        this.raycaster.camera = this.renderer.xr.isPresenting
+          ? this.renderer.xr.getCamera()
+          : this.raycaster.camera;
         const hits = this.raycaster.intersectObjects(this.scene.children, true);
         const hit = hits.find(h => {
           if (h.object.userData?.noHover || (h.object as any).isLine) return false;

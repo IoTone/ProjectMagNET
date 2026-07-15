@@ -12,6 +12,8 @@ Current state: **M22 (2026-05-21)** — four end-to-end use cases shipping, ~244
 | **UC2** | `DEMO02` | Room dataspace | Live ESP32-CAM, AHT20 temp/humidity, simulated AQI/baro/pollen, in-XR actuator panel for light + strip + thermostat + speaker. |
 | **UC3** | `DEMO03` | XRt Exhibit (curated art-data exhibit) | Voronoi stippling (triangular prism), 300° moon-phase arc, force-directed tree (grabbable), ceiling owl tile with spatial mp3 hoots. |
 | **UC4** | `DEMO04` | Airplane in-flight experience | Live BMI270 attitude (M5Capsule + Madgwick AHRS + gyro dead-reckoning), procedural cabin music, HLS cabin display, 3-scene Gaussian-splat travel-photo gallery. Mutually-exclusive content modes via show-only HUD. |
+| **UC5** | `DEMO05` | Japan live-temperature dataspace | Pixel-Japan tile-grid map (47 prefectures), instantaneous temperature as column height + validated diverging color around the national mean. **Live JMA AMeDAS observations** (10-min cadence, no API key) with Open-Meteo → simulated fallback chain; `GEO_LIVE=0` forces simulation. See `docs/uc5-uc6-geo-dataspaces.md`. |
+| **UC6** | `DEMO06` | Kumamoto live-transit dataspace | City map drawn from real GTFS geometry (tram + 3 bus operators, committed snapshot from gtfs-data.jp), vehicles as bearing-oriented wedges tweening between 15 s polls. **Live GTFS-RT** (km.bus-vision.jp, no API key) during JST service hours, auto-falling back to simulation on the real routes off-hours; `GEO_LIVE=0` forces simulation. |
 
 Per-UC walkthroughs with device wiring + smoke tests are under `examples/<uc>.md`.
 
@@ -28,6 +30,7 @@ Per-UC walkthroughs with device wiring + smoke tests are under `examples/<uc>.md
 | [`examples/*.md`](./examples/) | Per-use-case walkthroughs (`uc2-room.md`, `uc3-poster.md`, `uc4-airplane.md`). |
 | [`XR_UX_BEST_PRACTICES.md`](./XR_UX_BEST_PRACTICES.md) | Lessons learned from on-device testing (Quest 3, Spectacles). |
 | [`docs/discovery-and-tunnel-free-https.md`](./docs/discovery-and-tunnel-free-https.md) | Why mDNS discovery misbehaves over a tunnel + a tunnel-free local-DNS/Let's-Encrypt HTTPS path for Quest 3. |
+| [`docs/uc5-uc6-geo-dataspaces.md`](./docs/uc5-uc6-geo-dataspaces.md) | **Proposal** — UC5 Japan live-temperature map + UC6 Kumamoto live-transit map: data sources (verified), `geo-scene` mark design, phased plan. |
 | `../*.md` (repo root) | The original spec set — `PROPOSAL.md`, `XR_UX-proposal1.md`, `USECASE_SPECS.md`. |
 
 ## Quick start

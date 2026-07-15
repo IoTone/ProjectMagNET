@@ -1469,6 +1469,8 @@ const DEMO_MANIFESTS: Record<string, string> = {
   DEMO02: '/examples/uc2-room.json',
   DEMO03: '/examples/uc3-poster.json',
   DEMO04: '/examples/uc4-airplane.json',
+  DEMO05: '/examples/uc5-japan-temps.json',
+  DEMO06: '/examples/uc6-kumamoto-transit.json',
 };
 
 const joinPanel = createJoinPanel({

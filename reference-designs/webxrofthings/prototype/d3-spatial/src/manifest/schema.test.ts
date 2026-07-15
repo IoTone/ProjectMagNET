@@ -13,17 +13,24 @@ function loadFixture(name: string): unknown {
 }
 
 describe('validateManifest — fixtures', () => {
-  it('accepts examples/uc2-room.json', () => {
-    const result = validateManifest(loadFixture('uc2-room.json'));
-    if (!result.valid) console.error(result.errors);
-    expect(result.valid).toBe(true);
-  });
-
-  it('accepts examples/room-dataspace.json', () => {
-    const result = validateManifest(loadFixture('room-dataspace.json'));
-    if (!result.valid) console.error(result.errors);
-    expect(result.valid).toBe(true);
-  });
+  /* Every example manifest that a DEMO code can resolve to gets a fixture
+   * row — a manifest that fails validation is a blank dataspace at demo
+   * time. (uc1/3/4 were added late; they'd previously shipped unvalidated.) */
+  for (const fixture of [
+    'uc1-vitals.json',
+    'uc2-room.json',
+    'uc3-poster.json',
+    'uc4-airplane.json',
+    'uc5-japan-temps.json',
+    'uc6-kumamoto-transit.json',
+    'room-dataspace.json',
+  ]) {
+    it(`accepts examples/${fixture}`, () => {
+      const result = validateManifest(loadFixture(fixture));
+      if (!result.valid) console.error(result.errors);
+      expect(result.valid).toBe(true);
+    });
+  }
 
   it('accepts the in-source EXAMPLE_MANIFEST constant', () => {
     expect(validateManifest(EXAMPLE_MANIFEST).valid).toBe(true);

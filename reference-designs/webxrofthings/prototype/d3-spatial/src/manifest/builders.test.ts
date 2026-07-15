@@ -279,6 +279,81 @@ describe('streamgraph builder', () => {
   });
 });
 
+/* ─── geo-scene (UC5 pixel-Japan temperature map) ────────────────────── */
+
+describe('geo-scene builder', () => {
+  const geoSpec = (over: Partial<MarkSpec> = {}): MarkSpec => ({
+    id: 'jp', type: 'geo-scene', title: 'Japan temps',
+    data: { source: 'url', url: '/api/v1/geo/japan-temps', shape: 'geo-points', refreshInterval: 300 },
+    config: { basemap: 'japan-tile-grid', width: 1.1 },
+    defaultVisible: true,
+    ...over,
+  } as MarkSpec);
+
+  it('builds a 47-tile grid with a column + cap per prefecture', async () => {
+    const result = await loadManifest(ds([geoSpec()]));
+    expect(result.marks).toHaveLength(1);
+    const mark = result.marks[0]!;
+    expect(mark.group.name).toBe('live-geo-scene:/api/v1/geo/japan-temps');
+    // plate + 47 tiles + 47 columns + 47 caps = 142 meshes (legend is
+    // DOM-gated off in the node test env).
+    expect(meshCount(mark.group)).toBe(142);
+    result.dispose();
+  });
+
+  it('is skipped for inline data (url-only mark)', async () => {
+    const result = await loadManifest(ds([geoSpec({
+      data: { source: 'inline' } as any,
+    })]));
+    expect(result.marks).toHaveLength(0);
+    result.dispose();
+  });
+
+  it('tick() runs the tween without data (no throw, columns stay flat)', async () => {
+    const result = await loadManifest(ds([geoSpec()]));
+    const mark = result.marks[0]!;
+    const cell = mark.viz as { tick(t: number): void };
+    expect(() => cell.tick(performance.now())).not.toThrow();
+    result.dispose();
+  });
+
+  it('basemap geojson-lines dispatches to the transit cell', async () => {
+    const result = await loadManifest(ds([geoSpec({
+      id: 'kuma',
+      data: { source: 'url', url: '/api/v1/geo/kumamoto/vehicles', shape: 'geo-points', refreshInterval: 15 } as any,
+      config: { basemap: 'geojson-lines', networkUrl: '/maps/kumamoto-network.json' },
+    })]));
+    expect(result.marks).toHaveLength(1);
+    const mark = result.marks[0]!;
+    expect(mark.group.name).toBe('live-transit-scene:/api/v1/geo/kumamoto/vehicles');
+    result.dispose();
+  });
+
+  it('basemap geojson-lines without networkUrl is skipped', async () => {
+    const result = await loadManifest(ds([geoSpec({
+      id: 'kuma-bad',
+      config: { basemap: 'geojson-lines' },
+    })]));
+    expect(result.marks).toHaveLength(0);
+    result.dispose();
+  });
+});
+
+describe('geo-scene color ramp', () => {
+  it('maps 0 → cold pole, 0.5 → dark neutral, 1 → hot pole', async () => {
+    const { rampColor } = await import('../demo/liveGeoSceneCell');
+    expect(rampColor(0).getHexString()).toBe('4da3ff');
+    expect(rampColor(0.5).getHexString()).toBe('383835');
+    expect(rampColor(1).getHexString()).toBe('ff5c3e');
+  });
+
+  it('clamps out-of-domain values to the poles', async () => {
+    const { rampColor } = await import('../demo/liveGeoSceneCell');
+    expect(rampColor(-2).getHexString()).toBe('4da3ff');
+    expect(rampColor(3).getHexString()).toBe('ff5c3e');
+  });
+});
+
 /* ─── unknown mark type ──────────────────────────────────────────────── */
 
 describe('builder dispatch', () => {

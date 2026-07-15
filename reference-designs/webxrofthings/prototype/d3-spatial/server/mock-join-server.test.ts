@@ -182,6 +182,8 @@ describe('mock-join-server — fixed UC codes', () => {
     ['DEMO02', 'demo02'],
     ['DEMO03', 'demo03'],
     ['DEMO04', 'demo04'],
+    ['DEMO05', 'demo05'],
+    ['DEMO06', 'demo06'],
   ])('%s is accepted and resolves to dataspace=%s', async (code, dataspace) => {
     const s = buildWithFixedCodes();
     const res = await request(s.app).post('/api/v1/join').send({ code });
@@ -319,6 +321,52 @@ describe('mock-join-server — simulated body-temperature feed (P3)', () => {
     const last = hist.body.samples[hist.body.samples.length - 1].v;
     // Same generator, calls fractions of a ms apart — values should round-equal.
     expect(Math.abs(snap.body.celsius - last)).toBeLessThan(0.01);
+    s.stopRotationTimer();
+  });
+});
+
+describe('mock-join-server — UC5 geo feed', () => {
+  function buildGeo() {
+    return createJoinServer({ jwtSecret: JWT_SECRET, startRotationTimer: false, rateLimitPerMinute: 1000 });
+  }
+
+  it('japan-temps returns 47 simulated prefecture readings', async () => {
+    const s = buildGeo();
+    const res = await request(s.app).get('/api/v1/geo/japan-temps');
+    expect(res.status).toBe(200);
+    expect(res.body.source).toBe('simulated');
+    expect(typeof res.body.updated).toBe('string');
+    expect(res.body.stations.length).toBe(47);
+    const codes = new Set<number>();
+    for (const st of res.body.stations) {
+      codes.add(st.code);
+      expect(typeof st.nameEn).toBe('string');
+      expect(typeof st.tempC).toBe('number');
+      // Plausible any-season band for the simulator's July baselines.
+      expect(st.tempC).toBeGreaterThan(10);
+      expect(st.tempC).toBeLessThan(40);
+    }
+    expect(codes.size).toBe(47);
+    s.stopRotationTimer();
+  });
+
+  it('kumamoto vehicles returns simulated buses walking the committed network', async () => {
+    const s = buildGeo();
+    const res = await request(s.app).get('/api/v1/geo/kumamoto/vehicles');
+    expect(res.status).toBe(200);
+    expect(res.body.source).toBe('simulated');
+    expect(Array.isArray(res.body.vehicles)).toBe(true);
+    // Snapshot ships 3 bus operators × up to 4 routes × 2 vehicles.
+    expect(res.body.vehicles.length).toBeGreaterThan(0);
+    expect(res.body.vehicles.length).toBeLessThanOrEqual(24);
+    for (const v of res.body.vehicles) {
+      expect(['toshibus', 'kumabus', 'dentetsu']).toContain(v.op);
+      // Inside the Kumamoto city-core bbox (with slack).
+      expect(v.lon).toBeGreaterThan(130.5);
+      expect(v.lon).toBeLessThan(131.0);
+      expect(v.lat).toBeGreaterThan(32.6);
+      expect(v.lat).toBeLessThan(33.0);
+    }
     s.stopRotationTimer();
   });
 });

@@ -67,7 +67,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   // demo dataspace (DEMO01) so a one-click Submit pulls up UC1 without
   // any wheel scrolling — speeds up demo runs and proves the panel's
   // wiring end-to-end before the user touches the keyboard. Other valid
-  // codes today: DEMO02, DEMO03, DEMO04.
+  // codes today: DEMO02, DEMO03, DEMO04, DEMO05, DEMO06.
   const DEFAULT_CODE = 'DEMO01';
   const slotValues: string[] = DEFAULT_CODE.split('');
 
@@ -262,7 +262,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
       case JoinState.IDLE:
         // Mention the fixed UC codes alongside the generic prompt so testers
         // can jump directly into a use-case dataspace without a host device.
-        updateStatus('Enter a code  ·  try DEMO01 / DEMO02 / DEMO03 / DEMO04', TEXT.muted);
+        updateStatus('Enter a code  ·  try DEMO01 – DEMO06', TEXT.muted);
         break;
       case JoinState.ENTERING: {
         const n = filledCount();

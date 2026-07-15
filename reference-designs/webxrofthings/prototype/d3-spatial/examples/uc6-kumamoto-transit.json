@@ -1,0 +1,41 @@
+{
+  "version": "1",
+  "name": "uc6-kumamoto-transit",
+  "displayTitle": "Kumamoto — Live Transit",
+  "scaleTag": "region",
+  "owner": "demo",
+  "_doc": "UC6 — Kumamoto city transit map: tram + 3 city bus operators drawn from real GTFS geometry (public/maps/kumamoto-network.json, gtfs-data.jp), live vehicle wedges from /api/v1/geo/kumamoto/vehicles (Phase 3 simulated on real routes; Phase 4 live GTFS-RT behind the same URL). Design: docs/uc5-uc6-geo-dataspaces.md",
+  "marks": [
+    {
+      "id": "kumamoto-transit-map",
+      "type": "geo-scene",
+      "title": "Kumamoto city transit",
+      "subtitle": "市電 + 3 bus operators · live vehicles",
+      "data": {
+        "source": "url",
+        "url": "/api/v1/geo/kumamoto/vehicles",
+        "shape": "geo-points",
+        "refreshInterval": 15
+      },
+      "config": {
+        "basemap": "geojson-lines",
+        "networkUrl": "/maps/kumamoto-network.json",
+        "width": 1.2,
+        "tilt_deg": 45,
+        "_position_doc": "vizAnchor-local; the anchor sits at (join-time camera height − 0.20 m), so y=+0.15 puts the map center ≈ eye level whether the user joined standing or seated. The old y=1.05 floated it ~0.85 m ABOVE the eyes.",
+        "position": { "x": 0, "y": 0.15, "z": -1.05 },
+        "staleAfterSeconds": 60,
+        "maxVehicles": 64
+      },
+      "hoverable": true,
+      "defaultVisible": true
+    }
+  ],
+  "hud": {
+    "position": "bottom",
+    "items": [
+      { "id": "recenter", "label": "Recenter", "icon": "⊕", "action": "recenter" },
+      { "id": "leave", "label": "Leave", "icon": "✕", "action": "leave-dataspace" }
+    ]
+  }
+}

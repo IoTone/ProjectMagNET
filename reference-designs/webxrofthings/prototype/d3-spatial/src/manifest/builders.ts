@@ -24,6 +24,8 @@ import { buildOwlsToTheMax } from '../viz/owlsToTheMax';
 import { buildForceTree3d } from '../viz/forceTree3d';
 import { buildLiveImuCell } from '../demo/liveImuCell';
 import { buildLiveTargetsCell } from '../demo/liveVitalsCells';
+import { buildLiveGeoSceneCell } from '../demo/liveGeoSceneCell';
+import { buildLiveTransitSceneCell } from '../demo/liveTransitSceneCell';
 import { buildLiveSpatialAudioCell } from '../demo/liveSpatialAudioCell';
 import { buildLiveSplatGalleryCell, type SplatPhoto } from '../demo/liveSplatGalleryCell';
 import { buildLiveActuatorPanelCell } from '../demo/liveActuatorPanelCell';
@@ -465,6 +467,66 @@ export function registerAllBuilders() {
       tilt_rad:       (cfg.tilt_rad       as number) ?? 0,
       glyph_radius:   (cfg.glyph_radius   as number) ?? 0.012,
       glyph_lift:     (cfg.glyph_lift     as number) ?? 0.025,
+    });
+    return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
+  });
+
+  // ─── geo-scene — UC5 pixel-Japan temps / UC6 Kumamoto transit ────────
+  //
+  // One mark type, two basemaps (config.basemap selects the cell):
+  //   'japan-tile-grid' (default) — UC5 pixel-Japan temperature map
+  //     config: { width, tileScale, tilt_deg, position, domain, maxColumnH }
+  //   'geojson-lines' — UC6 city transit network + live vehicles
+  //     config: { networkUrl (static snapshot), width, tilt_deg, position,
+  //               staleAfterSeconds, maxVehicles }
+  //
+  // Both are self-positioned (SELF_POSITIONED in renderManifest.ts — they
+  // are ~1m tabletop scenes, not 0.38 m grid cells) and self-fetching
+  // ('geo-points' is in the loader's SELF_FETCHING_SHAPES; the cell polls
+  // its own URL via startPolling). Poll floors respect upstream rate
+  // limits — 60 s for UC5 (JMA), 15 s for UC6 (Bus-Vision's stated
+  // cadence) — see docs/uc5-uc6-geo-dataspaces.md §3.3.
+  registerMarkBuilder('geo-scene', (spec) => {
+    if (spec.data.source !== 'url') return null;
+    const url = (spec.data as any).url as string;
+    const cfg = (spec.config ?? {}) as Record<string, unknown>;
+    const refreshIntervalS = (spec.data as any).refreshInterval as number | undefined;
+    const tiltDeg = (cfg.tilt_deg as number) ?? 35;
+
+    if (cfg.basemap === 'geojson-lines') {
+      if (typeof cfg.networkUrl !== 'string' || !cfg.networkUrl) {
+        console.warn(`[geo-scene] '${spec.id}' basemap geojson-lines needs config.networkUrl; skipping`);
+        return null;
+      }
+      const refreshMs = typeof refreshIntervalS === 'number'
+        ? Math.max(15_000, refreshIntervalS * 1000)
+        : 15_000;
+      const cell = buildLiveTransitSceneCell({
+        url,
+        networkUrl:   cfg.networkUrl,
+        refreshMs,
+        width:        (cfg.width as number) ?? 1.2,
+        tilt_rad:     (tiltDeg * Math.PI) / 180,
+        position:     cfg.position as { x?: number; y?: number; z?: number } | undefined,
+        staleAfterMs: ((cfg.staleAfterSeconds as number) ?? 60) * 1000,
+        maxVehicles:  (cfg.maxVehicles as number) ?? 64,
+      });
+      return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
+    }
+
+    const refreshMs = typeof refreshIntervalS === 'number'
+      ? Math.max(60_000, refreshIntervalS * 1000)
+      : 300_000;
+    const cell = buildLiveGeoSceneCell({
+      url,
+      refreshMs,
+      width:      (cfg.width      as number) ?? 1.1,
+      tileScale:  (cfg.tileScale  as 'uniform' | 'area') ?? 'uniform',
+      tilt_rad:   (tiltDeg * Math.PI) / 180,
+      position:   cfg.position as { x?: number; y?: number; z?: number } | undefined,
+      domain:     (cfg.domain     as [number, number]) ?? [-5, 35],
+      maxColumnH: (cfg.maxColumnH as number) ?? 0.16,
+      tweenMs:    (cfg.tweenMs    as number) ?? 1000,
     });
     return makeMark(spec, cell.group, cell, { hoverable: spec.hoverable });
   });
