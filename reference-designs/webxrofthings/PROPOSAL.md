@@ -1,4 +1,4 @@
-# Overview (v4)
+# Overview (v5)
 
 The "Internet Of Things", popularly known as IoT, presented a unique way of looking at the nature of data, connectivity, security, and standards around small low power compute devices as they relate to people and the larger world.  "The WebXR of things" as a phrase expresses the ability to explore devices and places and even people,  in a spatial mixed reality sense.  This concept is expressed as a desire to allow XR to become the default interface to devices, places, people, and data.  The caveat to this statement, is, the user should have the option to "own" this tech stack, as opposed to the past 20+ years of computing, which largely operated through a gatekeepers deciding matters of privacy, ownership of copyright over data, collaboration with government (or not) and the right to monetize data.  Open standards are desired as an approach to deliver a stack owned by the consumer, self hosted, paid SaaS hosted, or for free with copyright of data granted to the owner of the stack.  This paper will also address the caveats and challenges in the current tech stacks for delivering the "WebXR of Things".  In this discussion, we will focus on the "hyperlocal" scale.  This implies the immediate area, within sight of the a user, within short range, within walking distance, and not the global scale.
 
@@ -140,10 +140,17 @@ The proof-of-concept reference implementation lives at `reference-designs/webxro
 
 ### Use Cases
 
+V1 use cases (room / personal / vehicle scale):
+
 - UC1 : personal dataspace for wearables owned by one person, with a focus on fitness use case
 - UC2 : room scale dataspace: explore the home/room and control lighting and data
 - UC3 : explore interactive data and experiences in a hypothetical conference poster session for XR
 - UC4: explore the interactive data and services available in an airplane seat as art  of in flight experience
+
+V2 use cases (geographic scale, live open data):
+
+- UC5 : national-scale dataspace: a spatial 3D "pixel map" of Japan showing live instantaneous temperature for all 47 prefectures (JMA AMeDAS)
+- UC6 : city-scale dataspace: a spatial map of Kumamoto with live transit vehicles (GTFS-RT) moving along the real route network
 
 ### Achievements to date
 
@@ -197,6 +204,31 @@ Snapshot: 2026-04-25. Full milestone-by-milestone log in `prototype/d3-spatial/S
 - `npm run dev`, `npm run smoke`, `npm run server`, `npm run camera-proxy`, `npm run typecheck`, `npm run build` — full local development loop
 - Comprehensive documentation: `STATUS.md`, `API.md`, `CONTRIBUTING.md`, `XR_UX_BEST_PRACTICES.md`, `JOINCODE_SPEC.md`, `CAMERA_SETUP.md`, `ROADMAP.md`, `USECASE_SPECS.md`, `DESIGN_NOTES.md`
 
+### POC V2 — Live geo dataspaces (UC5 + UC6)
+
+Snapshot: 2026-07-19. Full design + phase log in `prototype/d3-spatial/docs/uc5-uc6-geo-dataspaces.md`.
+
+V1 proved the dataspace abstraction at personal, room, and vehicle scale against devices the user owns. V2 stretches the same abstraction to **geographic scale**: a dataspace whose "devices" are public live-data feeds — no API key, no registration, openly licensed — rendered as walk-around spatial maps. The join flow, manifest schema, and renderer are unchanged; UC5 and UC6 are ordinary manifests (`DEMO05` / `DEMO06`) built on one new mark type. This validates R14 (self-describing data dashboards) and R18-adjacent portability at a scale where the user cannot possibly own the sensors, and demonstrates that the hyperlocal engine degrades gracefully to "hyperlocal *interest*" (my city, my country) rather than only "hyperlocal *proximity*."
+
+**UC5 (`DEMO05`) — Japan national temperature dataspace**
+- Tile-grid "pixel Japan" basemap: one square per prefecture in the standard grid arrangement (a 47-row lookup table — no TopoJSON, no geo projection), with a temperature column rising from each tile. Height and color redundantly encode °C: columns normalize to the current national min/max (hottest = tallest) and the diverging blue→red ramp stretches over the current spread around the national mean, so the map stays legible even when same-moment readings cluster.
+- Hovering kanji labels above every prefecture (canvas-sprite text — the browser's system font stack rasterizes CJK, so no bundled Japanese font) showing `県名 XX.X° ▲/▼` with trend arrows armed on ≥0.1 °C change.
+- Live data: **JMA AMeDAS bosai JSON** (official station observations, no key, CORS-open, 10-minute cadence; one ~300 KB GET covers all 1,286 stations). Adapter caches by JMA timestamp (≤6 upstream fetches/hour regardless of client count), falls back to Open-Meteo (rate-budgeted to its free tier), then to deterministic simulation — the `source` field drives an honest scene badge. Attribution 「出典: 気象庁」 rendered in-scene.
+
+**UC6 (`DEMO06`) — Kumamoto city live-transit dataspace**
+- City-scale tabletop map (~1.2 m): route polylines color-coded by operator, tram lines (exact `shapes.txt` geometry) drawn as the emphasized static rail layer, stops as faint dots. The route network *is* the basemap — vector/procedural, no raster-tile licensing.
+- Live buses from **GTFS-RT VehiclePosition feeds** (Bus-Vision open data, CC BY 4.0, no auth — the prefecture CKAN portal's OAuth2 registration turned out to be the wrong door; the same data is open at the operators' source). Three city operators polled server-side every 15 s (the publisher's stated cadence) with single-flight caching so N headsets still cost one upstream sweep. Vehicles are bearing-oriented wedge glyphs that tween between polls; labels show `line · fleet-number · speed` (e.g. `C5-4 · 1485 · 24 km/h`) with neighbor-aware vertical stacking so bunched vehicles fan out instead of overprinting. Off-hours or feed outage auto-falls back to simulated vehicles walking the real route polylines, badged SIMULATED — the demo is never blank.
+- A committed network snapshot (gtfs-data.jp, 945 KB after clipping to the city core and deduplicating 296 GTFS route variants down to 77 lines) means no build-time network dependency.
+
+**Platform capabilities added for V2**
+- `geo-scene` mark family — one config-driven mark type serving both UCs (basemap layer + live points layer + legend/attribution), registered through the existing manifest schema/builder/renderer path with zero renderer-core changes.
+- Self-driving live cells: marks animate via per-frame hooks and poll their own endpoints (`refreshInterval` manifest-configurable, server-clamped to per-feed floors so a mis-authored manifest can't hammer an upstream).
+- In-scene labeling system (canvas sprites, CJK-capable, XR-safe raycast opt-out, neighbor-aware tiering) reusable by future marks.
+- Server-side live adapters behind `/api/v1/geo/*` with a uniform contract: cache + single-flight + rate-limit floors + layered fallback + truthful `source` badging. This is the pattern any future public-feed dataspace follows.
+- Explicit rate-limit policy per feed (documented in the design doc §3.3) — politeness to public infrastructure is treated as a requirement, not an afterthought.
+
+**Status:** build phases 1–4 complete and live-verified (real 47/47-station JMA payloads; real GTFS-RT buses during JST service hours with resolved line names, fleet numbers, and speeds). Phase 5 (legend polish, ranked-bars HUD view, per-glyph hover, on-device Quest/Spectacles pass) in progress. 319 automated tests green.
+
 ### UI Spec V1
 
 The UI Spec V1 has been prototyped in `reference-designs/webxrofthings/prototype/d3-spatial/` and documented in `XR_UX-proposal1.md §11`. Current status:
@@ -204,7 +236,7 @@ The UI Spec V1 has been prototyped in `reference-designs/webxrofthings/prototype
 #### Implemented
 - **V1.1 Join-code onboarding flow** (Phase 1+2) — Three-mesh-ui Join panel with 6-char slot entry, mock validation OR real server flow, JWT-protected manifest fetch, transition into the loaded dataspace. Phase 3 (PKI for private dataspaces) deferred.
 
-The interaction below is the **security-focused** join flow — what the production deployment looks like, not the DEMO01–04 fixed-code shortcut used by the reference implementation today (which is flagged as "Out of Scope: Security" below). The demo path collapses steps 1–4 into a hardcoded lookup table; everything from step 5 onward is the same in both modes.
+The interaction below is the **security-focused** join flow — what the production deployment looks like, not the DEMO01–06 fixed-code shortcut used by the reference implementation today (which is flagged as "Out of Scope: Security" below). The demo path collapses steps 1–4 into a hardcoded lookup table; everything from step 5 onward is the same in both modes.
 
 ```mermaid
 sequenceDiagram
@@ -268,7 +300,7 @@ sequenceDiagram
 
 **What makes this the security path, not the demo path:**
 
-1. **Codes are issued, not hardcoded.** Each invitation is bound to a dataspace, has a TTL, a `max_uses` counter, and a scope (read-only vs. control). DEMO01–04 in the prototype are a fixed lookup table the code-handling middleware short-circuits.
+1. **Codes are issued, not hardcoded.** Each invitation is bound to a dataspace, has a TTL, a `max_uses` counter, and a scope (read-only vs. control). DEMO01–06 in the prototype are a fixed lookup table the code-handling middleware short-circuits.
 2. **Tokens are short-lived and scoped.** ~5-minute expiry with `refresh` rotation. The token claims the dataspace, the session, and the granted operations — never broader. The prototype's JWT also embeds the manifest path (which we noted in the polling-cadence debug as a header-size hazard); production removes this in favour of a server-side dataspace → manifest map.
 3. **Private dataspaces require identity attestation (R23).** PKI cert or OIDC introspection step before token issuance. The prototype skips this; that's the Phase 3 work flagged "deferred."
 4. **Device fetches use per-request scoped sub-tokens, not the user's main token.** Limits blast radius if a device or proxy hop is compromised.
