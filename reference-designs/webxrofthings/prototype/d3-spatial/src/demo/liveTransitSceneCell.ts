@@ -28,7 +28,7 @@
 import * as THREE from 'three';
 import { TEXT } from '../ui/palette';
 import { startPolling, type PollingHandle } from './livePolling';
-import { makeLabelSprite, type LabelSprite } from './labelSprite';
+import { makeLabelSprite, assignLabelTiers, type LabelSprite } from './labelSprite';
 import type { LiveCell } from './liveVitalsCells';
 import {
   makeCityProjection,
@@ -69,6 +69,8 @@ interface VehicleState {
   mat: THREE.MeshStandardMaterial;
   /** Hovering "route · vehicle-id" label (null in headless envs). */
   label: LabelSprite | null;
+  /** Vertical stacking tier when neighbors crowd (0 = base height). */
+  labelTier: number;
   fromX: number; fromY: number; toX: number; toY: number;
   fromBearing: number; toBearing: number;
   tweenStart: number;
@@ -185,6 +187,13 @@ export function buildLiveTransitSceneCell(opts: LiveTransitSceneOpts): TransitSc
   // Cone tip points +y at identity = bearing 0 (north); per-vehicle rotation
   // about z turns it clockwise to the live heading.
   const wedgeGeo = new THREE.ConeGeometry(0.008, 0.02, 6);
+  /* Label sizing + neighbor stacking. Labels are ~4× wider than tall, so
+   * the clustering bucket is label-width × label-height: vehicles whose
+   * labels would overlap share a bucket and fan out vertically. */
+  const LABEL_H = 0.03;
+  const LABEL_W = LABEL_H * 5; // typical "line · fleet · speed" halo width
+  const LABEL_BASE_LIFT = 0.026;
+  const LABEL_TIER_STEP = LABEL_H * 1.15;
   const vehicles = new Map<string, VehicleState>();
 
   function vehicleFor(id: string, op: string): VehicleState {
@@ -198,13 +207,13 @@ export function buildLiveTransitSceneCell(opts: LiveTransitSceneOpts): TransitSc
     const mesh = new THREE.Mesh(wedgeGeo, mat);
     mesh.visible = false;
     map.add(mesh);
-    const label = makeLabelSprite({ height: 0.016, fontPx: 30 });
+    const label = makeLabelSprite({ height: LABEL_H, fontPx: 30 });
     if (label) {
       label.sprite.visible = false;
       map.add(label.sprite);
     }
     v = {
-      mesh, mat, label,
+      mesh, mat, label, labelTier: 0,
       fromX: 0, fromY: 0, toX: 0, toY: 0,
       fromBearing: 0, toBearing: 0,
       tweenStart: 0, lastTs: 0, seen: false,
@@ -241,7 +250,9 @@ export function buildLiveTransitSceneCell(opts: LiveTransitSceneOpts): TransitSc
       st.seen = true;
       if (st.label) {
         const line = veh.routeName || veh.routeId || '?';
-        st.label.setText(`${line} · ${shortVehicleId(veh.id, veh.op)}`);
+        const fleet = veh.label || shortVehicleId(veh.id, veh.op);
+        const speed = veh.speedKmh != null ? ` · ${veh.speedKmh} km/h` : '';
+        st.label.setText(`${line} · ${fleet}${speed}`);
         st.label.sprite.visible = true;
       }
     }
@@ -250,6 +261,19 @@ export function buildLiveTransitSceneCell(opts: LiveTransitSceneOpts): TransitSc
         v.mesh.visible = false; // vehicle left the feed
         if (v.label) v.label.sprite.visible = false;
       }
+    }
+
+    /* Neighbor-aware stacking: cluster by TARGET positions so labels that
+     * will crowd each other by the end of this tween fan out vertically.
+     * Stable id-sorted tiers keep a label on its tier between polls while
+     * its neighborhood is unchanged. */
+    const tierInput: Array<{ id: string; x: number; y: number }> = [];
+    for (const [id, v] of vehicles) {
+      if (v.seen) tierInput.push({ id, x: v.toX, y: v.toY });
+    }
+    const tiers = assignLabelTiers(tierInput, LABEL_W, LABEL_H);
+    for (const [id, v] of vehicles) {
+      if (v.seen) v.labelTier = tiers.get(id) ?? 0;
     }
     lastCount = list.length;
     drawLegend();
@@ -339,8 +363,11 @@ export function buildLiveTransitSceneCell(opts: LiveTransitSceneOpts): TransitSc
       const bearing = v.fromBearing + db * k;
       // Bearing 0 = north (+y), clockwise → plane-local rotation about z.
       v.mesh.setRotationFromAxisAngle(upTmp, -(bearing * Math.PI) / 180);
-      // Label rides ~2 cm above the wedge, following the tween.
-      if (v.label) v.label.sprite.position.set(x, y, VEHICLE_Z + 0.022);
+      // Label rides above the wedge, following the tween; crowded
+      // neighborhoods fan out vertically by tier.
+      if (v.label) {
+        v.label.sprite.position.set(x, y, VEHICLE_Z + LABEL_BASE_LIFT + v.labelTier * LABEL_TIER_STEP);
+      }
       // Staleness dimming (label follows the wedge's opacity).
       const stale = v.lastTs > 0 && Date.now() - v.lastTs > staleAfterMs;
       v.mat.opacity = stale ? 0.35 : 0.95;

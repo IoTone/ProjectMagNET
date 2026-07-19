@@ -126,9 +126,15 @@ export interface TransitVehicle {
   op: string;          // operator key ('toshibus' | 'kumabus' | 'dentetsu')
   routeId: string;
   routeName: string;
+  /** Public fleet number (GTFS-RT vehicle.label, e.g. "R1454"); synthetic
+   *  "SIM…" ids in simulation. Display this, not the internal id. */
+  label?: string;
   lat: number;
   lon: number;
   bearing: number;     // degrees clockwise from north
+  /** km/h from the live feed's position.speed (verified populated by
+   *  Bus-Vision); constant cruise speed in simulation; null when absent. */
+  speedKmh?: number | null;
   ts: number;          // epoch ms of this position
 }
 
@@ -182,9 +188,11 @@ export function simulatedKumamotoVehicles(
           op: op.key,
           routeId: route.id,
           routeName: route.name,
+          label: `SIM${ri + 1}${vi + 1}`,
           lat: p.lat,
           lon: p.lon,
           bearing: forward ? p.bearing : (p.bearing + 180) % 360,
+          speedKmh: opts.speedKmh ?? 22,
           ts: nowMs,
         });
       }

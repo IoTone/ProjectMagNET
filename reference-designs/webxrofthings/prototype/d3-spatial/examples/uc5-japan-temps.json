@@ -22,7 +22,8 @@
         "width": 1.0,
         "tileScale": "uniform",
         "tilt_deg": 55,
-        "position": { "x": 0, "y": 0.72, "z": -1.0 },
+        "_position_doc": "vizAnchor-local; the anchor sits at (join-time camera height − 0.20 m), so y=+0.15 puts the map center ≈ eye level whether the user joined standing or seated — same placement recipe as uc6-kumamoto-transit.json.",
+        "position": { "x": 0, "y": 0.15, "z": -1.0 },
         "maxColumnH": 0.16
       },
       "hoverable": true,

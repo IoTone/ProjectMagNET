@@ -34,7 +34,7 @@ export interface LabelSpriteOpts {
   fontPx?: number;
 }
 
-const CANVAS_W = 256;
+const CANVAS_W = 384;
 const CANVAS_H = 64;
 
 export function makeLabelSprite(opts: LabelSpriteOpts = {}): LabelSprite | null {
@@ -54,8 +54,12 @@ export function makeLabelSprite(opts: LabelSpriteOpts = {}): LabelSprite | null 
   tex.colorSpace = THREE.SRGBColorSpace;
   const mat = new THREE.SpriteMaterial({
     map: tex, transparent: true, depthWrite: false,
-    // Render after opaque scene content so halos blend over columns/lines.
-    depthTest: true,
+    /* depthTest OFF: labels are annotation and must never be clipped by
+     * scene geometry (a tall column in front) or punch holes in each other
+     * when halos overlap at similar depths. Drawn late via renderOrder,
+     * they composite over the scene like a HUD layer that still lives at
+     * the anchor's world position. */
+    depthTest: false,
   });
   const sprite = new THREE.Sprite(mat);
   sprite.scale.set(height * (CANVAS_W / CANVAS_H), height, 1);
@@ -66,6 +70,8 @@ export function makeLabelSprite(opts: LabelSpriteOpts = {}): LabelSprite | null 
    * follows the head — looks "camera-locked"). Labels are annotation, not
    * targets: opt out of raycasting entirely. */
   sprite.raycast = () => {};
+  // After scene content (columns/lines/wedges), below the XR beam (997).
+  sprite.renderOrder = 996;
 
   let current: string | null = null;
   function setText(next: string) {
@@ -74,7 +80,17 @@ export function makeLabelSprite(opts: LabelSpriteOpts = {}): LabelSprite | null 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-    ctx.font = `${fontPx}px system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif`;
+    const family = 'system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif';
+    // Auto-fit: shrink the font when a long label (route · fleet · speed)
+    // would overflow the canvas, instead of clipping mid-glyph.
+    let px = fontPx;
+    ctx.font = `${px}px ${family}`;
+    const maxW = CANVAS_W - 20;
+    const natural = ctx.measureText(next).width;
+    if (natural > maxW) {
+      px = Math.max(16, Math.floor(fontPx * (maxW / natural)));
+      ctx.font = `${px}px ${family}`;
+    }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     // Soft halo box behind the text — keeps kanji legible over bright
@@ -103,4 +119,35 @@ export function makeLabelSprite(opts: LabelSpriteOpts = {}): LabelSprite | null 
       mat.dispose();
     },
   };
+}
+
+/**
+ * Neighbor-aware label stacking: cluster labels by proximity and give each
+ * member of a cluster its own vertical tier so overlapping labels fan out
+ * instead of piling onto one another (vehicles bunch at terminals and
+ * along shared corridors).
+ *
+ * Grid-hash clustering: items whose anchor points fall in the same
+ * cellW × cellH bucket share a cluster; tiers are assigned in a stable
+ * order (sorted by id) so a label keeps its tier across polls while its
+ * neighborhood is unchanged. Pure + THREE-free for testability.
+ */
+export function assignLabelTiers(
+  items: Array<{ id: string; x: number; y: number }>,
+  cellW: number,
+  cellH: number,
+): Map<string, number> {
+  const buckets = new Map<string, string[]>();
+  for (const it of items) {
+    const key = `${Math.round(it.x / cellW)},${Math.round(it.y / cellH)}`;
+    const b = buckets.get(key);
+    if (b) b.push(it.id);
+    else buckets.set(key, [it.id]);
+  }
+  const tiers = new Map<string, number>();
+  for (const ids of buckets.values()) {
+    ids.sort();
+    ids.forEach((id, i) => tiers.set(id, i));
+  }
+  return tiers;
 }

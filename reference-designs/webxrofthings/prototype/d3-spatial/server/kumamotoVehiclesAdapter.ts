@@ -91,9 +91,18 @@ export function decodeVehiclePositions(
       op,
       routeId: v.trip?.routeId ?? '',
       routeName: v.trip?.routeId ?? '',
+      // Public fleet number ("R1454") — verified populated by Bus-Vision.
+      label: v.vehicle?.label ?? v.vehicle?.id ?? undefined,
       lat: pos.latitude,
       lon: pos.longitude,
       bearing,
+      // position.speed is m/s per GTFS-RT spec (also verified populated).
+      // GTFS-RT is proto2: an absent optional scalar decodes to the
+      // prototype default (0), so presence must be checked via hasOwn —
+      // otherwise every speedless feed would report "0 km/h".
+      speedKmh: Object.prototype.hasOwnProperty.call(pos, 'speed') && typeof pos.speed === 'number'
+        ? Math.round(pos.speed * 3.6)
+        : null,
       ts: tsSec > 0 ? tsSec * 1000 : nowMs,
     });
   }

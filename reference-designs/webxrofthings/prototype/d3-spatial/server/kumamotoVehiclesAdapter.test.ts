@@ -9,6 +9,7 @@ import type { KumamotoNetwork, LonLat } from '../src/demo/kumamotoNetwork';
 
 function encodeFeed(vehicles: Array<{
   id: string; lat: number; lon: number; bearing?: number; routeId?: string; ts?: number;
+  label?: string; speed?: number;
 }>): Uint8Array {
   const msg = GtfsRT.transit_realtime.FeedMessage.fromObject({
     header: { gtfsRealtimeVersion: '2.0', incrementality: 0, timestamp: 1784100000 },
@@ -16,8 +17,11 @@ function encodeFeed(vehicles: Array<{
       id: v.id,
       vehicle: {
         trip: v.routeId ? { routeId: v.routeId } : undefined,
-        vehicle: { id: v.id },
-        position: { latitude: v.lat, longitude: v.lon, bearing: v.bearing ?? 0 },
+        vehicle: { id: v.id, label: v.label },
+        position: {
+          latitude: v.lat, longitude: v.lon, bearing: v.bearing ?? 0,
+          ...(v.speed != null ? { speed: v.speed } : {}),
+        },
         timestamp: v.ts ?? 1784100000,
       },
     })),
@@ -60,17 +64,27 @@ const FEEDS = {
 /* ─── decode ─────────────────────────────────────────────────────────── */
 
 describe('decodeVehiclePositions', () => {
-  it('maps entities to TransitVehicles', () => {
-    const buf = encodeFeed([{ id: 'bus1', lat: 32.805, lon: 130.705, bearing: 123, routeId: 'S1' }]);
+  it('maps entities to TransitVehicles (incl. fleet label + speed km/h)', () => {
+    const buf = encodeFeed([{
+      id: 'bus1', lat: 32.805, lon: 130.705, bearing: 123, routeId: 'S1',
+      label: 'R1454', speed: 4.7222, // m/s → 17 km/h
+    }]);
     const out = decodeVehiclePositions(buf, 'toshibus', new Map(), 1_000);
     expect(out.length).toBe(1);
     expect(out[0]).toMatchObject({
       id: 'toshibus-bus1', op: 'toshibus', routeId: 'S1',
+      label: 'R1454', speedKmh: 17,
       bearing: 123, ts: 1784100000_000,
     });
     // GTFS-RT positions are float32 — compare with tolerance.
     expect(out[0]!.lat).toBeCloseTo(32.805, 4);
     expect(out[0]!.lon).toBeCloseTo(130.705, 4);
+  });
+
+  it('speed is null when the feed omits it', () => {
+    const buf = encodeFeed([{ id: 'v', lat: 32.805, lon: 130.705 }]);
+    const out = decodeVehiclePositions(buf, 'toshibus', new Map(), 0);
+    expect(out[0]!.speedKmh).toBeNull();
   });
 
   it('derives a missing bearing from the previous fix', () => {
