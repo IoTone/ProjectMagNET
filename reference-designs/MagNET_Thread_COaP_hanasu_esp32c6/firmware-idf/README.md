@@ -88,10 +88,30 @@ backpressure (`mn_ot_send` returns error; counted, never blocks).
 | 496 B (≈6 frames) | 16.7 msg/s | 8.07 KB/s | ~8.4 msg/s ≈ **4.05 KB/s** | ~50% |
 | 62 B (1 frame) | 48.4 msg/s | 2.93 KB/s | ~21 msg/s ≈ 1.29 KB/s | 39–47% |
 
+**Steady state (paced: 1 msg/s per node, staggered, 5 min per run):**
+
+| payload | sent | delivered | steady-state loss | tx rejects |
+|--------:|-----:|----------:|------------------:|-----------:|
+| 62 B (1 frame) | 1,200 (3,600 expected rx) | 3,600/3,600 | **0.00%** | 0 |
+| 496 B (≈6 frames) | 1,200 (3,039 expected rx) | 2,839/3,039 | **6.6%** (3.4–9.3% per node) | ~4% of sends |
+
+At chat rates the mesh is **lossless** for single-frame multicast — the loss
+story is entirely a fragmentation story: one dropped radio frame kills the
+whole unacknowledged ~6-fragment message, so large multicast payloads lose
+~7% even on a quiet channel (and overlapping fragment trains from two senders
+occasionally exhaust OT buffers — the nonzero tx rejects at only 4 msg/s
+network-wide).
+
 Takeaways (they confirm §7/§8 and shape §11.6/E-G):
+- **Chat traffic is effectively lossless** (0.00% measured at 1 msg/s/node,
+  single-frame). Keep interactive messages ≤ ~62 B payload and multicast NON
+  is fine without app-layer ACKs.
 - **Usable bulk goodput ≈ 4 KB/s per receiver** (multicast, large payloads).
   Large payloads beat small ones for bulk despite fragmentation — per-message
   overhead dominates below ~100 B.
+- **Fragmented multicast loses ~7% even at low rate** — fragmentation, not
+  congestion, is the loss mechanism. Anything above one frame that matters
+  must be CON unicast (or carry Type-4 ACK/NACK recovery).
 - Even a single continuous sender loses ~50% on multicast — the radio's own
   TX duty cycle plus no-ACK broadcast. **Reliable transfer must use CON
   unicast (Type 3/6), never multicast** — as the spec already prescribes.
