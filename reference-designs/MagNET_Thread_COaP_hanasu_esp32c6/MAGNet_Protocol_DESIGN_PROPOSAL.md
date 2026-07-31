@@ -1984,8 +1984,15 @@ both directions; zero MIC failures; channel survives reboot. **Decision (was
 §12.9 Q4): identity signatures use deterministic ECDSA P-256** — IDF 5.3.1's
 mbedTLS has no Ed25519; P-256 is native + C6 HW-accelerated. Read
 Ed25519 references in §11.1 as ECDSA-P256 (raw r‖s, 64 B) going forward.
-**Remaining E-D part 2:** device keypair + device_id from pubkey hash, signed
-ADMIN commands + allow-list, epoch rotation.
+**E-D part 2 landed and validated (2026-07-31, 11/11, fw 0.4.0-ed) — E-D is COMPLETE.** Deterministic ECDSA P-256 keypair generated first boot (NVS `idkey`), device_id = SHA256(pub)[0:4]; `PUBKEY`/`ADMIN ADD <hex>`/`ADMIN LIST` (allow-list ≤4, NVS) ; signed `ROTATE` → system/rotate (ns 0 cmd 3, ADMIN|SIGNED, ECDSA over header‖ciphertext‖MIC) verified against the allow-list before execution; epoch keys keep current+previous for skew. HW-verified: unauthorized rotate rejected (rx_err, mesh unaffected), authorized rotate propagates fleet-wide with chat continuing on the new epoch, identity stable across reboot. §12.7 E-D exit criteria met.
+
+**E-E landed and validated (2026-07-31, 16/16 + 7/7, fw 0.5.0-ee) — the Forth automation payoff is real.** `mn-on-chat`/`mn-on-cmd` (also `HOOK CHAT|CMD <word>` from HCP) register a user word that the **pump task** invokes on inbound mesh traffic with the payload pushed as `( c-addr u )` — never in OT/lwIP callback context. Added `str=`, `gpio-output`/`gpio-set` (the §12.3 demo path), and `SCRIPT SET|SHOW|RUN|CLEAR` persisting Forth source to NVS, auto-run at boot after vocab registration and before radios. Demonstrated on hardware: a word defined live at `ok>` on one node fires on another node's chat and answers back over the mesh; after a power cycle the autorun script re-arms the hook with **no host attached**.
+
+> **Deviation from §12.3 (temporary):** hooks bind by **word name**, not execution token — the stub engine exposes no xt. The `( xt -- )` form returns with the full ESP32forth port (E-G).
+
+> **Two hazards found by testing, both fixed.** (1) The interpreter is not reentrant: the REPL dispatcher and a mesh-triggered hook could call `forth_eval` concurrently. All evaluation now goes through `mn_forth_exec()` (TX mutex → engine mutex, one lock order everywhere). (2) **Hook amplification**: a hook that sends chat re-triggers *other* nodes' hooks, whose replies re-trigger ours — a self-sustaining mesh loop. A circuit breaker caps hook firings at 5/s with a one-shot `!WARN hook-rate-limited`; a deliberate two-node echo loop was measured at **0.6 msg/s** total (vs. the ~50/s the channel would otherwise carry), nodes stayed READY, heap flat.
+
+**Next: E-F** (BLE-GATT HCP binding + host SDK) and **E-G** (Trickle suppression, SED catch-up, full ESP32forth port, 32-node soak).
 
 #### E-Phase A spike scaffold — status (historical)
 

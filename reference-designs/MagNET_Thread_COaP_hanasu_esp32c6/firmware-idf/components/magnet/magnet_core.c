@@ -31,7 +31,7 @@
 #include "forth_core.h"
 #include "sdkconfig.h"
 
-#define MN_FW_VERSION "0.3.0-ec"
+#define MN_FW_VERSION "0.5.0-ee"
 #define MN_NAME_MAX   16
 
 /* E-D: the active channel — everything (selector, mcast, key) derives from
@@ -39,6 +39,21 @@
  * !WARN insecure per §11.5), derived once and cached in NVS. */
 static mn_channel_t s_chan;
 #define MN_CHANNEL_NAME (s_chan.name)
+
+/* E-D part 2: device identity (deterministic ECDSA P-256) + admin allow-list */
+static uint8_t s_pub[65];
+#define MN_ADMIN_MAX 4
+static struct { bool used; uint8_t pub[65]; } s_admins[MN_ADMIN_MAX];
+static uint8_t s_prev_epoch_key[16];
+static uint8_t s_epoch = 0;
+
+/* E-E: automation hooks (by word name) + the Forth engine mutex. The engine
+ * has global state (stacks, dict pointer) and is NOT reentrant, so every
+ * forth_eval() in the firmware goes through mn_forth_exec(). */
+#define MN_HOOK_WORD_MAX 32
+static char s_hook_chat[MN_HOOK_WORD_MAX + 1];
+static char s_hook_cmd[MN_HOOK_WORD_MAX + 1];
+static SemaphoreHandle_t s_forth_mutex = NULL;
 
 static mn_state_t   s_state = MN_BOOTING;
 static mn_putc_fn   s_putc  = NULL;
@@ -252,6 +267,13 @@ static void queue_drain(void);
 static void name_load(void);
 static void counter_load(void);
 static void chan_load(void);
+static void admins_load(void);
+static void script_load(void);
+static void hook_invoke(const char *word, const uint8_t *payload, size_t len);
+static bool admin_verify(const uint8_t *signed_part, size_t len, const uint8_t sig[64]);
+static void epoch_apply(uint8_t e);
+static int  send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
+                          const char *dst, bool con, bool admin);
 
 /* ==================== event pump (§12.4) =================================== */
 typedef enum { MN_EVT_RX, MN_EVT_ROLE, MN_EVT_HEARTBEAT } mn_evt_kind_t;
@@ -323,6 +345,21 @@ static void handle_rx(const mn_evt_t *evt) {
     if (!memcmp(env.sender_id, s_device_id, 4)) return;       /* self */
     if (env.selector != s_chan.selector) return;              /* not our channel */
 
+    /* §11.1.7: ADMIN frames must carry a valid allow-listed signature over
+     * everything before the 64-byte trailer — checked before decrypt/exec */
+    bool is_admin = false;
+    if (env.flags & MN_F_SIGNED) {
+        if (env.payload_len <= 64) { s_stats.rx_err++; return; }
+        size_t signed_len = evt->len - 64;
+        if (!(env.flags & MN_F_ADMIN) ||
+            !admin_verify(evt->data, signed_len, evt->data + signed_len)) {
+            s_stats.rx_err++;
+            return;
+        }
+        env.payload_len -= 64;
+        is_admin = true;
+    }
+
     /* §11.1.5: decrypt + authenticate BEFORE any stateful processing */
     uint8_t pt[MN_ENV_MAX_FRAME];
     if (env.flags & MN_F_ENCRYPTED) {
@@ -330,10 +367,12 @@ static void handle_rx(const mn_evt_t *evt) {
         size_t ct_len = env.payload_len - 8;
         uint8_t nonce[13];
         mn_nonce_build(nonce, env.sender_id, env.counter, env.epoch, env.selector);
-        if (mn_aead_decrypt(s_chan.epoch_key, nonce, evt->data,
-                            env.payload, ct_len, pt,
-                            env.payload + ct_len) != 0) {
-            s_stats.rx_err++;                                 /* bad MIC */
+        const uint8_t *key = (env.epoch == s_epoch) ? s_chan.epoch_key :
+                             (env.epoch == (uint8_t)(s_epoch - 1)) ? s_prev_epoch_key : NULL;
+        if (!key || mn_aead_decrypt(key, nonce, evt->data,
+                                    env.payload, ct_len, pt,
+                                    env.payload + ct_len) != 0) {
+            s_stats.rx_err++;                                 /* bad MIC/epoch */
             return;
         }
         env.payload = pt;
@@ -369,6 +408,7 @@ static void handle_rx(const mn_evt_t *evt) {
                        peer_name(env.sender_id), text);
         else
             emit_class(MN_EC_DM, "!DM %s %s %s", idhex, peer_name(env.sender_id), text);
+        hook_invoke(s_hook_chat, env.payload, env.payload_len);   /* E-E */
         break;
     }
     case MN_T_M2M_CMD: {
@@ -379,9 +419,12 @@ static void handle_rx(const mn_evt_t *evt) {
         if ((size_t)plen + 4 > env.payload_len) break;
         if (ns == 0x00 && cmd_id == 0x02) {          /* system/announce: name */
             peer_set_name(env.sender_id, (const char *)&env.payload[4], plen);
+        } else if (ns == 0x00 && cmd_id == 0x03) {   /* system/rotate (§11.1.8) */
+            if (is_admin && plen == 1) epoch_apply(env.payload[4]);
         } else {
             emit_class(MN_EC_CMD, "!CMD %s %s %u %u len=%u",
                        MN_CHANNEL_NAME, idhex, ns, cmd_id, plen);
+            hook_invoke(s_hook_cmd, &env.payload[4], plen);       /* E-E */
         }
         break;
     }
@@ -455,6 +498,10 @@ void mn_core_init(void) {
     name_load();                         /* NVS must be up (main inits it first) */
     counter_load();                      /* §11.1.6 block-reserved nonce counter */
     chan_load();                         /* active channel (default: "magnet")  */
+    if (mn_ident_load_or_gen(s_pub, s_device_id) != 0)
+        mn_emit_event("!WARN identity-keygen-failed");
+    admins_load();
+    script_load();
     if (!strcmp(s_chan.name, "magnet"))
         mn_emit_event("!WARN default-channel-insecure use CHANNEL SET");
     if (!s_evt_q) {
@@ -462,6 +509,7 @@ void mn_core_init(void) {
         xTaskCreate(pump_task, "mn_pump", 4096, NULL, 5, NULL);
     }
     if (!s_selftest_sem) s_selftest_sem = xSemaphoreCreateBinary();
+    if (!s_forth_mutex)  s_forth_mutex  = xSemaphoreCreateMutex();
     if (!s_hb_timer) {
         s_hb_timer = xTimerCreate("mn_hb", pdMS_TO_TICKS(30 * 1000), pdTRUE,
                                   NULL, hb_timer_cb);
@@ -497,19 +545,20 @@ static void counter_load(void) {
     counter_reserve();
 }
 
-static int send_frame(uint8_t type, const uint8_t *payload, size_t len,
-                      const char *dst, bool con) {
+static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
+                         const char *dst, bool con, bool admin) {
     if (!payload || len == 0) return -1;
-    if (len > MN_ENV_MAX_FRAME - MN_ENV_HDR_LEN - 8) return -2;
+    if (len > MN_ENV_MAX_FRAME - MN_ENV_HDR_LEN - 8 - 64) return -2;
     if (s_counter + 1 >= s_counter_limit && counter_reserve() != 0)
         return -5;               /* MUST NOT transmit without a fresh nonce */
 
     mn_envelope_t env = {
         .version    = MN_ENV_VERSION,
         .type       = type,
-        .flags      = s_chan.set ? MN_F_ENCRYPTED : 0,
+        .flags      = (uint8_t)((s_chan.set ? MN_F_ENCRYPTED : 0) |
+                                (admin ? (MN_F_ADMIN | MN_F_SIGNED) : 0)),
         .counter    = ++s_counter,
-        .epoch      = 0,
+        .epoch      = s_epoch,
         .selector   = s_chan.selector,
         .frag_total = 1,
         .frag_idx   = 0,
@@ -530,6 +579,10 @@ static int send_frame(uint8_t type, const uint8_t *payload, size_t len,
                             frame + MN_ENV_HDR_LEN + len) != 0) return -6;
         memcpy(frame + MN_ENV_HDR_LEN, ct, len);
         n += 8;
+    }
+    if (admin) {                 /* §11.1.7: sig over header‖ciphertext‖MIC */
+        if (mn_sign(frame, (size_t)n, frame + n) != 0) return -7;
+        n += 64;
     }
 
     s_stats.tx_try++;
@@ -574,6 +627,8 @@ int mn_channel_set(const char *cred, size_t len, char *info, size_t cap) {
     int rc = mn_cred_derive(cred, len, &nc);
     if (rc != 0) return rc;
     s_chan = nc;
+    s_epoch = 0;                                 /* fresh channel → epoch 0 */
+    memset(s_prev_epoch_key, 0, sizeof(s_prev_epoch_key));
     chan_persist();
     mn_ot_set_mcast(s_chan.mcast_suffix);        /* no-op if radio not up */
     memset(s_dedup, 0, sizeof(s_dedup));         /* new channel, new peers */
@@ -592,6 +647,11 @@ void mn_channel_info(char *buf, size_t cap) {
 }
 
 const uint8_t *mn_channel_mcast_suffix(void) { return s_chan.mcast_suffix; }
+
+static int send_frame(uint8_t type, const uint8_t *payload, size_t len,
+                      const char *dst, bool con) {
+    return send_frame_ex(type, payload, len, dst, con, false);
+}
 
 /* Token bucket for host-initiated multicast (§4.9): burst 8, refill 10/s.
  * STRESS bypasses it (calls send_frame directly — it measures the stack). */
@@ -666,6 +726,204 @@ static void queue_drain(void) {                 /* pump task, on entering READY 
         mn_emit_event("!RESULT @- %s %s", rc == 0 ? "ok" : "err",
                       s_queue[i].is_dm ? "dm" : "chat");
     }
+}
+
+/* ---- E-E: serialized Forth execution + automation hooks ---- */
+void mn_forth_exec(const char *line) {
+    /* Lock order everywhere: TX mutex (output atomicity) then engine mutex. */
+    SemaphoreHandle_t tx = s_tx_mutex;
+    if (tx) xSemaphoreTakeRecursive(tx, portMAX_DELAY);
+    if (s_forth_mutex) xSemaphoreTake(s_forth_mutex, portMAX_DELAY);
+    forth_eval(line);
+    if (s_forth_mutex) xSemaphoreGive(s_forth_mutex);
+    if (tx) xSemaphoreGiveRecursive(tx);
+}
+
+int mn_hook_set(int kind, const char *word, size_t len) {
+    if (len > MN_HOOK_WORD_MAX) return -1;
+    char *dst = (kind == 0) ? s_hook_chat : s_hook_cmd;
+    if (len == 0) { dst[0] = '\0'; return 0; }          /* empty = unregister */
+    memcpy(dst, word, len);
+    dst[len] = '\0';
+    return 0;
+}
+
+void mn_hooks_print(void) {
+    mn_emit_event("# hook chat=%s cmd=%s",
+                  s_hook_chat[0] ? s_hook_chat : "-",
+                  s_hook_cmd[0]  ? s_hook_cmd  : "-");
+}
+
+/* Invoked from the PUMP TASK only (never OT context). The message is pushed
+ * as ( c-addr u ) so the user word can inspect it with str= / type. */
+static char s_hook_arg[MN_ENV_MAX_FRAME];
+
+/* Amplification guard (found by the E-E bench test): a hook that sends chat
+ * will re-trigger the *other* nodes' hooks, whose replies re-trigger ours —
+ * a self-sustaining mesh loop. Cap hook firings at 5/s; beyond that, suppress
+ * and warn once until the storm subsides. Cheap, bounded, and it keeps a
+ * badly-written user script from taking the channel down. */
+#define MN_HOOK_MAX_PER_SEC 5
+static int     s_hook_budget = MN_HOOK_MAX_PER_SEC;
+static int64_t s_hook_window_us = 0;
+static bool    s_hook_warned = false;
+
+static bool hook_rate_ok(void) {
+    int64_t now = esp_timer_get_time();
+    if (now - s_hook_window_us >= 1000000) {
+        s_hook_window_us = now;
+        s_hook_budget = MN_HOOK_MAX_PER_SEC;
+        s_hook_warned = false;
+    }
+    if (s_hook_budget <= 0) {
+        if (!s_hook_warned) {
+            s_hook_warned = true;
+            emit_class(MN_EC_WARN, "!WARN hook-rate-limited (loop?) suppressing");
+        }
+        return false;
+    }
+    s_hook_budget--;
+    return true;
+}
+
+static void hook_invoke(const char *word, const uint8_t *payload, size_t len) {
+    if (!word || !word[0]) return;
+    if (!hook_rate_ok()) return;
+    size_t n = len < sizeof(s_hook_arg) - 1 ? len : sizeof(s_hook_arg) - 1;
+    memcpy(s_hook_arg, payload, n);
+    s_hook_arg[n] = '\0';
+    forth_push((intptr_t)s_hook_arg);
+    forth_push((intptr_t)n);
+    mn_forth_exec(word);
+}
+
+/* ---- boot script persistence (NVS blob, run after vocab registration) ---- */
+#define MN_SCRIPT_MAX 1024
+static char s_script[MN_SCRIPT_MAX + 1];
+
+int mn_script_save(const char *src, size_t len) {
+    if (len > MN_SCRIPT_MAX) return -1;
+    memcpy(s_script, src, len);
+    s_script[len] = '\0';
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READWRITE, &h) != ESP_OK) return -2;
+    int rc = (nvs_set_str(h, "script", s_script) == ESP_OK &&
+              nvs_commit(h) == ESP_OK) ? 0 : -2;
+    nvs_close(h);
+    return rc;
+}
+
+static void script_load(void) {
+    nvs_handle_t h;
+    size_t len = sizeof(s_script);
+    if (nvs_open("magnet", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_str(h, "script", s_script, &len) != ESP_OK) s_script[0] = '\0';
+        nvs_close(h);
+    }
+}
+
+void mn_script_show(void) {
+    if (!s_script[0]) { mn_emit_event("# script: (empty)"); return; }
+    /* one # line per source line so HCP framing holds */
+    const char *p = s_script;
+    while (*p) {
+        char line[128];
+        size_t i = 0;
+        while (*p && *p != '\n' && i < sizeof(line) - 1) line[i++] = *p++;
+        line[i] = '\0';
+        if (*p == '\n') p++;
+        mn_emit_event("# script| %s", line);
+    }
+}
+
+int mn_script_run(void) {
+    if (!s_script[0]) return -1;
+    const char *p = s_script;
+    while (*p) {                       /* the engine evaluates one line at a time */
+        char line[160];
+        size_t i = 0;
+        while (*p && *p != '\n' && i < sizeof(line) - 1) line[i++] = *p++;
+        line[i] = '\0';
+        if (*p == '\n') p++;
+        if (line[0]) mn_forth_exec(line);
+    }
+    return 0;
+}
+
+/* ---- admin allow-list (NVS blob: N x 65-byte pubkeys) ---- */
+static void admins_persist(void) {
+    uint8_t blob[MN_ADMIN_MAX * 65];
+    size_t n = 0;
+    for (int i = 0; i < MN_ADMIN_MAX; i++)
+        if (s_admins[i].used) { memcpy(blob + n, s_admins[i].pub, 65); n += 65; }
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_blob(h, "admins", blob, n);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static void admins_load(void) {
+    uint8_t blob[MN_ADMIN_MAX * 65];
+    size_t n = sizeof(blob);
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READONLY, &h) != ESP_OK) return;
+    if (nvs_get_blob(h, "admins", blob, &n) == ESP_OK) {
+        for (size_t i = 0; i + 65 <= n && i / 65 < MN_ADMIN_MAX; i += 65) {
+            s_admins[i / 65].used = true;
+            memcpy(s_admins[i / 65].pub, blob + i, 65);
+        }
+    }
+    nvs_close(h);
+}
+
+int mn_admin_add(const uint8_t pub65[65]) {
+    for (int i = 0; i < MN_ADMIN_MAX; i++)
+        if (s_admins[i].used && !memcmp(s_admins[i].pub, pub65, 65)) return 0;
+    for (int i = 0; i < MN_ADMIN_MAX; i++) {
+        if (s_admins[i].used) continue;
+        s_admins[i].used = true;
+        memcpy(s_admins[i].pub, pub65, 65);
+        admins_persist();
+        return 0;
+    }
+    return -1;
+}
+
+void mn_admin_list_print(void) {
+    int n = 0;
+    for (int i = 0; i < MN_ADMIN_MAX; i++) {
+        if (!s_admins[i].used) continue;
+        char hex[24];
+        for (int j = 0; j < 8; j++) sprintf(hex + j * 2, "%02x", s_admins[i].pub[j]);
+        mn_emit_event("# admin key %d: %s... (65B)", ++n, hex);
+    }
+    if (!n) mn_emit_event("# admin allow-list empty");
+}
+
+const uint8_t *mn_pubkey(void) { return s_pub; }
+
+static bool admin_verify(const uint8_t *signed_part, size_t len, const uint8_t sig[64]) {
+    for (int i = 0; i < MN_ADMIN_MAX; i++)
+        if (s_admins[i].used &&
+            mn_verify(s_admins[i].pub, signed_part, len, sig) == 0) return true;
+    return false;
+}
+
+static void epoch_apply(uint8_t e) {
+    memcpy(s_prev_epoch_key, s_chan.epoch_key, 16);   /* skew window (§11.1.8) */
+    s_epoch = e;
+    mn_chan_epoch_key(&s_chan, e);
+    mn_emit_event("!WARN epoch-rotated to %u", e);
+}
+
+/* signed system/rotate (ns 0, cmd 0x03): ADMIN|SIGNED multicast */
+int mn_rotate(void) {
+    uint8_t pl[5] = { 0x00, 0x03, 0x00, 0x01, (uint8_t)(s_epoch + 1) };
+    int rc = send_frame_ex(MN_T_M2M_CMD, pl, sizeof(pl), NULL, false, true);
+    if (rc == 0) epoch_apply(s_epoch + 1);
+    return rc;
 }
 
 void mn_status_line(char *buf, size_t cap) {

@@ -240,11 +240,7 @@ void mn_mesh_print(void) {
 
 /* ---- bringup ---- */
 static void ot_configure(otInstance *inst) {
-    /* device_id (E-B) = EUI-64 tail; replaced by SHA256(pk)[0:4] in E-D */
-    otExtAddress eui;
-    otLinkGetFactoryAssignedIeeeEui64(inst, &eui);
-    mn_core_set_device_id(&eui.m8[4]);
-
+    /* device_id comes from the ECDSA identity (SHA256(pk)[0:4]) since E-D */
     /* fixed dataset, identical on every node (§6 Phase 0 fix #5) */
     otOperationalDataset ds;
     memset(&ds, 0, sizeof(ds));

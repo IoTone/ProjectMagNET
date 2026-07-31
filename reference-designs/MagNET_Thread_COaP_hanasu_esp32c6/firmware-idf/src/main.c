@@ -75,6 +75,9 @@ void app_main(void) {
     }
     mn_core_init();
     mn_register_forth_vocab();
+    /* E-E: user automation script runs once, after the mn-* words exist and
+     * before the radios come up (so hooks are armed when traffic starts). */
+    if (mn_script_run() == 0) raw_print("# autorun: boot script executed\r\n");
 
     /* 4. start the dual-mode host link (HCP default). This also wires the
      *    serialized TX writer and forth_set_io, so events/responses are safe. */
@@ -82,7 +85,7 @@ void app_main(void) {
     mn_set_state(MN_BOOTING);
     /* id is provisional here — the EUI-64-derived device_id lands during radio
      * bringup (ot_configure); WHOAMI/STATUS report the real one once up. */
-    mn_emit_event("!READY proto=2.1 fw=0.3.0-ec id=%02x%02x%02x%02x name=%s state=BOOTING",
+    mn_emit_event("!READY proto=2.1 fw=0.5.0-ee id=%02x%02x%02x%02x name=%s state=BOOTING",
                   mn_device_id()[0], mn_device_id()[1], mn_device_id()[2], mn_device_id()[3],
                   mn_name_get());
     mn_emit_event("# type CAPS, or HELP. FORTH drops to the engine.");

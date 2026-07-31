@@ -59,9 +59,9 @@ static int  forth_in(void)   { return -1; } /* engine is driven by forth_eval, n
 /* ---- HCP command handling ---- */
 static void emit_caps(const char *tag) {
     respond(tag,
-        "+OK proto=2.1 fw=0.3.0-ec maxline=512 "
+        "+OK proto=2.1 fw=0.5.0-ee maxline=512 "
         "transports=usbcdc verbs=STATUS,CAPS,HELP,PING,CHAT,DM,PEERS,WHOAMI,NAME,"
-        "MODE,SUB,UNSUB,CHANNEL,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FORTH "
+        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FORTH "
         "events=ready,state,chat,dm,cmd,peer,role,heartbeat,warn queue=4 mode=HCP");
 }
 
@@ -69,7 +69,8 @@ static void emit_help(const char *tag) {
     mn_write_line("# HCP verbs: STATUS CAPS HELP PING CHAT <text> DM <ipv6> <text> PEERS WHOAMI");
     mn_write_line("#            NAME <name> MODE TERSE|HUMAN SUB/UNSUB <classes> CHANNEL LIST|SHOW");
     mn_write_line("#            SYSINFO MESH BENCH SELFTEST STATS [RESET] STRESS <secs> <len>");
-    mn_write_line("#            HEARTBEAT <secs|0> FORTH");
+    mn_write_line("#            HEARTBEAT <secs|0> FORTH PUBKEY ADMIN ADD|LIST ROTATE");
+    mn_write_line("#            HOOK CHAT|CMD <word>|LIST|CLEAR  SCRIPT SET|SHOW|RUN|CLEAR");
     mn_write_line("# FORTH drops into the Forth REPL; type  .hcp  to return.");
     respond(tag, "+OK");
 }
@@ -113,6 +114,79 @@ static void handle_hcp_line(char *line) {
         respond(tag, body);
     }
     else if (!strcmp(verb, "PEERS"))  { mn_peers_print(); respond(tag, "+OK"); }
+    else if (!strcmp(verb, "PUBKEY")) {          /* full 65B uncompressed, hex */
+        char hex[133];
+        const uint8_t *pk = mn_pubkey();
+        for (int i = 0; i < 65; i++) sprintf(hex + i * 2, "%02x", pk[i]);
+        char body[160];
+        snprintf(body, sizeof(body), "+OK %s", hex);
+        respond(tag, body);
+    }
+    else if (!strcmp(verb, "ADMIN")) {
+        if (!strncmp(rest, "LIST", 4)) { mn_admin_list_print(); respond(tag, "+OK"); }
+        else if (!strncmp(rest, "ADD ", 4)) {
+            const char *hex = rest + 4;
+            while (*hex == ' ') hex++;
+            uint8_t pub[65];
+            if (strlen(hex) != 130) { respond_err(tag, "E_SYNTAX", "need 130-hex uncompressed pubkey"); return; }
+            for (int i = 0; i < 65; i++) {
+                unsigned v;
+                if (sscanf(hex + i * 2, "%2x", &v) != 1) { respond_err(tag, "E_SYNTAX", "bad hex"); return; }
+                pub[i] = (uint8_t)v;
+            }
+            if (mn_admin_add(pub) != 0) respond_err(tag, "E_BUSY", "allow-list full (max 4)");
+            else respond(tag, "+OK");
+        }
+        else respond_err(tag, "E_SYNTAX", "ADMIN ADD <pubkey-hex> | LIST");
+    }
+    else if (!strcmp(verb, "HOOK")) {
+        /* HOOK CHAT|CMD <word> | HOOK CLEAR | HOOK LIST */
+        if (!strncmp(rest, "LIST", 4)) { mn_hooks_print(); respond(tag, "+OK"); }
+        else if (!strncmp(rest, "CLEAR", 5)) {
+            mn_hook_set(0, "", 0); mn_hook_set(1, "", 0);
+            respond(tag, "+OK hooks cleared");
+        }
+        else if (!strncmp(rest, "CHAT ", 5) || !strncmp(rest, "CMD ", 4)) {
+            int kind = (rest[0] == 'C' && rest[1] == 'H') ? 0 : 1;
+            const char *w = rest + (kind == 0 ? 5 : 4);
+            while (*w == ' ') w++;
+            if (*w == '\0') { respond_err(tag, "E_SYNTAX", "need word name"); return; }
+            if (mn_hook_set(kind, w, strlen(w)) != 0)
+                respond_err(tag, "E_SYNTAX", "word name too long (max 32)");
+            else respond(tag, "+OK");
+        }
+        else respond_err(tag, "E_SYNTAX", "HOOK CHAT|CMD <word> | LIST | CLEAR");
+    }
+    else if (!strcmp(verb, "SCRIPT")) {
+        /* SCRIPT SET <src with ; separators> | SHOW | RUN | CLEAR */
+        if (!strncmp(rest, "SHOW", 4)) { mn_script_show(); respond(tag, "+OK"); }
+        else if (!strncmp(rest, "RUN", 3)) {
+            if (mn_script_run() != 0) respond_err(tag, "E_SYNTAX", "no script saved");
+            else respond(tag, "+OK");
+        }
+        else if (!strncmp(rest, "CLEAR", 5)) {
+            mn_script_save("", 0);
+            respond(tag, "+OK");
+        }
+        else if (!strncmp(rest, "SET ", 4)) {
+            char *src = rest + 4;
+            while (*src == ' ') src++;
+            if (*src == '\0') { respond_err(tag, "E_SYNTAX", "SCRIPT SET <src>"); return; }
+            /* one HCP line can't contain newlines: ';;' separates source lines */
+            for (char *c = src; *c; c++)
+                if (c[0] == ';' && c[1] == ';') { c[0] = '\n'; memmove(c + 1, c + 2, strlen(c + 2) + 1); }
+            if (mn_script_save(src, strlen(src)) != 0)
+                respond_err(tag, "E_SYNTAX", "script too long (max 1024)");
+            else respond(tag, "+OK saved");
+        }
+        else respond_err(tag, "E_SYNTAX", "SCRIPT SET <src> | SHOW | RUN | CLEAR");
+    }
+    else if (!strcmp(verb, "ROTATE")) {          /* signed system/rotate (§11.1.8) */
+        if (mn_get_state() != MN_READY) { respond_err(tag, "E_BAD_STATE", mn_state_name(mn_get_state())); return; }
+        int rc = mn_rotate();
+        if (rc != 0) respond_err(tag, "E_INTERNAL", "sign/send failed");
+        else respond(tag, "+OK epoch rotated");
+    }
     else if (!strcmp(verb, "NAME")) {
         size_t n = strlen(rest);
         if (n < 1 || n > 16) { respond_err(tag, "E_SYNTAX", "NAME <1..16 chars>"); return; }
@@ -236,10 +310,12 @@ static void handle_forth_line(char *line) {
         mn_write_line("# back to HCP");
         return;
     }
-    SemaphoreHandle_t m = mn_tx_mutex();          /* recursive — mn-* words that
-                                                     print re-enter mn_write_line */
+    /* mn_forth_exec takes TX mutex (recursive — mn-* words that print re-enter
+     * mn_write_line) then the engine mutex, so a mesh-triggered hook can never
+     * interleave with a REPL evaluation. */
+    SemaphoreHandle_t m = mn_tx_mutex();
     if (m) xSemaphoreTakeRecursive(m, portMAX_DELAY);
-    forth_eval(line);
+    mn_forth_exec(line);
     forth_out('\r'); forth_out('\n');
     forth_out('o'); forth_out('k'); forth_out('>'); forth_out(' ');
     if (m) xSemaphoreGiveRecursive(m);

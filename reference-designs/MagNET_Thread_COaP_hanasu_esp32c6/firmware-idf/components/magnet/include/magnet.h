@@ -86,6 +86,30 @@ int  mn_channel_set(const char *cred, size_t len, char *info, size_t cap);
 void mn_channel_info(char *buf, size_t cap);      /* public info only (§11.3.5) */
 const uint8_t *mn_channel_mcast_suffix(void);     /* 4 bytes, for OT bringup    */
 
+/* ---- E-D part 2: identity + admin (deterministic ECDSA P-256) ---- */
+const uint8_t *mn_pubkey(void);              /* 65-byte uncompressed point */
+int  mn_admin_add(const uint8_t pub65[65]);  /* allow-list, NVS, max 4     */
+void mn_admin_list_print(void);
+int  mn_rotate(void);                        /* signed system/rotate bcast */
+
+/* ---- E-E: Forth automation hooks + script persistence (§12.3) ----
+ * Hooks are registered by WORD NAME (the stub engine exposes no execution
+ * tokens; spec's `( xt -- )` form returns with the full ESP32forth port, E-G).
+ * The hook word is invoked ON THE PUMP TASK — never in OT/lwIP callback
+ * context — with the message pushed as ( c-addr u ) plus the sender id.
+ *   kind 0 = chat, 1 = m2m cmd */
+int  mn_hook_set(int kind, const char *word, size_t len);
+void mn_hooks_print(void);
+
+/* Serialized Forth execution: the interpreter is NOT reentrant, so the REPL
+ * dispatcher and the hook invoker must not call forth_eval concurrently. */
+void mn_forth_exec(const char *line);
+
+/* Boot script: persisted Forth source, run once after vocab registration. */
+int  mn_script_save(const char *src, size_t len);   /* NVS, ≤1 KB */
+void mn_script_show(void);
+int  mn_script_run(void);                           /* run the saved script now */
+
 /* Switch the subscribed multicast group at runtime (magnet_ot.c). */
 int  mn_ot_set_mcast(const uint8_t suffix[4]);
 

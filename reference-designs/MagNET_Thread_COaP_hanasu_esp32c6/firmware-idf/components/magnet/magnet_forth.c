@@ -13,6 +13,8 @@
 #include "forth_core.h"
 
 #include <stdint.h>
+#include <string.h>
+#include "driver/gpio.h"
 
 /* mn-chat ( c-addr u -- )  send multicast chat */
 static void w_mn_chat(void) {
@@ -77,6 +79,43 @@ static void w_mn_name(void) {
     mn_name_set(name);
 }
 
+/* mn-on-chat ( c-addr u -- )  register hook word by NAME (stub engine has no
+ * execution tokens; e.g.  s" maybe-light" mn-on-chat ) */
+static void w_mn_on_chat(void) {
+    intptr_t u = forth_pop(), addr = forth_pop();
+    if (addr && u > 0) mn_hook_set(0, (const char *)addr, (size_t)u);
+}
+
+/* mn-on-cmd ( c-addr u -- ) */
+static void w_mn_on_cmd(void) {
+    intptr_t u = forth_pop(), addr = forth_pop();
+    if (addr && u > 0) mn_hook_set(1, (const char *)addr, (size_t)u);
+}
+
+/* mn-hooks ( -- ) */
+static void w_mn_hooks(void) { mn_hooks_print(); }
+
+/* str= ( c-addr1 u1 c-addr2 u2 -- f )  string compare for hook bodies */
+static void w_str_eq(void) {
+    intptr_t u2 = forth_pop(), a2 = forth_pop();
+    intptr_t u1 = forth_pop(), a1 = forth_pop();
+    int eq = (u1 == u2 && a1 && a2 &&
+              memcmp((const void *)a1, (const void *)a2, (size_t)u1) == 0);
+    forth_push(eq ? -1 : 0);
+}
+
+/* gpio-output ( pin -- ) / gpio-set ( pin level -- ) — the §12.3 demo path */
+static void w_gpio_output(void) {
+    intptr_t pin = forth_pop();
+    if (pin >= 0 && pin < 32) {
+        gpio_set_direction((gpio_num_t)pin, GPIO_MODE_OUTPUT);
+    }
+}
+static void w_gpio_set(void) {
+    intptr_t level = forth_pop(), pin = forth_pop();
+    if (pin >= 0 && pin < 32) gpio_set_level((gpio_num_t)pin, level ? 1 : 0);
+}
+
 /* mn-state ( -- n )  push current lifecycle state enum */
 static void w_mn_state(void)  { forth_push((intptr_t)mn_get_state()); }
 
@@ -130,5 +169,10 @@ void mn_register_forth_vocab(void) {
     forth_register_word("mn-heartbeat!", w_mn_heartbeat);
     forth_register_word("mn-stats",      w_mn_stats);
     forth_register_word("mn-stress",     w_mn_stress);
-    /* E-Phase D adds: mn-join mn-set-channel mn-cmd mn-admin-add mn-on-chat ... */
+    forth_register_word("mn-on-chat",    w_mn_on_chat);
+    forth_register_word("mn-on-cmd",     w_mn_on_cmd);
+    forth_register_word("mn-hooks",      w_mn_hooks);
+    forth_register_word("str=",          w_str_eq);
+    forth_register_word("gpio-output",   w_gpio_output);
+    forth_register_word("gpio-set",      w_gpio_set);
 }

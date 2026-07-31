@@ -13,3 +13,5 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_MBEDTLS_CCM_C=y          # AES-CCM payload encryption (also used by Thread)
 CONFIG_MBEDTLS_HKDF_C=y         # key-hierarchy derivation
 CONFIG_MBEDTLS_PKCS5_C=y        # PBKDF2 passphrase stretch (§11.1.2)
+
+CONFIG_MBEDTLS_ECDSA_DETERMINISTIC=y   # RFC 6979 signing for device identity (E-D)
