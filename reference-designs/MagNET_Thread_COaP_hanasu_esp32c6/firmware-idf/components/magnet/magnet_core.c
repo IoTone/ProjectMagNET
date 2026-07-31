@@ -11,6 +11,7 @@
  */
 #include "magnet.h"
 #include "magnet_envelope.h"
+#include "magnet_crypto.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -26,13 +27,18 @@
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
+#include "nvs.h"
 #include "forth_core.h"
 #include "sdkconfig.h"
 
-/* E-B: single well-known channel; the selector constant stands in until the
- * §11.1 key hierarchy derives it from root_secret (E-Phase D). */
-#define MN_DEFAULT_SELECTOR 0x6D61   /* "ma" */
-#define MN_CHANNEL_NAME     "magnet"
+#define MN_FW_VERSION "0.3.0-ec"
+#define MN_NAME_MAX   16
+
+/* E-D: the active channel — everything (selector, mcast, key) derives from
+ * the credential's root_secret (§11.1). Default = "magnet" (well-known,
+ * !WARN insecure per §11.5), derived once and cached in NVS. */
+static mn_channel_t s_chan;
+#define MN_CHANNEL_NAME (s_chan.name)
 
 static mn_state_t   s_state = MN_BOOTING;
 static mn_putc_fn   s_putc  = NULL;
@@ -40,6 +46,31 @@ static SemaphoreHandle_t s_tx_mutex = NULL;
 
 static uint8_t  s_device_id[4] = {0xde, 0xad, 0xbe, 0xef};
 static uint32_t s_counter      = 0;   /* E-B: per-boot random base; E-D: NVS blocks */
+
+/* ---- E-C link/host state ---- */
+static char     s_name[MN_NAME_MAX + 1] = "-";
+static bool     s_terse = false;
+
+/* event classes for SUB/UNSUB (§11.3 point 7) */
+enum {
+    MN_EC_CHAT = 1 << 0, MN_EC_DM = 1 << 1, MN_EC_CMD = 1 << 2,
+    MN_EC_STATE = 1 << 3, MN_EC_PEER = 1 << 4, MN_EC_XFER = 1 << 5,
+    MN_EC_ROLE = 1 << 6, MN_EC_HEARTBEAT = 1 << 7, MN_EC_WARN = 1 << 8,
+    MN_EC_ALL = 0x1FF,
+};
+static uint16_t s_ev_mask = MN_EC_ALL;
+
+/* class-gated event emission — subscription filters delivery to the host,
+ * never the mesh processing itself (counters/peers still update) */
+static void emit_class(uint16_t cls, const char *fmt, ...) {
+    if (!(s_ev_mask & cls)) return;
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    mn_write_line(buf);
+}
 
 /* ---- called by mn_link_start once the transport putc is known ---- */
 void mn_core_set_putc(mn_putc_fn p) { s_putc = p; }
@@ -62,7 +93,7 @@ mn_state_t mn_get_state(void) { return s_state; }
 
 void mn_set_state(mn_state_t s) {
     s_state = s;
-    mn_emit_event("!STATE %s", mn_state_name(s));
+    emit_class(MN_EC_STATE, "!STATE %s", mn_state_name(s));
 }
 
 /* ---- The single serialized writer. Lock the WHOLE line. ----
@@ -71,11 +102,38 @@ void mn_set_state(mn_state_t s) {
  * would self-deadlock on the first `mn-status` at the ok> prompt. */
 void mn_write_line(const char *line) {
     if (!s_putc) return;
+    if (s_terse && line[0] == '#') return;   /* MODE TERSE: drop comment lines */
     if (s_tx_mutex) xSemaphoreTakeRecursive(s_tx_mutex, portMAX_DELAY);
     for (const char *c = line; *c; ++c) s_putc(*c);
     s_putc('\r');
     s_putc('\n');
     if (s_tx_mutex) xSemaphoreGiveRecursive(s_tx_mutex);
+}
+
+void mn_terse_set(bool terse) { s_terse = terse; }
+
+int mn_sub_update(const char *csv, bool subscribe) {
+    static const struct { const char *name; uint16_t bit; } MAP[] = {
+        {"chat", MN_EC_CHAT}, {"dm", MN_EC_DM}, {"cmd", MN_EC_CMD},
+        {"state", MN_EC_STATE}, {"peer", MN_EC_PEER}, {"xfer", MN_EC_XFER},
+        {"role", MN_EC_ROLE}, {"heartbeat", MN_EC_HEARTBEAT},
+        {"warn", MN_EC_WARN}, {"all", MN_EC_ALL},
+    };
+    char tok[16];
+    const char *p = csv;
+    while (*p) {
+        size_t i = 0;
+        while (*p && *p != ',' && i < sizeof(tok) - 1) tok[i++] = *p++;
+        tok[i] = '\0';
+        if (*p == ',') p++;
+        uint16_t bit = 0;
+        for (size_t m = 0; m < sizeof(MAP) / sizeof(MAP[0]); m++)
+            if (!strcmp(tok, MAP[m].name)) { bit = MAP[m].bit; break; }
+        if (!bit) return -1;
+        if (subscribe) s_ev_mask |= bit;
+        else           s_ev_mask &= ~bit;
+    }
+    return 0;
 }
 
 void mn_emit_event(const char *fmt, ...) {
@@ -98,31 +156,59 @@ typedef struct {
     bool     used;
     uint8_t  id[4];
     char     ipv6[46];
+    char     name[MN_NAME_MAX + 1];
     uint32_t last_seen_ticks;
 } mn_peer_t;
 
 static mn_peer_t s_peers[MN_PEER_MAX];
 
+static mn_peer_t *peer_find(const uint8_t id[4]) {
+    for (int i = 0; i < MN_PEER_MAX; i++)
+        if (s_peers[i].used && !memcmp(s_peers[i].id, id, 4)) return &s_peers[i];
+    return NULL;
+}
+
+static const char *peer_name(const uint8_t id[4]) {
+    mn_peer_t *p = peer_find(id);
+    return (p && p->name[0]) ? p->name : "-";
+}
+
 static void peer_seen(const uint8_t id[4], const char *ipv6) {
+    mn_peer_t *p = peer_find(id);
+    if (p) {
+        strlcpy(p->ipv6, ipv6, sizeof(p->ipv6));
+        p->last_seen_ticks = xTaskGetTickCount();
+        return;
+    }
     int free_slot = -1, oldest = 0;
     for (int i = 0; i < MN_PEER_MAX; i++) {
-        if (s_peers[i].used && !memcmp(s_peers[i].id, id, 4)) {
-            strlcpy(s_peers[i].ipv6, ipv6, sizeof(s_peers[i].ipv6));
-            s_peers[i].last_seen_ticks = xTaskGetTickCount();
-            return;
-        }
         if (!s_peers[i].used && free_slot < 0) free_slot = i;
         if (s_peers[i].last_seen_ticks < s_peers[oldest].last_seen_ticks) oldest = i;
     }
     int slot = (free_slot >= 0) ? free_slot : oldest;
-    bool is_new = (free_slot >= 0);
     s_peers[slot].used = true;
     memcpy(s_peers[slot].id, id, 4);
     strlcpy(s_peers[slot].ipv6, ipv6, sizeof(s_peers[slot].ipv6));
+    s_peers[slot].name[0] = '\0';
     s_peers[slot].last_seen_ticks = xTaskGetTickCount();
-    if (is_new) {
-        mn_emit_event("!PEER_JOIN %02x%02x%02x%02x - %s",
-                      id[0], id[1], id[2], id[3], ipv6);
+    if (free_slot >= 0) {
+        emit_class(MN_EC_PEER, "!PEER_JOIN %02x%02x%02x%02x - %s",
+                   id[0], id[1], id[2], id[3], ipv6);
+    }
+}
+
+/* announce (Type 1, ns 0x00 system, cmd 0x02) carries the display name so
+ * !CHAT can show names instead of hex ids (resolves Open Q2 at E-C level) */
+static void peer_set_name(const uint8_t id[4], const char *name, size_t len) {
+    mn_peer_t *p = peer_find(id);
+    if (!p) return;
+    bool first = (p->name[0] == '\0');
+    size_t n = len <= MN_NAME_MAX ? len : MN_NAME_MAX;
+    memcpy(p->name, name, n);
+    p->name[n] = '\0';
+    if (first) {
+        emit_class(MN_EC_PEER, "!PEER_JOIN %02x%02x%02x%02x %s %s",
+                   id[0], id[1], id[2], id[3], p->name, p->ipv6);
     }
 }
 
@@ -132,24 +218,40 @@ static int peer_count(void) {
     return n;
 }
 
-/* ============== dedup (E-B: recent (sender,counter) cache) =================
- * Catches CoAP NON retransmits / mesh duplicates. The §11.1.6 monotonic
- * high-water table replaces this in E-Phase D (needs the persistent counter). */
-#define MN_DEDUP_MAX 32
+/* ============ replay protection (§11.1.6 high-water table) =================
+ * Senders use PERSISTENT monotonic counters (NVS block-reserve), so a frame
+ * with counter ≤ the sender's high-water mark is a replay/duplicate → drop.
+ * Unknown sender → trust-on-first-use. LRU-bounded. */
+#define MN_DEDUP_MAX 16
 
-static struct { uint8_t id[4]; uint32_t counter; } s_dedup[MN_DEDUP_MAX];
-static int s_dedup_next = 0;
+static struct { bool used; uint8_t id[4]; uint32_t hi; uint32_t ticks; } s_dedup[MN_DEDUP_MAX];
 
 static bool dedup_seen(const uint8_t id[4], uint32_t counter) {
+    int free_slot = -1, oldest = 0;
     for (int i = 0; i < MN_DEDUP_MAX; i++) {
-        if (s_dedup[i].counter == counter && !memcmp(s_dedup[i].id, id, 4))
-            return true;
+        if (s_dedup[i].used && !memcmp(s_dedup[i].id, id, 4)) {
+            if (counter <= s_dedup[i].hi) return true;       /* replay */
+            s_dedup[i].hi = counter;
+            s_dedup[i].ticks = xTaskGetTickCount();
+            return false;
+        }
+        if (!s_dedup[i].used && free_slot < 0) free_slot = i;
+        if (s_dedup[i].ticks < s_dedup[oldest].ticks) oldest = i;
     }
-    memcpy(s_dedup[s_dedup_next].id, id, 4);
-    s_dedup[s_dedup_next].counter = counter;
-    s_dedup_next = (s_dedup_next + 1) % MN_DEDUP_MAX;
+    int slot = free_slot >= 0 ? free_slot : oldest;          /* TOFU */
+    s_dedup[slot].used = true;
+    memcpy(s_dedup[slot].id, id, 4);
+    s_dedup[slot].hi = counter;
+    s_dedup[slot].ticks = xTaskGetTickCount();
     return false;
 }
+
+/* forward decls (defined with the send path below; used by the pump/init) */
+static void announce_name(void);
+static void queue_drain(void);
+static void name_load(void);
+static void counter_load(void);
+static void chan_load(void);
 
 /* ==================== event pump (§12.4) =================================== */
 typedef enum { MN_EVT_RX, MN_EVT_ROLE, MN_EVT_HEARTBEAT } mn_evt_kind_t;
@@ -219,8 +321,27 @@ static void handle_rx(const mn_evt_t *evt) {
     }
 
     if (!memcmp(env.sender_id, s_device_id, 4)) return;       /* self */
-    if (env.flags & MN_F_ENCRYPTED) return;                   /* can't yet (E-D) */
-    if (env.selector != MN_DEFAULT_SELECTOR) return;          /* not our channel */
+    if (env.selector != s_chan.selector) return;              /* not our channel */
+
+    /* §11.1.5: decrypt + authenticate BEFORE any stateful processing */
+    uint8_t pt[MN_ENV_MAX_FRAME];
+    if (env.flags & MN_F_ENCRYPTED) {
+        if (env.payload_len <= 8) { s_stats.rx_err++; return; }
+        size_t ct_len = env.payload_len - 8;
+        uint8_t nonce[13];
+        mn_nonce_build(nonce, env.sender_id, env.counter, env.epoch, env.selector);
+        if (mn_aead_decrypt(s_chan.epoch_key, nonce, evt->data,
+                            env.payload, ct_len, pt,
+                            env.payload + ct_len) != 0) {
+            s_stats.rx_err++;                                 /* bad MIC */
+            return;
+        }
+        env.payload = pt;
+        env.payload_len = ct_len;
+    } else if (s_chan.set) {
+        return;      /* plaintext on an encrypted channel → drop (E-D strict) */
+    }
+
     if (dedup_seen(env.sender_id, env.counter)) { s_stats.rx_dup++; return; }
 
     s_stats.rx_msgs++;
@@ -243,13 +364,29 @@ static void handle_rx(const mn_evt_t *evt) {
         size_t n = env.payload_len < sizeof(text) - 1 ? env.payload_len : sizeof(text) - 1;
         memcpy(text, env.payload, n);
         text[n] = '\0';
-        /* names arrive with the NAME verb (later); "-" until then */
-        if (evt->was_multicast) mn_emit_event("!CHAT %s %s - %s", MN_CHANNEL_NAME, idhex, text);
-        else                    mn_emit_event("!DM %s - %s", idhex, text);
+        if (evt->was_multicast)
+            emit_class(MN_EC_CHAT, "!CHAT %s %s %s %s", MN_CHANNEL_NAME, idhex,
+                       peer_name(env.sender_id), text);
+        else
+            emit_class(MN_EC_DM, "!DM %s %s %s", idhex, peer_name(env.sender_id), text);
+        break;
+    }
+    case MN_T_M2M_CMD: {
+        /* §4.4: [0]=ns [1]=cmd [2..3]=param_len BE [4..]=params */
+        if (env.payload_len < 4) break;
+        uint8_t  ns  = env.payload[0], cmd_id = env.payload[1];
+        uint16_t plen = (uint16_t)((env.payload[2] << 8) | env.payload[3]);
+        if ((size_t)plen + 4 > env.payload_len) break;
+        if (ns == 0x00 && cmd_id == 0x02) {          /* system/announce: name */
+            peer_set_name(env.sender_id, (const char *)&env.payload[4], plen);
+        } else {
+            emit_class(MN_EC_CMD, "!CMD %s %s %u %u len=%u",
+                       MN_CHANNEL_NAME, idhex, ns, cmd_id, plen);
+        }
         break;
     }
     default:
-        mn_emit_event("# rx type=%u from=%s len=%u (unhandled in E-B)",
+        mn_emit_event("# rx type=%u from=%s len=%u (unhandled in E-C)",
                       env.type, idhex, (unsigned)env.payload_len);
         break;
     }
@@ -263,20 +400,24 @@ static void pump_task(void *arg) {
         if (evt.kind == MN_EVT_RX) {
             handle_rx(&evt);
         } else if (evt.kind == MN_EVT_ROLE) {
-            mn_emit_event("!ROLE %s", evt.role);
+            emit_class(MN_EC_ROLE, "!ROLE %s", evt.role);
             if (!strcmp(evt.role, "leader") || !strcmp(evt.role, "router") ||
                 !strcmp(evt.role, "child")) {
-                if (s_state != MN_READY) mn_set_state(MN_READY);
+                if (s_state != MN_READY) {
+                    mn_set_state(MN_READY);
+                    announce_name();          /* tell the mesh who we are */
+                    queue_drain();            /* replay DEGRADED-queued sends */
+                }
             } else if (!strcmp(evt.role, "detached")) {
                 mn_set_state(s_state == MN_READY ? MN_DEGRADED : MN_ATTACHING);
             }
         } else if (evt.kind == MN_EVT_HEARTBEAT) {
             /* §4.6: heartbeat only once READY/DEGRADED */
             if (s_state == MN_READY || s_state == MN_DEGRADED) {
-                mn_emit_event("!HEARTBEAT %s %llu %s %d",
-                              mn_state_name(s_state),
-                              (unsigned long long)(esp_timer_get_time() / 1000000),
-                              mn_ot_role_name(), peer_count());
+                emit_class(MN_EC_HEARTBEAT, "!HEARTBEAT %s %llu %s %d",
+                           mn_state_name(s_state),
+                           (unsigned long long)(esp_timer_get_time() / 1000000),
+                           mn_ot_role_name(), peer_count());
             }
         }
     }
@@ -309,9 +450,13 @@ void mn_heartbeat_set(uint32_t secs) {
 void mn_core_init(void) {
     if (!s_tx_mutex) s_tx_mutex = xSemaphoreCreateRecursiveMutex();
     s_state = MN_BOOTING;
-    s_counter = esp_random();            /* E-D: NVS block-reserved counter */
     memset(s_peers, 0, sizeof(s_peers));
     memset(s_dedup, 0, sizeof(s_dedup));
+    name_load();                         /* NVS must be up (main inits it first) */
+    counter_load();                      /* §11.1.6 block-reserved nonce counter */
+    chan_load();                         /* active channel (default: "magnet")  */
+    if (!strcmp(s_chan.name, "magnet"))
+        mn_emit_event("!WARN default-channel-insecure use CHANNEL SET");
     if (!s_evt_q) {
         s_evt_q = xQueueCreate(8, sizeof(mn_evt_t));
         xTaskCreate(pump_task, "mn_pump", 4096, NULL, 5, NULL);
@@ -325,17 +470,47 @@ void mn_core_init(void) {
 }
 
 /* ====================== core ops (HCP + Forth share these) ================= */
-static int send_type0(const char *msg, size_t len, const char *dst, bool con) {
-    if (!msg || len == 0) return -1;
-    if (len > MN_ENV_MAX_FRAME - MN_ENV_HDR_LEN) return -2;
+
+/* §11.1.6 persistent counter, block-reserved to avoid a flash write per
+ * message: NVS always holds a value ≥ any counter ever used. Fail closed. */
+#define MN_CNT_BLOCK 1024
+static uint32_t s_counter_limit = 0;
+
+static int counter_reserve(void) {
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READWRITE, &h) != ESP_OK) return -1;
+    int rc = (nvs_set_u32(h, "cnt", s_counter + MN_CNT_BLOCK) == ESP_OK &&
+              nvs_commit(h) == ESP_OK) ? 0 : -1;
+    if (rc == 0) s_counter_limit = s_counter + MN_CNT_BLOCK;
+    nvs_close(h);
+    return rc;
+}
+
+static void counter_load(void) {
+    nvs_handle_t h;
+    uint32_t v = 0;
+    if (nvs_open("magnet", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u32(h, "cnt", &v);
+        nvs_close(h);
+    }
+    s_counter = v;               /* stored value is ≥ last used + 1 (block gap) */
+    counter_reserve();
+}
+
+static int send_frame(uint8_t type, const uint8_t *payload, size_t len,
+                      const char *dst, bool con) {
+    if (!payload || len == 0) return -1;
+    if (len > MN_ENV_MAX_FRAME - MN_ENV_HDR_LEN - 8) return -2;
+    if (s_counter + 1 >= s_counter_limit && counter_reserve() != 0)
+        return -5;               /* MUST NOT transmit without a fresh nonce */
 
     mn_envelope_t env = {
         .version    = MN_ENV_VERSION,
-        .type       = MN_T_CHAT,
-        .flags      = 0,
+        .type       = type,
+        .flags      = s_chan.set ? MN_F_ENCRYPTED : 0,
         .counter    = ++s_counter,
         .epoch      = 0,
-        .selector   = MN_DEFAULT_SELECTOR,
+        .selector   = s_chan.selector,
         .frag_total = 1,
         .frag_idx   = 0,
         .msg_id     = (uint16_t)esp_random(),
@@ -343,8 +518,20 @@ static int send_type0(const char *msg, size_t len, const char *dst, bool con) {
     memcpy(env.sender_id, s_device_id, 4);
 
     uint8_t frame[MN_ENV_MAX_FRAME];
-    int n = mn_env_pack(frame, sizeof(frame), &env, (const uint8_t *)msg, len);
+    int n = mn_env_pack(frame, sizeof(frame), &env, payload, len);
     if (n < 0) return n;
+
+    if (s_chan.set) {            /* encrypt payload in place, append MIC */
+        uint8_t nonce[13];
+        mn_nonce_build(nonce, env.sender_id, env.counter, env.epoch, env.selector);
+        uint8_t ct[MN_ENV_MAX_FRAME];
+        if (mn_aead_encrypt(s_chan.epoch_key, nonce, frame,
+                            frame + MN_ENV_HDR_LEN, len, ct,
+                            frame + MN_ENV_HDR_LEN + len) != 0) return -6;
+        memcpy(frame + MN_ENV_HDR_LEN, ct, len);
+        n += 8;
+    }
+
     s_stats.tx_try++;
     int rc = mn_ot_send(frame, (size_t)n, dst, con);
     if (rc == 0) { s_stats.tx_ok++; s_stats.tx_bytes += len; }
@@ -352,19 +539,140 @@ static int send_type0(const char *msg, size_t len, const char *dst, bool con) {
     return rc;
 }
 
+/* ---- channel management (derive/persist/switch) ---- */
+static void chan_persist(void) {
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_blob(h, "chroot", s_chan.root, 32);
+    nvs_set_str(h, "chname", s_chan.name);
+    nvs_set_u8(h, "chpath", (uint8_t)s_chan.cred_path);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void chan_load(void) {
+    nvs_handle_t h;
+    size_t blen = 32, nlen = sizeof(s_chan.name);
+    uint8_t path = 0;
+    if (nvs_open("magnet", NVS_READONLY, &h) == ESP_OK &&
+        nvs_get_blob(h, "chroot", s_chan.root, &blen) == ESP_OK && blen == 32) {
+        nvs_get_str(h, "chname", s_chan.name, &nlen);
+        nvs_get_u8(h, "chpath", &path);
+        s_chan.cred_path = (char)(path ? path : 'B');
+        mn_root_expand(&s_chan);
+        s_chan.set = true;
+        nvs_close(h);
+        return;
+    }
+    /* first boot: derive the well-known default (§11.5) and cache it */
+    mn_cred_derive("magnet", 6, &s_chan);
+    chan_persist();
+}
+
+int mn_channel_set(const char *cred, size_t len, char *info, size_t cap) {
+    mn_channel_t nc;
+    int rc = mn_cred_derive(cred, len, &nc);
+    if (rc != 0) return rc;
+    s_chan = nc;
+    chan_persist();
+    mn_ot_set_mcast(s_chan.mcast_suffix);        /* no-op if radio not up */
+    memset(s_dedup, 0, sizeof(s_dedup));         /* new channel, new peers */
+    memset(s_peers, 0, sizeof(s_peers));
+    if (info) snprintf(info, cap, "%s selector=%04x path=%c",
+                       s_chan.name, s_chan.selector, s_chan.cred_path);
+    if (s_state == MN_READY) announce_name();
+    return 0;
+}
+
+void mn_channel_info(char *buf, size_t cap) {
+    snprintf(buf, cap, "name=%s selector=%04x mcast=ff05::%02x%02x:%02x%02x path=%c",
+             s_chan.name, s_chan.selector,
+             s_chan.mcast_suffix[0], s_chan.mcast_suffix[1],
+             s_chan.mcast_suffix[2], s_chan.mcast_suffix[3], s_chan.cred_path);
+}
+
+const uint8_t *mn_channel_mcast_suffix(void) { return s_chan.mcast_suffix; }
+
+/* Token bucket for host-initiated multicast (§4.9): burst 8, refill 10/s.
+ * STRESS bypasses it (calls send_frame directly — it measures the stack). */
+static uint32_t s_bucket = 8;
+static int64_t  s_bucket_us = 0;
+
+static bool rate_ok(void) {
+    int64_t now = esp_timer_get_time();
+    if (s_bucket_us == 0) s_bucket_us = now;
+    uint32_t refill = (uint32_t)((now - s_bucket_us) / 100000);  /* 1 per 100 ms */
+    if (refill) {
+        s_bucket = s_bucket + refill > 8 ? 8 : s_bucket + refill;
+        s_bucket_us += (int64_t)refill * 100000;
+    }
+    if (s_bucket == 0) return false;
+    s_bucket--;
+    return true;
+}
+
 int mn_chat(const char *msg, size_t len) {
-    return send_type0(msg, len, NULL, false);   /* NON to the channel multicast */
+    if (!rate_ok()) return -4;                  /* -ERR E_RATE_LIMITED */
+    return send_frame(MN_T_CHAT, (const uint8_t *)msg, len, NULL, false);
 }
 
 int mn_dm(const char *peer_ipv6, const char *msg, size_t len) {
-    return send_type0(msg, len, peer_ipv6, true);  /* CON to unicast peer */
+    return send_frame(MN_T_CHAT, (const uint8_t *)msg, len, peer_ipv6, true);
 }
 
-void mn_status_print(void) {
-    mn_emit_event("# state=%s role=%s channel=%s peers=%d id=%02x%02x%02x%02x",
-                  mn_state_name(s_state), mn_ot_role_name(), MN_CHANNEL_NAME,
-                  peer_count(),
-                  s_device_id[0], s_device_id[1], s_device_id[2], s_device_id[3]);
+/* system/announce: Type 1, ns 0x00, cmd 0x02, params = display name */
+static void announce_name(void) {
+    if (s_name[0] == '\0' || !strcmp(s_name, "-")) return;
+    uint8_t pl[4 + MN_NAME_MAX];
+    size_t n = strlen(s_name);
+    pl[0] = 0x00; pl[1] = 0x02;
+    pl[2] = 0; pl[3] = (uint8_t)n;
+    memcpy(&pl[4], s_name, n);
+    send_frame(MN_T_M2M_CMD, pl, 4 + n, NULL, false);
+}
+
+/* ---- DEGRADED command queue (§4.6: max 4, replay on READY, !RESULT) ---- */
+#define MN_QUEUE_MAX 4
+static struct {
+    bool used, is_dm;
+    char dst[46];
+    uint16_t len;
+    uint8_t text[MN_ENV_MAX_FRAME - MN_ENV_HDR_LEN];
+} s_queue[MN_QUEUE_MAX];
+
+int mn_queue_chat(const char *dst, const char *msg, size_t len) {
+    if (len > sizeof(s_queue[0].text)) return -1;
+    for (int i = 0; i < MN_QUEUE_MAX; i++) {
+        if (s_queue[i].used) continue;
+        s_queue[i].used = true;
+        s_queue[i].is_dm = (dst != NULL);
+        if (dst) strlcpy(s_queue[i].dst, dst, sizeof(s_queue[i].dst));
+        memcpy(s_queue[i].text, msg, len);
+        s_queue[i].len = (uint16_t)len;
+        int depth = 0;
+        for (int j = 0; j < MN_QUEUE_MAX; j++) if (s_queue[j].used) depth++;
+        return depth;
+    }
+    return -1;                                  /* full → E_QUEUE_FULL */
+}
+
+static void queue_drain(void) {                 /* pump task, on entering READY */
+    for (int i = 0; i < MN_QUEUE_MAX; i++) {
+        if (!s_queue[i].used) continue;
+        int rc = send_frame(MN_T_CHAT, s_queue[i].text, s_queue[i].len,
+                            s_queue[i].is_dm ? s_queue[i].dst : NULL,
+                            s_queue[i].is_dm);
+        s_queue[i].used = false;
+        mn_emit_event("!RESULT @- %s %s", rc == 0 ? "ok" : "err",
+                      s_queue[i].is_dm ? "dm" : "chat");
+    }
+}
+
+void mn_status_line(char *buf, size_t cap) {
+    snprintf(buf, cap, "state=%s role=%s channel=%s peers=%d name=%s id=%02x%02x%02x%02x",
+             mn_state_name(s_state), mn_ot_role_name(), MN_CHANNEL_NAME,
+             peer_count(), s_name,
+             s_device_id[0], s_device_id[1], s_device_id[2], s_device_id[3]);
 }
 
 void mn_peers_print(void) {
@@ -372,9 +680,10 @@ void mn_peers_print(void) {
     uint32_t now = xTaskGetTickCount();
     for (int i = 0; i < MN_PEER_MAX; i++) {
         if (!s_peers[i].used) continue;
-        mn_emit_event("# peer %02x%02x%02x%02x - %s last-seen=%lus ago",
+        mn_emit_event("# peer %02x%02x%02x%02x %s %s last-seen=%lus ago",
                       s_peers[i].id[0], s_peers[i].id[1],
                       s_peers[i].id[2], s_peers[i].id[3],
+                      s_peers[i].name[0] ? s_peers[i].name : "-",
                       s_peers[i].ipv6,
                       (unsigned long)((now - s_peers[i].last_seen_ticks) / configTICK_RATE_HZ));
         n++;
@@ -382,10 +691,34 @@ void mn_peers_print(void) {
     if (!n) mn_emit_event("# peers: none seen yet");
 }
 
-void mn_whoami_print(void) {
-    /* E-Phase D: real device_id = SHA256(Ed25519 pubkey)[0:4]. E-B: EUI-64 tail. */
-    mn_emit_event("# id=%02x%02x%02x%02x name=- fw=0.2.0-eb",
-                  s_device_id[0], s_device_id[1], s_device_id[2], s_device_id[3]);
+void mn_whoami_line(char *buf, size_t cap) {
+    /* E-Phase D: real device_id = SHA256(Ed25519 pubkey)[0:4]. E-B/C: EUI-64 tail. */
+    snprintf(buf, cap, "id=%02x%02x%02x%02x name=%s fw=%s",
+             s_device_id[0], s_device_id[1], s_device_id[2], s_device_id[3],
+             s_name, MN_FW_VERSION);
+}
+
+/* ---- display name (NVS-persisted; announces on change when READY) ---- */
+const char *mn_name_get(void) { return s_name; }
+
+void mn_name_set(const char *name) {
+    strlcpy(s_name, name, sizeof(s_name));
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, "name", s_name);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    if (s_state == MN_READY) announce_name();
+}
+
+static void name_load(void) {
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(s_name);
+        if (nvs_get_str(h, "name", s_name, &len) != ESP_OK) strlcpy(s_name, "-", sizeof(s_name));
+        nvs_close(h);
+    }
 }
 
 /* ======================= diagnostics / test surface ======================== */
@@ -417,7 +750,7 @@ static int build_selftest_ping(uint8_t *frame, size_t cap) {
         .flags      = 0,
         .counter    = ++s_counter,
         .epoch      = 0,
-        .selector   = MN_DEFAULT_SELECTOR,
+        .selector   = s_chan.selector,
         .frag_total = 1,
         .frag_idx   = 0,
         .msg_id     = (uint16_t)esp_random(),
@@ -433,7 +766,7 @@ void mn_bench(void) {
     memset(payload, 0xa5, sizeof(payload));
     mn_envelope_t env = {
         .version = MN_ENV_VERSION, .type = MN_T_CHAT, .frag_total = 1,
-        .selector = MN_DEFAULT_SELECTOR, .msg_id = 1,
+        .selector = s_chan.selector, .msg_id = 1,
     };
     memcpy(env.sender_id, s_device_id, 4);
 
@@ -501,7 +834,7 @@ static void stress_task(void *arg) {
         uint32_t seq = s_stats.tx_try - t0_try;
         payload[3] = (uint8_t)(seq >> 24); payload[4] = (uint8_t)(seq >> 16);
         payload[5] = (uint8_t)(seq >> 8);  payload[6] = (uint8_t)seq;
-        mn_chat((const char *)payload, len);
+        send_frame(MN_T_CHAT, payload, len, NULL, false);  /* bypass rate limit */
         if (esp_timer_get_time() >= next_report) {
             mn_emit_event("!STRESS t=%llds try=%lu ok=%lu err=%lu",
                           (long long)((esp_timer_get_time() - start) / 1000000),

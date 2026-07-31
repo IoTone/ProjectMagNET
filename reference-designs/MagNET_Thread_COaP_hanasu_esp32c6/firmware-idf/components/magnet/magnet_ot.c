@@ -48,7 +48,8 @@
 #define MN_OT_CHANNEL      24
 #define MN_OT_PANID        0x4d4e                     /* "MN" */
 #define MN_OT_NETWORK_NAME "MagNET-dev"
-#define MN_OT_MCAST        "ff05::abcd"               /* prototype group (E-D: derived) */
+/* E-D: the multicast group is DERIVED from the channel root_secret
+ * (ff05::<suffix>, §11.1.3) — no fixed group anymore. */
 static const uint8_t MN_OT_NETWORK_KEY[16] = {
     0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
     0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff
@@ -74,6 +75,25 @@ static char         s_role[12] = "-";
 static otIp6Address s_mcast;
 
 const char *mn_ot_role_name(void) { return s_role; }
+
+static void mcast_from_suffix(otIp6Address *a, const uint8_t suffix[4]) {
+    memset(a, 0, sizeof(*a));
+    a->mFields.m8[0] = 0xff;
+    a->mFields.m8[1] = 0x05;
+    memcpy(&a->mFields.m8[12], suffix, 4);
+}
+
+int mn_ot_set_mcast(const uint8_t suffix[4]) {
+    if (!s_inst) return -1;                          /* applied at bringup */
+    otIp6Address next;
+    mcast_from_suffix(&next, suffix);
+    esp_openthread_lock_acquire(portMAX_DELAY);
+    otIp6UnsubscribeMulticastAddress(s_inst, &s_mcast);
+    s_mcast = next;
+    otError err = otIp6SubscribeMulticastAddress(s_inst, &s_mcast);
+    esp_openthread_lock_release();
+    return err == OT_ERROR_NONE ? 0 : -2;
+}
 
 /* ---- CoAP /magnet (runs in OT mainloop task — post, don't emit) ---- */
 static void coap_magnet_handler(void *ctx, otMessage *msg, const otMessageInfo *mi) {
@@ -202,7 +222,9 @@ void mn_mesh_print(void) {
     mn_emit_event("# mesh role=%s partition=0x%08lx rloc16=0x%04x chan=%u pan=0x%04x",
                   otThreadDeviceRoleToString(role), (unsigned long)partition,
                   rloc16, channel, panid);
-    mn_emit_event("# mesh ml-eid=%s mcast=%s", eid_str, MN_OT_MCAST);
+    char mc[OT_IP6_ADDRESS_STRING_SIZE];
+    otIp6AddressToString(&s_mcast, mc, sizeof(mc));
+    mn_emit_event("# mesh ml-eid=%s mcast=%s", eid_str, mc);
     if (has_leader) {
         mn_emit_event("# mesh leader-rloc=0x%04x weight=%u",
                       (unsigned)((uint16_t)leader.mLeaderRouterId << 10),
@@ -248,7 +270,7 @@ static void ot_configure(otInstance *inst) {
     ESP_ERROR_CHECK(otCoapStart(inst, OT_DEFAULT_COAP_PORT) == OT_ERROR_NONE ? ESP_OK : ESP_FAIL);
     otCoapAddResource(inst, &s_magnet_res);
 
-    otIp6AddressFromString(MN_OT_MCAST, &s_mcast);
+    mcast_from_suffix(&s_mcast, mn_channel_mcast_suffix());
     ESP_ERROR_CHECK(otIp6SubscribeMulticastAddress(inst, &s_mcast) == OT_ERROR_NONE ? ESP_OK : ESP_FAIL);
 
     /* join-or-form; Thread self-heals from here (§3.4) */
@@ -273,8 +295,8 @@ static void ot_main_task(void *arg) {
     ot_configure(inst);
     s_inst = inst;                       /* publish only after config is complete */
 
-    mn_emit_event("# openthread up: chan=%d pan=0x%04x net=%s mcast=%s",
-                  MN_OT_CHANNEL, MN_OT_PANID, MN_OT_NETWORK_NAME, MN_OT_MCAST);
+    mn_emit_event("# openthread up: chan=%d pan=0x%04x net=%s (mcast derived from channel)",
+                  MN_OT_CHANNEL, MN_OT_PANID, MN_OT_NETWORK_NAME);
 
     /* Blocks running the OpenThread stack (tasklets, radio, CoAP RX). */
     esp_openthread_launch_mainloop();
@@ -308,6 +330,8 @@ const char *mn_ot_role_name(void) { return "-"; }
 void mn_mesh_print(void) { mn_emit_event("# mesh: openthread disabled in this build"); }
 
 int mn_ot_local_eid(char *buf, size_t cap) { (void)buf; (void)cap; return -1; }
+
+int mn_ot_set_mcast(const uint8_t suffix[4]) { (void)suffix; return -1; }
 
 int mn_ot_send(const uint8_t *buf, size_t len, const char *dst_ipv6, bool confirmable) {
     (void)buf; (void)confirmable;

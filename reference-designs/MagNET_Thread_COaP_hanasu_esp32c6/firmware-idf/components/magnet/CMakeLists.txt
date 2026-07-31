@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "magnet_core.c"
         "magnet_envelope.c"
+        "magnet_crypto.c"
         "magnet_link.c"
         "magnet_forth.c"
         "magnet_ot.c"
@@ -17,4 +18,5 @@ idf_component_register(
         vfs                  # esp_vfs_eventfd
         esp_timer
         driver
+        mbedtls            # HKDF/PBKDF2/CCM/base64 (magnet_crypto)
 )

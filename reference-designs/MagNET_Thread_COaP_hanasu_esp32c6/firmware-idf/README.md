@@ -1,4 +1,15 @@
-# MagNET Hanasu — ESP-IDF firmware (E-Phase B: plaintext mesh chat)
+# MagNET Hanasu — ESP-IDF firmware (E-Phase C: full HCP host surface)
+
+**E-C (fw 0.3.0-ec, validated 16/16 on the 4-node bench 2026-07-30)** adds on
+top of E-B: `NAME` with on-mesh announce (names in `!CHAT`/`PEERS`, NVS-persisted),
+`MODE TERSE|HUMAN`, `SUB`/`UNSUB <classes>` event filtering, machine-readable
+`+OK key=value` responses for `STATUS`/`WHOAMI`, `CHANNEL LIST|SHOW` (informational
+until E-D), DEGRADED command queueing (max 4 → `+QUEUED n` → `!RESULT` on READY;
+code-complete, awaits a DEGRADED window on hardware), and the §4.9 token-bucket
+rate limit on host multicast (burst 8, refill 10/s → `-ERR E_RATE_LIMITED`;
+verified: 20-burst → 8 accepted, 12 limited). `mn-name!` joins the Forth vocab.
+
+---
 
 Started as the E-Phase A **go/no-go spike** for migrating Hanasu onto ESPIDFORTH
 (design proposal §12); now carries the **E-Phase B plaintext MagNET core**:

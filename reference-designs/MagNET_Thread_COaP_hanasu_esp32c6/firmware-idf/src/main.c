@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
+#include "nvs_flash.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/gpio.h"
 
@@ -64,7 +65,14 @@ void app_main(void) {
     }
     report_heap("after forth_init");
 
-    /* 3. MagNET core + Forth FFI vocabulary */
+    /* 3. NVS (identity/name/counter storage), then MagNET core + Forth vocab.
+     *    §12.5 order: storage before core, radios last. nvs_flash_init is
+     *    idempotent — magnet_ot's own guard call becomes a no-op. */
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
     mn_core_init();
     mn_register_forth_vocab();
 
@@ -74,8 +82,9 @@ void app_main(void) {
     mn_set_state(MN_BOOTING);
     /* id is provisional here — the EUI-64-derived device_id lands during radio
      * bringup (ot_configure); WHOAMI/STATUS report the real one once up. */
-    mn_emit_event("!READY proto=2.1 fw=0.2.0-eb id=%02x%02x%02x%02x name=- state=BOOTING",
-                  mn_device_id()[0], mn_device_id()[1], mn_device_id()[2], mn_device_id()[3]);
+    mn_emit_event("!READY proto=2.1 fw=0.3.0-ec id=%02x%02x%02x%02x name=%s state=BOOTING",
+                  mn_device_id()[0], mn_device_id()[1], mn_device_id()[2], mn_device_id()[3],
+                  mn_name_get());
     mn_emit_event("# type CAPS, or HELP. FORTH drops to the engine.");
 
     /* 5. bring up radios LAST — heap is committed by now */

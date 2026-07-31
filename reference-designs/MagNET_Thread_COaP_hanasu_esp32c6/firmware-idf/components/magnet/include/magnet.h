@@ -58,11 +58,36 @@ void           mn_core_set_device_id(const uint8_t id[4]);
 const uint8_t *mn_device_id(void);
 
 /* ---- Core operations (shared by HCP verbs AND Forth FFI words) ---- */
+/* mn_chat is token-bucket rate limited (burst 8, refill 10/s — §4.9);
+ * returns -4 when limited (HCP: -ERR E_RATE_LIMITED). */
 int  mn_chat(const char *msg, size_t len);                   /* multicast, Type 0 */
 int  mn_dm(const char *peer_ipv6, const char *msg, size_t len); /* unicast CON    */
-void mn_status_print(void);
+void mn_status_line(char *buf, size_t cap);   /* "state=… role=… peers=… id=…"  */
+void mn_whoami_line(char *buf, size_t cap);   /* "id=… name=… fw=…"             */
 void mn_peers_print(void);
-void mn_whoami_print(void);
+
+/* ---- E-C: identity name, mode, subscriptions, DEGRADED queue ---- */
+void        mn_name_set(const char *name);    /* ≤16 chars; persists to NVS and
+                                                 announces to the mesh if READY */
+const char *mn_name_get(void);
+void        mn_terse_set(bool terse);         /* TERSE: mn_write_line drops '#' */
+int         mn_sub_update(const char *csv, bool subscribe); /* event classes:
+                                                 chat,dm,cmd,state,peer,role,
+                                                 heartbeat,warn,all; -1 = unknown */
+int         mn_queue_chat(const char *dst_ipv6_or_null,     /* DEGRADED queue,  */
+                          const char *msg, size_t len);     /* max 4; returns   */
+                                                            /* depth or -1 full */
+
+/* ---- E-D: encrypted channels (§11.1) ---- */
+/* Derive from credential (Path A/B/C auto-detected), persist root to NVS,
+ * switch the live channel + multicast group. May block ~1 s for Path B.
+ * Fills info with "name=… selector=…". 0 = ok. */
+int  mn_channel_set(const char *cred, size_t len, char *info, size_t cap);
+void mn_channel_info(char *buf, size_t cap);      /* public info only (§11.3.5) */
+const uint8_t *mn_channel_mcast_suffix(void);     /* 4 bytes, for OT bringup    */
+
+/* Switch the subscribed multicast group at runtime (magnet_ot.c). */
+int  mn_ot_set_mcast(const uint8_t suffix[4]);
 
 /* ---- Diagnostics / test surface (Forth: mn-sysinfo …; HCP: SYSINFO …) ---- */
 void mn_sysinfo_print(void);             /* chip, IDF, heap, forth heap, uptime */

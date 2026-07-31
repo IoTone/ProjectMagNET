@@ -1566,6 +1566,7 @@ table in §4.6, extended with the verbs above. Commands invalid in the current s
 | `E_NOT_BONDED` | Privileged op requires a bonded/secured link |
 | `E_NOT_ADMIN` | Caller/signer not on admin allow-list |
 | `E_BUSY` | Resource busy (e.g. transfer in progress) |
+| `E_RATE_LIMITED` | Host multicast send exceeded the §4.9 token bucket (burst 8, 10/s) — added rev 2.2 after the E-B saturation measurements |
 | `E_INTERNAL` | Unexpected fault |
 
 #### 11.3.5 Secrets handling
@@ -1957,8 +1958,34 @@ leader; multicast chat in every direction; DM isolation; **leader failover** ver
 by physically unplugging the leader (survivors re-elect in ~2.5 min via partition
 merge; chat continues; old leader rejoins as router). Selftest (envelope roundtrip,
 event pump, CoAP loopback to own ML-EID) passes. See `firmware-idf/README.md` for
-the full scorecard and bench gotchas. **E-B is closed; next phase is E-C** (full HCP
-verb set: SUB/UNSUB, MODE, NAME, queueing in DEGRADED).
+the full scorecard and bench gotchas. **E-B is closed.**
+
+**E-C landed and validated (2026-07-30, fw 0.3.0-ec, 16/16 on the 4-node bench):**
+`NAME` + system/announce (Type 1, ns 0 cmd 0x02) so `!CHAT`/`PEERS` show display
+names (Open Q2 at E-C level, name persisted in NVS); `MODE TERSE|HUMAN`;
+`SUB`/`UNSUB` event classes (filters host emission only — mesh processing and
+counters unaffected); `STATUS`/`WHOAMI` return machine-readable `+OK key=value`
+lines; DEGRADED queueing (max 4, `+QUEUED n`, replay + `!RESULT` on READY —
+code-complete, not yet exercised on hardware since it requires inducing
+DEGRADED); and the §4.9 **token-bucket rate limit** on host multicast (burst 8,
+refill 10/s, `-ERR E_RATE_LIMITED`; STRESS bypasses it by design).
+
+**E-D part 1 landed and validated (2026-07-31, 15/15 on the 4-node bench) — the
+mesh is encrypted.** Implemented per §11.1: credential paths A (qr:), B
+(PBKDF2, 100k iters — tune toward 1 s), C (≥12-word seed phrase, HKDF only)
+auto-detected; root_secret → selector / ff05::derived-mcast / epoch-0 key;
+AES-128-CCM with the exact §11.1.5 nonce and 16-byte-header AAD; **persistent
+counter with NVS block-reserve (1024), fail-closed**; §11.1.6 monotonic
+high-water replay table (TOFU, LRU 16); `CHANNEL SET/JOIN <cred>` +
+`mn-set-channel`; root cached in NVS (no re-stretch on reboot); default
+"magnet" channel emits `!WARN default-channel-insecure`. Verified on hardware:
+same passphrase ⇒ same selector on independent nodes; cross-channel isolation
+both directions; zero MIC failures; channel survives reboot. **Decision (was
+§12.9 Q4): identity signatures use deterministic ECDSA P-256** — IDF 5.3.1's
+mbedTLS has no Ed25519; P-256 is native + C6 HW-accelerated. Read
+Ed25519 references in §11.1 as ECDSA-P256 (raw r‖s, 64 B) going forward.
+**Remaining E-D part 2:** device keypair + device_id from pubkey hash, signed
+ADMIN commands + allow-list, epoch rotation.
 
 #### E-Phase A spike scaffold — status (historical)
 

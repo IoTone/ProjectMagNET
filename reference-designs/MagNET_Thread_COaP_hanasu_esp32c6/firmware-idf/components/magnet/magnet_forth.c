@@ -42,13 +42,40 @@ static void w_mn_hello(void) {
 }
 
 /* mn-status ( -- ) */
-static void w_mn_status(void) { mn_status_print(); }
+static void w_mn_status(void) {
+    char line[192];
+    mn_status_line(line, sizeof(line));
+    mn_emit_event("# %s", line);
+}
 
 /* mn-peers ( -- ) */
 static void w_mn_peers(void)  { mn_peers_print(); }
 
 /* mn-whoami ( -- ) */
-static void w_mn_whoami(void) { mn_whoami_print(); }
+static void w_mn_whoami(void) {
+    char line[96];
+    mn_whoami_line(line, sizeof(line));
+    mn_emit_event("# %s", line);
+}
+
+/* mn-set-channel ( c-addr u -- f )  derive+persist+switch channel; 0 = ok */
+static void w_mn_set_channel(void) {
+    intptr_t u    = forth_pop();
+    intptr_t addr = forth_pop();
+    if (!addr || u < 4 || u > 512) { forth_push(-1); return; }
+    forth_push((intptr_t)mn_channel_set((const char *)addr, (size_t)u, NULL, 0));
+}
+
+/* mn-name! ( c-addr u -- )  set display name (persists + announces) */
+static void w_mn_name(void) {
+    intptr_t u    = forth_pop();
+    intptr_t addr = forth_pop();
+    if (!addr || u < 1 || u > 16) return;
+    char name[17];
+    for (intptr_t i = 0; i < u; i++) name[i] = ((const char *)addr)[i];
+    name[u] = '\0';
+    mn_name_set(name);
+}
 
 /* mn-state ( -- n )  push current lifecycle state enum */
 static void w_mn_state(void)  { forth_push((intptr_t)mn_get_state()); }
@@ -92,6 +119,9 @@ void mn_register_forth_vocab(void) {
     forth_register_word("mn-status", w_mn_status);
     forth_register_word("mn-peers",  w_mn_peers);
     forth_register_word("mn-whoami", w_mn_whoami);
+    forth_register_word("mn-name!",  w_mn_name);
+    forth_register_word("mn-set-channel", w_mn_set_channel);
+    forth_register_word("mn-join", w_mn_set_channel);
     forth_register_word("mn-state",  w_mn_state);
     forth_register_word("mn-sysinfo",    w_mn_sysinfo);
     forth_register_word("mn-mesh",       w_mn_mesh);
