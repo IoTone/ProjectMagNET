@@ -1,7 +1,7 @@
 # MagNET Hanasu v2 - Design Proposal
 
-## Status: DRAFT (rev 2.1)
-## Date: 2026-03-27 (rev 2.1: 2026-06-14)
+## Status: DRAFT (rev 2.2)
+## Date: 2026-03-27 (rev 2.1: 2026-06-14, rev 2.2: 2026-07-30)
 ## Target Platform: ESP-IDF (prototypes on Arduino)
 
 > **Rev 2.1 note**: Sections 1–10 are the original v2 proposal. **Section 11 supersedes
@@ -9,6 +9,11 @@
 > normative specs, plus the multi-transport "add-on to any device" model and revised secure
 > defaults. Where §11 conflicts with an earlier section, §11 wins. Several Open Questions
 > (§10) are resolved there.
+>
+> **Rev 2.2 note**: Adds **R10** (on-device Forth scripting/automation — formalizes §12 as a
+> requirement, not just a migration plan), the **seed-phrase credential path** (§11.1.2 Path C),
+> and **§11.8 upstream alignment** with PONY-Cyberdeck-25 #7 (including the photo-transfer gap).
+> Corrects the usable-RAM figure in §7 per the §12.10 spike measurement.
 
 ---
 
@@ -51,7 +56,8 @@ The current prototype (`MagNET_Thread_COaP_hanasu_esp32c6.ino`) is a P2P chat sy
 | R6 | Proprietary M2M command protocol | Must |
 | R7 | Binary payloads with eventual consistency | Must |
 | R8 | 1-1 and 1-many communication modes | Must |
-| R9 | UART host control channel — any node can be controlled by a host device over UART | Must |
+| R9 | Host control channel — any node can be controlled by a host device (UART originally; generalized to multi-transport HCP in §11.2: USB-CDC, UART, BLE-GATT, WebSocket) | Must |
+| R10 | On-device scripting/automation — a Forth REPL + event hooks (ESPIDFORTH) so a node can run user automation in reaction to mesh traffic, and power users/LLM drivers get an interactive control surface over the same host link (§12) | Must (rev 2.2) |
 
 ---
 
@@ -1089,7 +1095,7 @@ Solve the leader election and failover problem in the current Arduino codebase b
 | **No forward secrecy on group channel**: Compromised passphrase exposes all past messages | Historical messages decryptable | Key rotation (periodic re-derive from passphrase + epoch) |
 | **6LoWPAN reassembly buffer**: 1280 bytes default in OpenThread | Limits single-message size | App-layer fragmentation for larger payloads |
 | **Fragment loss on multicast**: NON-confirmable multicast cannot be individually ACKed | Binary transfers over multicast may lose fragments | Use unicast for reliable binary transfer; multicast for best-effort |
-| **RAM constraints**: ESP32-C6 has 512KB SRAM | Limits concurrent channel contexts and reassembly buffers | Cap at ~8 simultaneous channels, 4 concurrent binary transfers |
+| **RAM constraints**: ESP32-C6 has 512KB SRAM total but only **~320KB usable DRAM** (PlatformIO-reported; confirmed by the §12.10 spike) | Limits concurrent channel contexts and reassembly buffers | Cap at ~8 simultaneous channels, 4 concurrent binary transfers; size the Forth heap against 320KB (§12.5) |
 | **No internet connectivity**: Pure Thread mesh, no border router assumed | Cannot bridge to cloud/internet without additional hardware | Out of scope; border router can be added later |
 | **Clock drift**: No NTP, no synchronized time | Sequence numbers work for ordering but not timestamping | Optionally sync time from a node with RTC or border router |
 
@@ -1132,6 +1138,10 @@ At 50% utilization, collisions become significant. This suggests **~500 messages
 ---
 
 ## 9. Packet Format Summary
+
+> **Superseded**: this card shows the original v2 10-byte envelope. The normative wire format
+> is the **v2.1 envelope in §11.1.4** (16-byte header, 4-byte sender device_id, 32-bit persistent
+> counter, epoch byte, 16-bit selector). Kept for history only.
 
 ### Quick Reference Card
 
@@ -1191,6 +1201,7 @@ Payload Capacity (15 app-fragments):       ~930 bytes (single-frame)
 7. **UART baud rate**: Should higher baud rates (230400, 460800) be supported for edge routing throughput? Would need NVS-persisted config.
 8. **Multi-channel fleet migration**: When a system command tells peers to switch channels, what happens to peers that miss the message? (Eventual consistency problem — may need retransmit on both old and new channel briefly.)
 9. **Default passphrase security**: Should the well-known default `"magnet"` passphrase trigger a persistent warning LED pattern to remind users to configure a private channel? **[Resolved §11.5 — yes.]**
+10. **Photo/video-sized transfers** (rev 2.2): the 4-bit fragment field caps app-layer transfers at ~17 KB, but upstream (PONY-Cyberdeck-25 #7) wants photo/video sharing. **[Direction sketched §11.8 — Type 6 extended transfer, 16-bit chunk index, host-side re-encode; to be specified before Phase 4 hardening.]**
 
 ---
 
@@ -1272,6 +1283,26 @@ root_secret = PBKDF2-HMAC-SHA256(password = utf8(passphrase),
 - PBKDF2 is not memory-hard — it raises offline guessing cost by ~6 orders of magnitude vs. a single
   HKDF, not infinitely. Therefore **Path B SHOULD warn** the user toward pairing for anything private,
   and the UX SHOULD encourage long passphrases (the onboarding app can show an entropy meter).
+
+**Path C — Seed phrase, 12–24 short words (rev 2.2; matches PONY-Cyberdeck-25 #7):**
+The credential is a sequence of 12–24 words drawn from a fixed 2048-word list (BIP39-style).
+Each word contributes 11 bits, so **12 words ≈ 132 bits and 24 words ≈ 264 bits of entropy** —
+this is a *full-entropy* credential like Path A, not a weak passphrase like Path B, yet it can be
+read aloud, written on paper, or typed by a kid. Derivation:
+
+```
+normalized   = lowercase(words joined with single spaces)   // canonical form
+root_secret  = HKDF-SHA256(ikm = utf8(normalized),
+                           salt = "MagNET/v2.2/seed-phrase", info = "root", L = 32)
+```
+
+- **No PBKDF2 stretch is needed or used** — the entropy is already in the words. Stretching would
+  only add join latency on the C6.
+- Nodes/apps SHOULD offer "generate a channel" = pick N words at random from the list (the node
+  has `esp_fill_random`; the word list costs ~13 KB of flash) and display/share them.
+- HCP: accepted anywhere a `<cred>` is accepted; a credential of ≥12 space-separated words from
+  the list is auto-detected as Path C (else it is treated as a Path B passphrase and stretched).
+  `!WARN weak-credential` is emitted for Path B, never for Path A/C.
 
 #### 11.1.3 Public routing identifiers (no more oracle)
 
@@ -1512,6 +1543,8 @@ table in §4.6, extended with the verbs above. Commands invalid in the current s
 !PEER_LEAVE <id>
 !ROLE <role>
 !RESULT @<tag|->  <ok|err> <…>              ; deferred result of a queued (DEGRADED) command
+                                            ; (the @tag here is a FIELD inside the event body —
+                                            ;  events are still never tag-PREFIXED, rule 4 holds)
 !WARN <code> <text…>                        ; e.g. default-channel-insecure
 ```
 
@@ -1634,6 +1667,42 @@ specifically bridge HCP into the browser-based WebXR clients this project alread
 | Phase 5 | Reference **host SDK** (TS/Swift/Python) wrapping HCP across USB-CDC / BLE / WebSocket. |
 | Phase 6 | Trickle-based multicast suppression; SED catch-up `GET /magnet/recent`. |
 
+### 11.8 Upstream alignment — PONY-Cyberdeck-25 #7 (rev 2.2)
+
+MagNET Hanasu is the working answer to the PONY Cyberdeck "OFFLINE P2P Mesh" feature
+(https://github.com/IoTone/PONY-Cyberdeck-25/issues/7), offered as an **add-on option**: an
+ESP32-C6 module speaking HCP over UART/USB to the cyberdeck (the deck exposes an
+Arduino-compatible GPIO port, so the raw-UART binding drops straight on). Requirement-by-
+requirement:
+
+| #7 requirement | Status in this spec |
+|----------------|--------------------|
+| Chat messaging | ✅ R5 / Type 0, §4.4 |
+| 1-1 private | ✅ R8 unicast + §11.1 (DTLS-PSK optional for forward secrecy) |
+| 1-N group | ✅ R8 multicast channels, §4.2 |
+| Simple configuration by "naming" a network | ✅ R2/R3 — channel = passphrase/credential, everything derived (§4.2, §11.1) |
+| Simple discovery by finding a network | ✅ Thread native MLE attach + `/magnet/discover`, `PEERS` |
+| Key from a **seed phrase of 12–24 short words** | ✅ §11.1.2 **Path C** (rev 2.2) — full-entropy, no stretch needed |
+| No network hopping / bridging required | ✅ matches the app-layer-channels choice (§4.2 A); edge routing (§4.7) stays optional |
+| **Photo sharing** | ⚠️ **GAP** — see below |
+| Video sharing (non-streaming) | ⚠️ same gap, worse (file sizes) |
+| Networking hardware < $15 | ✅ ESP32-C6 modules/devkits are $3–10; XIAO ESP32C6 / M5NanoC6 ≈ $6–10 |
+| Works as add-on to low-cost ARM/RISC-V board | ✅ R9 HCP over UART/USB-CDC/BLE; R10 gives the deck a scriptable REPL on the module itself |
+
+**The photo/video gap (Open Q10).** The v2.1 envelope's 4-bit fragment field caps an app-layer
+transfer at 15 fragments ≈ **17 KB** — enough for icons/thumbnails, not photos (50 KB–5 MB).
+Physics also matters: at ~10 KB/s effective 802.15.4 throughput a 500 KB photo takes ~50 s of
+airtime. Direction (to be specified before Phase 4 hardens):
+
+- Add a **Type 6: extended transfer** with a 16-bit chunk index carried in the payload header
+  (65k chunks ⇒ multi-MB files), unicast CON only, single concurrent transfer per peer pair,
+  NACK-bitmap catch-up per 64-chunk window (same eventual-consistency machinery as Type 3).
+- Senders SHOULD down-scale images on the host side (the cyberdeck/phone has the CPU; the mesh
+  should carry a ~30–100 KB re-encode, not a camera original) — same philosophy as §11.1.2:
+  spend the cost on the capable host.
+- Multicast photo share = advertise (`Type 1` notice) + per-peer unicast pull, not multicast
+  flooding of fragments (§7 fragment-loss row).
+
 ---
 
 ## 12. Migration to ESPIDFORTH (Forth control layer)
@@ -1642,7 +1711,7 @@ This section is the migration plan for re-platforming the Hanasu node onto **ESP
 (`../MagNET_M5DialFiddlerCrab/ESPIDFORTH`) — the ESP-IDF/PlatformIO Forth engine already used as
 the MagNET "Hive AI" prototype foundation. It replaces the Arduino prototype and realizes the
 ESP-IDF migration that §6 Phase 1 calls for, while making Forth the on-device control/automation
-surface.
+surface. As of rev 2.2 this is a formal requirement (**R10**, §2), not just a migration plan.
 
 ### 12.0 Architectural decisions (settled)
 
@@ -1736,6 +1805,16 @@ thin C wrapper that pops args (Forth strings are `c-addr u`) and calls the share
 | `mn-on-chat` | ( xt -- ) | register a Forth word run on inbound chat |
 | `mn-on-cmd` | ( xt -- ) | register a Forth word run on inbound M2M cmd |
 | `gpio-output` / `gpio-set` / `i2c-*` | (per-word) | hardware FFI (ESPIDFORTH pattern) |
+| `mn-sysinfo` | ( -- ) | chip / IDF / heap / Forth-heap / uptime / reset reason |
+| `mn-mesh` | ( -- ) | Thread detail: partition, RLOC16, ML-EID, chan/PAN, neighbors + RSSI |
+| `mn-bench` | ( -- ) | envelope-codec µs/op + radio TX-call latency |
+| `mn-selftest` | ( -- f ) | envelope roundtrip + event pump + **CoAP loopback to own ML-EID**; 0 = pass |
+| `mn-heartbeat!` | ( secs -- ) | `!HEARTBEAT` interval (0 = off), the §4.6 heartbeat |
+
+The diagnostics words are mirrored 1:1 as HCP verbs (`SYSINFO`, `MESH`, `BENCH`, `SELFTEST`,
+`HEARTBEAT <secs>`) — same C functions, two front-ends (§12.1). Note `SELFTEST`'s pump and
+loopback stages only run from HCP mode: at the `ok>` prompt the dispatcher holds the TX writer
+across the eval, so those stages report *skipped* instead of false-failing.
 
 **The automation hook is the payoff.** `mn-on-chat` / `mn-on-cmd` let a node *react* to mesh traffic
 in user Forth, without any protocol logic leaving C:
@@ -1859,7 +1938,29 @@ in, since the unified-role logic is small and Thread's self-healing is identical
 4. **Ed25519 source**: mbedTLS Edwards support vs adding the libsodium component (flash/RAM cost).
 5. **Full ESP32forth port timing** — only if the stub blocks real automation scripts (E-G).
 
-### 12.10 Spike scaffold (E-Phase A) — status
+### 12.10 Implementation status
+
+**E-Phase B code landed (2026-07-30): builds clean.** `firmware-idf/` now implements the
+plaintext MagNET core on top of the E-A scaffold: v2.1 envelope pack/unpack
+(`magnet_envelope.{h,c}`), unified single-role Thread bringup (fixed dev dataset —
+channel 24 / PAN 0x4d4e / the v0.0.6 well-known key, so mixed benches with the Arduino
+prototype mesh together), CoAP `/magnet` resource, `ff05::abcd` multicast subscribe,
+`CHAT` (NON multicast) + `DM <ipv6>` (CON unicast) over HCP and `mn-chat`/`mn-dm` from
+Forth, RX → `!CHAT`/`!DM`/`!PEER_JOIN`/`!ROLE` events, peer table, and duplicate-drop
+cache. Footprint: flash 792 KB (28.8%), static RAM 104.7 KB (32.0%) — +5 KB/+4 KB over
+the E-A spike. **Deadlock discipline**: OT callbacks post into an event-pump queue
+(§12.4) and never take the TX mutex — a Forth task holding the TX mutex while sending
+(which takes the OT lock) can no longer ABBA-deadlock against an OT-context emit.
+**E-B exit test PASSED on hardware (2026-07-30, 3× M5NanoC6):** runtime RAM go/no-go
+**GO** (245 KB free with OT up + 64 KB Forth heap reserved); 3-node mesh with one
+leader; multicast chat in every direction; DM isolation; **leader failover** verified
+by physically unplugging the leader (survivors re-elect in ~2.5 min via partition
+merge; chat continues; old leader rejoins as router). Selftest (envelope roundtrip,
+event pump, CoAP loopback to own ML-EID) passes. See `firmware-idf/README.md` for
+the full scorecard and bench gotchas. **E-B is closed; next phase is E-C** (full HCP
+verb set: SUB/UNSUB, MODE, NAME, queueing in DEGRADED).
+
+#### E-Phase A spike scaffold — status (historical)
 
 Scaffold exists at **`firmware-idf/`** in this project. It pulls the ESPIDFORTH
 `forth` component in via `EXTRA_COMPONENT_DIRS` (not vendored), adds a

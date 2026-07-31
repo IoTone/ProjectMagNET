@@ -1,0 +1,15 @@
+# MagNET Hanasu — common ESP-IDF defaults (E-Phase A spike)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Flash + custom partition table (see partitions.csv — the default 1 MB
+# single-app table cannot hold OpenThread + Forth).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Crypto primitives the MagNET v2.1 spec needs (mbedTLS bundled with IDF).
+CONFIG_MBEDTLS_CCM_C=y          # AES-CCM payload encryption (also used by Thread)
+CONFIG_MBEDTLS_HKDF_C=y         # key-hierarchy derivation
+CONFIG_MBEDTLS_PKCS5_C=y        # PBKDF2 passphrase stretch (§11.1.2)

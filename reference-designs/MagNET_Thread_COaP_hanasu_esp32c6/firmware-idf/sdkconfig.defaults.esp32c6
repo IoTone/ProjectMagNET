@@ -1,0 +1,32 @@
+# MagNET Hanasu — ESP32-C6 specifics (E-Phase A spike)
+#
+# The C6 is the ONLY viable Hanasu target (it has the 802.15.4 radio; the
+# PSRAM-equipped S3 does not), so there is no PSRAM relief — RAM is tight.
+
+# ---- OpenThread (the new, dominant cost we are here to measure) ----
+CONFIG_OPENTHREAD_ENABLED=y
+CONFIG_OPENTHREAD_FTD=y
+CONFIG_OPENTHREAD_CLI=y          # convenient during bringup; drop later to reclaim flash
+CONFIG_OPENTHREAD_DNS64_CLIENT=n
+
+# IEEE 802.15.4 radio (normally auto-selected by OpenThread, set explicitly)
+CONFIG_IEEE802154_ENABLED=y
+
+# lwIP / IPv6 needed by Thread + CoAP multicast
+CONFIG_LWIP_IPV6=y
+CONFIG_LWIP_MULTICAST_PING=y
+
+# ---- WiFi off (not a border router in this spike); BLE off (provisioning-only
+#      binding comes in E-Phase F). Flip BT on only when adding the GATT link. ----
+CONFIG_ESP_WIFI_ENABLED=n
+CONFIG_BT_ENABLED=n
+
+# Console: C6 has native USB-serial-JTAG (same as the ESPIDFORTH C6/C3 path)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Console log discipline: IDF/OpenThread INFO logs bypass the MagNET serialized
+# TX writer and can interleave mid-line with HCP frames (breaks §11.3 framing).
+# WARN keeps real problems visible; parsers must still ignore non-sigil lines.
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y

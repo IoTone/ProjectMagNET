@@ -1,0 +1,104 @@
+/*
+ * magnet.h — MagNET Hanasu node core (E-Phase B: plaintext mesh chat)
+ *
+ * This is the C layer that owns the protocol, transport, and (later) crypto.
+ * The Forth engine sits ABOVE this as a control/scripting surface and calls
+ * the same mn_* functions the HCP dispatcher calls (design proposal §12).
+ *
+ * E-PHASE B SCOPE: v2.1 envelope (plaintext), unified single-role Thread node,
+ * CoAP /magnet resource, multicast + unicast chat, peer table. Crypto,
+ * channels-by-passphrase, and identity keys remain stubs until E-Phase D.
+ */
+#ifndef MAGNET_H
+#define MAGNET_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ---- Transport char I/O (provided by main: USB-serial-JTAG, later BLE/WS) ---- */
+typedef int  (*mn_getc_fn)(void);
+typedef void (*mn_putc_fn)(int);
+
+/* Lifecycle states (design proposal §4.6 / §11.3). */
+typedef enum {
+    MN_BOOTING = 0,
+    MN_CONFIGURING,
+    MN_ATTACHING,
+    MN_READY,
+    MN_DEGRADED,
+} mn_state_t;
+
+/* ---- Bringup (call order matters — see main.c / §12.5) ---- */
+void mn_core_init(void);                 /* peer table, dedup cache, event pump */
+void mn_register_forth_vocab(void);      /* register mn-* FFI words with ESPIDFORTH    */
+void mn_link_start(mn_getc_fn g, mn_putc_fn p); /* start dispatcher + TX writer (HCP)  */
+void mn_openthread_start(void);          /* bring up esp_openthread (no-op if disabled) */
+
+/* ---- State ---- */
+mn_state_t  mn_get_state(void);
+void        mn_set_state(mn_state_t s);  /* emits an !STATE event */
+const char *mn_state_name(mn_state_t s);
+
+/* ---- Serialized output (the ONE writer all lines go through) ---- */
+/* Thread-safe: takes the TX mutex, writes the whole line + CRLF atomically.
+ * Used for HCP responses (+/-), async events (!), and comments (#). This is
+ * what guarantees an event never interleaves mid-line with a response.
+ * MUST NOT be called from OpenThread/lwIP callback context — mesh-side code
+ * posts to the event pump instead (mn_post_*). */
+void mn_write_line(const char *line);
+void mn_emit_event(const char *fmt, ...);   /* convenience: formats then mn_write_line */
+
+/* ---- Identity (E-B: derived from EUI-64; E-D: SHA256(Ed25519 pk)[0:4]) ---- */
+void           mn_core_set_device_id(const uint8_t id[4]);
+const uint8_t *mn_device_id(void);
+
+/* ---- Core operations (shared by HCP verbs AND Forth FFI words) ---- */
+int  mn_chat(const char *msg, size_t len);                   /* multicast, Type 0 */
+int  mn_dm(const char *peer_ipv6, const char *msg, size_t len); /* unicast CON    */
+void mn_status_print(void);
+void mn_peers_print(void);
+void mn_whoami_print(void);
+
+/* ---- Diagnostics / test surface (Forth: mn-sysinfo …; HCP: SYSINFO …) ---- */
+void mn_sysinfo_print(void);             /* chip, IDF, heap, forth heap, uptime */
+void mn_bench(void);                     /* envelope codec + TX-call latency    */
+int  mn_selftest(void);                  /* env roundtrip + pump + CoAP loopback;
+                                            0 = all pass (skips don't fail)     */
+void mn_heartbeat_set(uint32_t secs);    /* !HEARTBEAT interval, 0 = off (§4.6) */
+void mn_stats_print(void);               /* tx/rx counters since boot or reset  */
+void mn_stats_reset(void);
+int  mn_stress_start(uint32_t secs, uint32_t payload_len); /* saturation burst:
+                                            spawns a task that multicasts marked
+                                            chat frames back-to-back; receivers
+                                            count them silently. 0=started,
+                                            -1=already running, -2=bad args    */
+
+/* ---- Event pump (§12.4) ----
+ * OpenThread callbacks run with the OT lock held; taking the TX mutex there
+ * can ABBA-deadlock against a Forth/HCP task that holds the TX mutex while
+ * sending (which takes the OT lock). So mesh-side code posts into a queue and
+ * a pump task does the core processing + emission. */
+void mn_post_rx(const uint8_t *data, size_t len,
+                const char *src_ipv6, bool was_multicast);
+void mn_post_role(const char *role_name);
+
+/* ---- Mesh transport (implemented by magnet_ot.c; stubbed when OT disabled) ---- */
+/* dst_ipv6 == NULL → the default channel multicast group. */
+int         mn_ot_send(const uint8_t *buf, size_t len,
+                       const char *dst_ipv6, bool confirmable);
+const char *mn_ot_role_name(void);
+void        mn_mesh_print(void);         /* Thread detail: partition, RLOC, EID,
+                                            channel/PAN, neighbors w/ RSSI      */
+int         mn_ot_local_eid(char *buf, size_t cap);  /* mesh-local EID string;
+                                            <0 if radio not up (loopback test) */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MAGNET_H */
