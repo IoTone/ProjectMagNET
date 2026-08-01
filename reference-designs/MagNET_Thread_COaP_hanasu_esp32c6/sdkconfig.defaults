@@ -1,0 +1,1 @@
+CONFIG_MBEDTLS_ECDSA_DETERMINISTIC=y   # RFC 6979 signing for device identity (E-D)

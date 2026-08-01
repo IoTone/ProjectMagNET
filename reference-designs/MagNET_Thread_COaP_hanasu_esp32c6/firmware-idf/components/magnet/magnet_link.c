@@ -37,6 +37,39 @@ static mn_getc_fn  s_getc = NULL;
 static mn_putc_fn  s_putc = NULL;       /* raw transport putc (for Forth out) */
 static link_mode_t s_mode = LINK_HCP;
 
+static void handle_hcp_line(char *line);
+static void handle_forth_line(char *line);
+
+/* Which transport the line in flight arrived on. The serial link is physically
+ * trusted (§4.6); BLE is "privileged but pairable" (§11.2.1), so privileged
+ * verbs there need an encrypted link. */
+static bool s_from_ble = false;
+
+/* Public entry: any transport can hand us a complete line (§11.2). */
+void mn_link_feed_line(const char *line) {
+    char buf[MN_LINE_MAX];
+    strlcpy(buf, line, sizeof(buf));
+    s_from_ble = true;
+    if (s_mode == LINK_HCP) handle_hcp_line(buf);
+    else                    handle_forth_line(buf);
+    s_from_ble = false;
+}
+
+/* Verbs that change configuration or state a stranger must not touch. */
+static bool verb_is_privileged(const char *verb, const char *rest) {
+    if (!strcmp(verb, "NAME") || !strcmp(verb, "ADMIN") ||
+        !strcmp(verb, "ROTATE") || !strcmp(verb, "RAW") ||
+        !strcmp(verb, "SCRIPT") || !strcmp(verb, "HOOK") ||
+        !strcmp(verb, "FORTH") || !strcmp(verb, "STRESS")) {
+        return true;
+    }
+    /* CHANNEL SHOW/LIST are public info; SET/JOIN rewrite the node's keys. */
+    if (!strcmp(verb, "CHANNEL")) {
+        return !strncmp(rest, "SET", 3) || !strncmp(rest, "JOIN", 4);
+    }
+    return false;
+}
+
 /* ---- small helpers ---- */
 static void respond(const char *tag, const char *body) {
     char buf[MN_LINE_MAX];
@@ -95,6 +128,13 @@ static void handle_hcp_line(char *line) {
     char *rest = p;
     while (*rest && *rest != ' ') rest++;
     if (*rest == ' ') { *rest = '\0'; rest++; while (*rest == ' ') rest++; }
+
+    /* §11.2.1: over BLE, configuration requires a bonded link. Read-only
+     * verbs stay open so a host can identify a node before pairing. */
+    if (s_from_ble && !mn_ble_link_secure() && verb_is_privileged(verb, rest)) {
+        respond_err(tag, "E_NOT_BONDED", "pair with this node first");
+        return;
+    }
 
     if      (!strcmp(verb, "PING"))   respond(tag, "+PONG");
     else if (!strcmp(verb, "STATUS")) {

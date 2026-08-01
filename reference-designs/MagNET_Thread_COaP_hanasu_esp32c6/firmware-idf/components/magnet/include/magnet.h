@@ -85,12 +85,27 @@ int         mn_queue_chat(const char *dst_ipv6_or_null,     /* DEGRADED queue,  
 int  mn_channel_set(const char *cred, size_t len, char *info, size_t cap);
 void mn_channel_info(char *buf, size_t cap);      /* public info only (§11.3.5) */
 const uint8_t *mn_channel_mcast_suffix(void);     /* 4 bytes, for OT bringup    */
+bool mn_channel_is_default(void);   /* still on the well-known "magnet" channel */
 
 /* ---- E-D part 2: identity + admin (deterministic ECDSA P-256) ---- */
 const uint8_t *mn_pubkey(void);              /* 65-byte uncompressed point */
 int  mn_admin_add(const uint8_t pub65[65]);  /* allow-list, NVS, max 4     */
 void mn_admin_list_print(void);
 int  mn_rotate(void);                        /* signed system/rotate bcast */
+
+/* ---- E-F: BLE-GATT HCP binding (§11.2.1), PROVISIONING-ONLY ----
+ * Decision §12.9 Q3: BLE is torn down once a channel is provisioned, so the
+ * 2.4 GHz front end and ~40-60 KB of NimBLE RAM go back to Thread. Compiled
+ * out unless MN_ENABLE_BLE=1. */
+int  mn_ble_start(void);
+int  mn_ble_stop(void);
+bool mn_ble_running(void);
+bool mn_ble_link_secure(void);  /* bonded+encrypted right now */
+void mn_ble_notify(const char *line);   /* mirror one HCP line to the client */
+
+/* Feed one complete line to the HCP dispatcher from ANY transport (serial,
+ * BLE, later WebSocket) — the grammar is transport-independent (§11.2). */
+void mn_link_feed_line(const char *line);
 
 /* ---- E-E: Forth automation hooks + script persistence (§12.3) ----
  * Hooks are registered by WORD NAME (the stub engine exposes no execution

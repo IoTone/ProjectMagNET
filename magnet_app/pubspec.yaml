@@ -1,127 +1,101 @@
 name: magnet_app
-description: One IoT app to rule them all.  Quit writing new IoT apps for every device.
-# The following line prevents the package from being accidentally published to
-# pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+description: MagNET — BLE scan, provisioning and control for MagNET Hanasu mesh nodes.
+publish_to: 'none'
 
-# The following defines the version and build number for your application.
-# A version number is three numbers separated by dots, like 1.2.43
-# followed by an optional build number separated by a +.
-# Both the version and the builder number may be overridden in flutter
-# build by specifying --build-name and --build-number, respectively.
-# In Android, build-name is used as versionName while build-number used as versionCode.
-# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
-# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
-# Read more about iOS versioning at
-# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
-# In Windows, build-name is used as the major, minor, and patch parts
-# of the product and file versions while build-number is used as the build suffix.
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.1.1 <4.0.0'
+  sdk: ^3.5.0
+  flutter: ">=3.24.0"
 
-# Dependencies specify other packages that your package needs in order to work.
-# To automatically upgrade your package dependencies to the latest versions
-# consider running `flutter pub upgrade --major-versions`. Alternatively,
-# dependencies can be manually updated by changing the version numbers below to
-# the latest version available on pub.dev. To see which dependencies have newer
-# versions available, run `flutter pub outdated`.
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
 
+  # --- Core / UI ---
+  cupertino_icons: ^1.0.8
+  flutter_native_splash: ^2.4.3
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.2
+  # --- App metadata ---
+  package_info_plus: ^8.1.0
+  device_info_plus: ^11.2.0
 
-  animated_splash_screen: ^1.3.0
-  page_transition: ^2.1.0
-  shared_preferences: ^2.0.10
-  flutter_reactive_ble: ^5.2.0
-  provider: ^6.0.5
-  permission_handler: ^11.0.1
-  audioplayers: ^5.2.0
-  cbl_flutter: ^2.0.9
-  # This dependency selects the Community Edition of Couchbase Lite. 
-  # For the Enterprise Edition add `cbl_flutter_ee` instead.
-  cbl_flutter_ce: ^2.2.2
-  iconic: ^0.0.3
-  # horizontal_data_table: ^4.3.1
-  observable_ish: ^4.0.8
-  overlay_loader_with_app_icon: ^0.0.3
-  flutter_neumorphic:
-    git:
-      url: https://github.com/truedat101/Flutter-Neumorphic
-      ref: feature/remoce_accentcolor # branch name
+  # --- State management ---
+  provider: ^6.1.2
+
+  # --- Navigation ---
+  go_router: ^14.6.2
+
+  # --- Localization (EN + JA) ---
+  intl: ^0.20.2
+
+  # --- Bluetooth LE scan + connect ---
+  flutter_blue_plus: ^1.34.5
+  permission_handler: ^11.3.1
+
+  # --- WiFi scanning (Android full; iOS connected-network only) ---
+  wifi_scan: ^0.4.1+2
+  network_info_plus: ^6.1.1
+
+  # --- mDNS/Bonjour discovery for the optional WiFi relay proxy ---
+  nsd: ^2.3.1
+
+  # --- Settings persistence ---
+  shared_preferences: ^2.3.3
+  flutter_secure_storage: ^10.3.1
+  pointycastle: ^4.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  
-  flutter_launcher_icons: "^0.13.1"
-  
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
-  flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.14.3
+  flutter_lints: ^5.0.0
 
-  # This dependency allows you to use Couchbase Lite in Flutter
-  # unit tests and not just in integration tests.
-  cbl_dart: ^2.2.2
-# For information on the generic Dart part of this file, see the
-# following page: https://dart.dev/tools/pub/pubspec
-  
-flutter_launcher_icons:
-  image_path: "assets/images/magnet_icon.png"
-  android: true
-  ios: true
-  remove_alpha_ios: true
-# The following section is specific to Flutter packages.
 flutter:
-
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
+  # Code-gen the AppLocalizations class from lib/l10n/*.arb at build
+  # time. See l10n.yaml for the template + output paths.
+  generate: true
+
   assets:
-    - assets/images/magnet_splash.jpg
-    - assets/images/magnet_icon.png
-    - assets/audio/success_alert.wav
-    - assets/audio/scanning_loop.wav
-    - assets/audio/failure_alert.wav
-    - assets/audio/click_alert.wav
-    - assets/audio/scan_alt.wav
-    - assets/audio/splash.wav
-    - assets/audio/forbidden_alert.wav
-  #   - images/a_dot_ham.jpeg
+    - assets/images/icon-192.png
+    - assets/images/magnet-icon-512.png
+    - assets/images/magnet-splash.png
 
-  # An image asset can refer to one or more resolution-specific "variants", see
-  # https://flutter.dev/assets-and-images/#resolution-aware
+# App icons for every platform. Regenerate the source art with
+#   python3 tool/gen_icon.py
+# then  dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/images/magnet-icon-1024.png"
+  android: true
+  ios: true
+  remove_alpha_ios: true          # the App Store rejects alpha channels
+  macos:
+    generate: true
+    image_path: "assets/images/magnet-icon-1024.png"
+  web:
+    generate: true
+    background_color: "#05060B"
+    theme_color: "#22D3EE"
+  windows:
+    generate: true
+    icon_size: 256
 
-  # For details regarding adding assets from package dependencies, see
-  # https://flutter.dev/assets-and-images/#from-packages
-
-  # To add custom fonts to your application, add a fonts section here,
-  # in this "flutter" section. Each entry in this list should have a
-  # "family" key with the font family name, and a "fonts" key with a
-  # list giving the asset and other descriptors for the font. For
-  # example:
-  # fonts:
-  #   - family: Schyler
-  #     fonts:
-  #       - asset: fonts/Schyler-Regular.ttf
-  #       - asset: fonts/Schyler-Italic.ttf
-  #         style: italic
-  #   - family: Trajan Pro
-  #     fonts:
-  #       - asset: fonts/TrajanPro.ttf
-  #       - asset: fonts/TrajanPro_Bold.ttf
-  #         weight: 700
-  #
-  # For details regarding fonts from package dependencies,
-  # see https://flutter.dev/custom-fonts/#from-packages
+# Launch screen: the luminous mark on the same deep-space field the icon
+# uses, so the splash and the icon read as one thing.
+#   dart run flutter_native_splash:create
+flutter_native_splash:
+  color: "#05060B"
+  image: assets/images/magnet-splash.png
+  color_dark: "#05060B"
+  image_dark: assets/images/magnet-splash.png
+  android_12:
+    image: assets/images/magnet-splash.png
+    color: "#05060B"
+    icon_background_color: "#05060B"
+  ios: true
+  android: true
+  web: false

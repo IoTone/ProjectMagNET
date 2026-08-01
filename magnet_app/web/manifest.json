@@ -1,11 +1,11 @@
 {
-    "name": "magnet_app",
-    "short_name": "magnet_app",
+    "name": "Responsive IoT 2026",
+    "short_name": "Responsive IoT",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#05060B",
+    "theme_color": "#22D3EE",
+    "description": "Responsive IoT 2026 — a Flutter starter for BLE & WiFi device scanning.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

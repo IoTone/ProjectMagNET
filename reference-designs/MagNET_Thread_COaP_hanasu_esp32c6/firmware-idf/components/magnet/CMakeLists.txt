@@ -6,6 +6,7 @@ idf_component_register(
         "magnet_link.c"
         "magnet_forth.c"
         "magnet_ot.c"
+        "magnet_ble.c"
     INCLUDE_DIRS "include"
     REQUIRES
         forth                # ESPIDFORTH engine (from EXTRA_COMPONENT_DIRS)
@@ -19,4 +20,5 @@ idf_component_register(
         esp_timer
         driver
         mbedtls            # HKDF/PBKDF2/CCM/base64 (magnet_crypto)
+        bt                 # NimBLE (only when MN_ENABLE_BLE=1)
 )

@@ -116,8 +116,9 @@ void mn_set_state(mn_state_t s) {
  * mode), and mn-* words called from Forth print through here — a plain mutex
  * would self-deadlock on the first `mn-status` at the ok> prompt. */
 void mn_write_line(const char *line) {
-    if (!s_putc) return;
     if (s_terse && line[0] == '#') return;   /* MODE TERSE: drop comment lines */
+    mn_ble_notify(line);                     /* mirror to a BLE client if any */
+    if (!s_putc) return;
     if (s_tx_mutex) xSemaphoreTakeRecursive(s_tx_mutex, portMAX_DELAY);
     for (const char *c = line; *c; ++c) s_putc(*c);
     s_putc('\r');
@@ -635,6 +636,8 @@ int mn_channel_set(const char *cred, size_t len, char *info, size_t cap) {
     memset(s_peers, 0, sizeof(s_peers));
     if (info) snprintf(info, cap, "%s selector=%04x path=%c",
                        s_chan.name, s_chan.selector, s_chan.cred_path);
+    /* §12.9 Q3: provisioning done → reclaim the radio and NimBLE's RAM */
+    if (mn_ble_running()) mn_ble_stop();
     if (s_state == MN_READY) announce_name();
     return 0;
 }
@@ -647,6 +650,8 @@ void mn_channel_info(char *buf, size_t cap) {
 }
 
 const uint8_t *mn_channel_mcast_suffix(void) { return s_chan.mcast_suffix; }
+
+bool mn_channel_is_default(void) { return strcmp(s_chan.name, "magnet") == 0; }
 
 static int send_frame(uint8_t type, const uint8_t *payload, size_t len,
                       const char *dst, bool con) {

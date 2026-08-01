@@ -10,11 +10,20 @@ pluginManagement {
 
     includeBuild("${settings.ext.flutterSdkPath}/packages/flutter_tools/gradle")
 
-    plugins {
-        id "dev.flutter.flutter-gradle-plugin" version "1.0.0" apply false
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
     }
 }
 
-include ":app"
+plugins {
+    id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+    // 8.9.1+ required by url_launcher_android's transitive
+    // androidx.browser:1.9.0 / androidx.core:1.17.0 deps. Bumped
+    // for v45.
+    id "com.android.application" version "8.9.1" apply false
+    id "org.jetbrains.kotlin.android" version "2.1.0" apply false
+}
 
-apply from: "${settings.ext.flutterSdkPath}/packages/flutter_tools/gradle/app_plugin_loader.gradle"
+include ":app"

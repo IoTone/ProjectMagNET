@@ -101,6 +101,20 @@ void app_main(void) {
     gpio_set_level(GPIO_NUM_14, 0);
     mn_emit_event("# xiao rf-switch: enabled, internal antenna");
 #endif
+#if MN_ENABLE_BLE
+    /* Provisioning-only BLE (§11.2.1 / §12.9 Q3): advertise so a phone can
+     * push a credential with no cable. mn_channel_set() tears the stack down
+     * the moment a channel lands, returning the radio + RAM to Thread. */
+    /* Only advertise when the node is still UNPROVISIONED (default channel).
+     * A node that already holds a private channel must not re-open a bonding
+     * window on every power cycle — that would let anyone re-provision it by
+     * cycling the power. Factory-reset (clear NVS) to provision again. */
+    if (mn_channel_is_default()) {
+        if (mn_ble_start() == 0) raw_print("# ble: provisioning window open\r\n");
+    } else {
+        raw_print("# ble: skipped (already provisioned)\r\n");
+    }
+#endif
     mn_set_state(MN_CONFIGURING);
     mn_openthread_start();
 
