@@ -59,6 +59,19 @@ static const ble_uuid128_t CHR_EVT_UUID =
     BLE_UUID128_INIT(0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
                      0x01, 0x00, 0x70, 0x63, 0x68, 0x2d, 0x6e, 0x67,
                      0x61, 0x6d);
+/* HCP-AUTH (…0003): read-only, encryption-required. Its whole job is to give
+ * the central a reason to pair.
+ *
+ * A central initiates pairing when an *operation* needs encryption — it will
+ * happily ignore a peripheral's Security Request otherwise. Once bonding moved
+ * to per-verb enforcement, nothing in the GATT table required encryption any
+ * more, so no phone ever paired and every privileged verb answered
+ * E_NOT_BONDED forever. Reading this attribute is the trigger, and unlike
+ * Android's createBond() it works on iOS too. */
+static const ble_uuid128_t CHR_AUTH_UUID =
+    BLE_UUID128_INIT(0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
+                     0x01, 0x00, 0x70, 0x63, 0x68, 0x2d, 0x6e, 0x67,
+                     0x61, 0x6d);
 
 static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_evt_handle;
@@ -159,6 +172,12 @@ void mn_ble_notify(const char *line) {
 static int chr_access(uint16_t conn, uint16_t attr,
                       struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)conn; (void)attr; (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        /* reaching here at all means the link is encrypted */
+        static const char ok[] = "bonded";
+        return os_mbuf_append(ctxt->om, ok, sizeof(ok) - 1) == 0
+                   ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
         uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
         uint8_t tmp[256];
@@ -194,6 +213,11 @@ static const struct ble_gatt_svc_def s_svcs[] = {
                 .access_cb = chr_access,
                 .flags = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ,
                 .val_handle = &s_evt_handle,
+            },
+            {   /* HCP-AUTH: read it to force pairing (see UUID comment) */
+                .uuid = &CHR_AUTH_UUID.u,
+                .access_cb = chr_access,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC,
             },
             { 0 }
         },

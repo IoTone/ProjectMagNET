@@ -21,6 +21,11 @@ class MagnetUuids {
   static const String cmd = '6d61676e-2d68-6370-0001-000000000001';
   static const String evt = '6d61676e-2d68-6370-0001-000000000002';
 
+  /// Read-only, encryption-required. Reading it is how a host asks to bond:
+  /// centrals pair when an *operation* needs encryption, and ignore a
+  /// peripheral's bare security request.
+  static const String auth = '6d61676e-2d68-6370-0001-000000000003';
+
   /// Advertised local-name prefix (`MagNET-<id lo16>`), the cheap filter
   /// before services are discovered — iOS often withholds service UUIDs in
   /// the advertisement until you connect.
@@ -44,6 +49,7 @@ class MagnetBleTransport implements HcpTransport {
   final BluetoothDevice _device;
   BluetoothCharacteristic? _cmd;
   BluetoothCharacteristic? _evt;
+  BluetoothCharacteristic? _auth;
   StreamSubscription<List<int>>? _notifySub;
   final StreamController<String> _lines = StreamController<String>.broadcast();
   final StringBuffer _rx = StringBuffer();
@@ -73,6 +79,7 @@ class MagnetBleTransport implements HcpTransport {
         final String u = c.uuid.str.toLowerCase();
         if (u == MagnetUuids.cmd) _cmd = c;
         if (u == MagnetUuids.evt) _evt = c;
+        if (u == MagnetUuids.auth) _auth = c;
       }
     }
     if (!isReady) {
@@ -120,6 +127,29 @@ class MagnetBleTransport implements HcpTransport {
       }
     }
     throw StateError('write stayed busy: $last');
+  }
+
+  /// Bond with the node, so privileged verbs (`NAME`, `ADMIN ADD`,
+  /// `CHANNEL SET`) are accepted instead of answering `E_NOT_BONDED`.
+  ///
+  /// Works by reading the encryption-required auth characteristic: that is an
+  /// operation the central *must* encrypt, so it starts pairing. Returns true
+  /// once the read succeeds, meaning the link is encrypted.
+  Future<bool> bond({Duration timeout = const Duration(seconds: 30)}) async {
+    final BluetoothCharacteristic? a = _auth;
+    if (a == null) return false;            // firmware predates the auth char
+    final DateTime deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      try {
+        await a.read();
+        return true;
+      } catch (_) {
+        // Pairing is in flight (or the user has yet to accept); the read
+        // fails until the link is encrypted.
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+    }
+    return false;
   }
 
   Future<void> dispose() async {

@@ -281,15 +281,20 @@ Future<void> _run() async {
       _check('unknown verb raises HcpError', false, '$e');
     }
 
-    // 8. bonded write — NAME changes config, so it needs the encrypted link
+    // 8. bond, then the privileged verb should be accepted
+    final bool bonded = await t.bond();
+    _check('bonding completes', bonded,
+        bonded ? 'link encrypted' : 'no pairing after 30s');
+
+    // 9. privileged write — NAME changes config, so it needs the encrypted link
     try {
       await hcp.setName('probe');
       final Map<String, String> w = await hcp.whoami();
       _check('privileged verb (NAME) applied', w['name'] == 'probe', '${w['name']}');
     } on HcpError catch (e) {
-      // Unbonded, this is the *correct* answer — a clean, actionable code
-      // rather than an ATT error the host cannot interpret.
-      _check('privileged verb gated cleanly', e.code == 'E_NOT_BONDED', e.code);
+      // Unbonded this is the *correct* answer; bonded it is a failure.
+      _check(bonded ? 'privileged verb applied' : 'privileged verb gated cleanly',
+          !bonded && e.code == 'E_NOT_BONDED', e.code);
     } catch (e) {
       _check('privileged verb (NAME)', false, '$e');
     }
