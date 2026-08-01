@@ -255,8 +255,12 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
         s_encrypted = (event->enc_change.status == 0) &&
                       ble_gap_conn_find(event->enc_change.conn_handle, &d) == 0 &&
                       d.sec_state.encrypted;
-        mn_emit_event("# ble: link %s",
-                      s_encrypted ? "encrypted" : "not encrypted (pairing failed)");
+        /* status is the SMP reason — 0 = paired. Non-zero values decode via
+         * NimBLE's BLE_HS_SM_US_ERR()/BLE_HS_SM_PEER_ERR() ranges and are the
+         * only way to tell "phone refused" from "no keys" from "stale bond". */
+        mn_emit_event("# ble: link %s (enc_change status=%d)",
+                      s_encrypted ? "encrypted" : "NOT encrypted",
+                      event->enc_change.status);
         break;
     }
 
@@ -324,8 +328,10 @@ int mn_ble_start(void) {
     ble_hs_cfg.sm_bonding = 1;                 /* LE Secure Connections bond  */
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;  /* screenless: Just Works */
     ble_hs_cfg.sm_sc = 1;
-    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
-    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
+    /* Distribute identity keys as well as encryption keys: a bond that keeps
+     * only an LTK cannot be re-established once either side changes address. */
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
     /* NB: the NVS-backed key store (ble_store_config_init) is wired up by
      * NimBLE's own sysinit when CONFIG_BT_NIMBLE_NVS_PERSIST=y — there is no

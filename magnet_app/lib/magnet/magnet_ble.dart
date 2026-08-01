@@ -10,6 +10,7 @@
 library;
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
@@ -135,9 +136,26 @@ class MagnetBleTransport implements HcpTransport {
   /// Works by reading the encryption-required auth characteristic: that is an
   /// operation the central *must* encrypt, so it starts pairing. Returns true
   /// once the read succeeds, meaning the link is encrypted.
-  Future<bool> bond({Duration timeout = const Duration(seconds: 30)}) async {
+  Future<bool> bond({Duration timeout = const Duration(seconds: 45)}) async {
     final BluetoothCharacteristic? a = _auth;
     if (a == null) return false;            // firmware predates the auth char
+
+    // Android: ask for the bond explicitly. Relying on an encrypted read to
+    // trigger it makes the OS post a *notification* ("Tap to pair with …")
+    // rather than a dialog; unattended, nobody taps it and SMP times out
+    // (enc_change status=13). createBond() is the app-initiated path and
+    // completes Just Works pairing without that detour. No iOS equivalent
+    // exists — there the encrypted read below is the trigger.
+    if (Platform.isAndroid) {
+      try {
+        if (!(await _device.bondState.first == BluetoothBondState.bonded)) {
+          await _device.createBond();
+        }
+      } catch (_) {
+        // already bonding, or the platform refused — the read still tries
+      }
+    }
+
     final DateTime deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       try {
