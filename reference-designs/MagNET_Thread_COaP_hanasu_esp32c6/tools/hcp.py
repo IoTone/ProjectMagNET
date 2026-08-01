@@ -122,8 +122,19 @@ def main():
         sys.stdout.write(reboot(a.port))
         return 0
     if a.watch:
+        # Stream, don't buffer: a watcher whose output only appears when it
+        # exits is useless for "start capture, then trigger the event".
         ser = _open(a.port)
-        sys.stdout.write(drain(ser, a.watch))
+        end, buf = time.time() + a.watch, b''
+        while time.time() < end:
+            try:
+                buf += ser.read(8192)
+            except (OSError, serial.SerialException):
+                break
+            while b'\n' in buf:
+                line, buf = buf.split(b'\n', 1)
+                sys.stdout.write(line.decode('utf-8', 'replace').rstrip('\r') + '\n')
+                sys.stdout.flush()
         ser.close()
         return 0
 
