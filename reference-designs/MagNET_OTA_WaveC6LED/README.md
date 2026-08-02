@@ -7,7 +7,7 @@ one.
 
 Plan and phasing: `docs/wavec6led-ota-plan.md` in the RobotARme repo.
 
-**Status: D0 — board bring-up. Verified on hardware.**
+**Status: D0 complete — Forth REPL, display and RGB LED all verified on hardware.**
 
 ## The board
 
@@ -67,7 +67,56 @@ The 307 KB figure is the number to re-measure in D1, when WiFi comes on — that
 is the plan's main memory risk, and 512 KB has to hold Forth, WiFi and eventually
 TLS.
 
-## Two things that will bite you
+## The display: use the vendor driver
+
+**Waveshare do not use esp_lcd's generic ST7789 for this board, and neither
+should you.** Their ESP-IDF demo ships its own `Vernon_ST7789T`, because the
+glass is an ST7789**T** variant wanting a different init sequence — its own
+porch, power and gamma tables, plus `0x21` (inversion) issued during init.
+That driver is vendored into `components/magnet_ui/` here.
+
+Settings that came from their demo rather than from guessing:
+
+| | |
+|---|---|
+| driver | `esp_lcd_new_panel_st7789t`, **not** `..._st7789` |
+| colour order | `LCD_RGB_ENDIAN_BGR` (RGB swaps red and blue) |
+| orientation | portrait 172x320, `mirror(true, false)` |
+| offset | `set_gap(34, 0)` |
+| SPI clock | 12 MHz |
+
+Inversion is already inside the vendor init, so do **not** also call
+`esp_lcd_panel_invert_color()` — doing both cancels out and looks like a fresh
+bug.
+
+Getting the demo:
+
+    curl -O https://files.waveshare.com/wiki/ESP32-C6-LCD-1.47/ESP32-C6-LCD-1.47-Demo.zip
+    unzip -q ESP32-C6-LCD-1.47-Demo.zip 'ESP-IDF/*'
+
+## THE trap: esp_lcd draws ASYNCHRONOUSLY
+
+`esp_lcd_panel_io_tx_color()` **queues** the SPI transfer and returns. If you
+reuse a scratch buffer for the next blit without waiting, the panel receives a
+mixture of both.
+
+This is worth its own section because of how it presents. Solid fills are
+**immune by accident** — every band of a rectangle fill holds the same colour,
+so clobbering the buffer mid-transfer writes identical bytes. So the screen
+shows perfect layout, bars and boxes, and *only text* comes out as garbage
+glyphs. That reads unmistakably as a font bug, and costs you an audit of the
+glyph table, the renderer and the panel orientation before you suspect the
+transfer. All three were fine here.
+
+The fix is an `on_color_trans_done` callback giving a semaphore, and one
+internal `blit()` that every write in `panel_st7789.c` goes through, so no
+caller can forget to wait.
+
+A useful check while chasing this: render the glyph loop to ASCII **on the
+host**. If the host output is a correct letter, the bug is below the renderer,
+which immediately rules out the font and the code you would otherwise stare at.
+
+## Two other things that will bite you
 
 **Project layout.** ESPIDFORTH is PlatformIO-first, which injects `src/` as the
 main component. Plain `idf.py` does not, so building it unmodified fails at the

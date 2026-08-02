@@ -14,6 +14,8 @@
 extern "C" {
 #endif
 
+/* Portrait, as the vendor drives it: the glass is 172x320 and Waveshare's own
+ * ESP-IDF demo uses exactly those numbers. */
 #define UI_W 172
 #define UI_H 320
 

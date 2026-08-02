@@ -12,8 +12,11 @@
 #include "driver/gpio.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_vendor.h"
+#include "Vernon_ST7789T.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "magnet_ui";
 
@@ -25,19 +28,51 @@ static const char *TAG = "magnet_ui";
 #define PIN_RST  21
 #define PIN_BL   22
 
-/* The ST7789 controller is 240x320; this panel is 172 wide and sits centred in
- * the controller's column space, so every write needs a 34-column offset.
- * Without it the image is shifted and the right edge wraps. */
+/* Glass is 172 columns centred in the controller's 240, so writes need a
+ * 34-column offset. */
 #define X_GAP  34
 #define Y_GAP   0
 
 #define LCD_HOST      SPI2_HOST
-#define LCD_HZ        (40 * 1000 * 1000)
+/* 12 MHz, matching the vendor demo. 40 MHz appeared to work and is not
+ * worth the risk on a panel whose init sequence we are already trusting
+ * them for. */
+#define LCD_HZ        (12 * 1000 * 1000)
 #define LCD_CMD_BITS  8
 #define LCD_PARAM_BITS 8
 
 static esp_lcd_panel_handle_t s_panel;
 static bool s_ready;
+
+/*
+ * esp_lcd_panel_io_tx_color() is ASYNCHRONOUS — it queues the SPI transfer and
+ * returns immediately. Every blit here reuses one static scratch buffer, so
+ * without waiting for completion the next glyph overwrites pixels that have not
+ * been sent yet and the panel receives a mixture of two glyphs.
+ *
+ * That failure mode is deceptive: ui_fill() is immune BY ACCIDENT, because every
+ * band it sends contains the same colour, so clobbering the buffer mid-transfer
+ * writes identical bytes. Solid shapes therefore looked perfect while text
+ * shattered into garbage — which reads as "the font is broken" and sends you off
+ * to audit the glyph table, the renderer and the panel orientation, none of
+ * which were wrong.
+ */
+static SemaphoreHandle_t s_blit_done;
+
+static bool IRAM_ATTR on_colour_done(esp_lcd_panel_io_handle_t io,
+                                     esp_lcd_panel_io_event_data_t *ev,
+                                     void *ctx) {
+    BaseType_t hp = pdFALSE;
+    xSemaphoreGiveFromISR(s_blit_done, &hp);
+    return hp == pdTRUE;
+}
+
+/* Blit and WAIT. Every panel write in this file goes through here so no caller
+ * can forget. */
+static void blit(int x0, int y0, int x1, int y1, const void *px) {
+    esp_lcd_panel_draw_bitmap(s_panel, x0, y0, x1, y1, px);
+    xSemaphoreTake(s_blit_done, pdMS_TO_TICKS(200));
+}
 
 uint16_t ui_rgb565(uint8_t r, uint8_t g, uint8_t b) {
     uint16_t c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
@@ -98,25 +133,31 @@ esp_err_t ui_init(void) {
         .lcd_param_bits = LCD_PARAM_BITS,
         .spi_mode = 0,
         .trans_queue_depth = 10,
+        .on_color_trans_done = on_colour_done,
     };
+    s_blit_done = xSemaphoreCreateBinary();
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST,
                                              &io_cfg, &io));
 
-    esp_lcd_panel_dev_config_t panel_cfg = {
+    /* Waveshare's own ESP-IDF demo does NOT use esp_lcd's generic ST7789 —
+     * it ships this ST7789T driver, because the panel needs a different init
+     * sequence (its own porch, power and gamma tables, plus INVON). Chasing
+     * MADCTL bits against the generic driver was never going to converge; the
+     * vendor's init is the ground truth and is vendored here beside us. */
+    esp_lcd_panel_dev_st7789t_config_t panel_cfg = {
         .reset_gpio_num = PIN_RST,
-        /* IDF 5.1 spells this rgb_endian; 5.2 renamed it rgb_ele_order with
-         * LCD_RGB_ELEMENT_ORDER_*. Using the 5.2 name here compiles nowhere on
-         * 5.1, which is the version installed. */
-        .rgb_endian = LCD_RGB_ENDIAN_RGB,
+        /* BGR, not RGB. From the vendor demo — with RGB the red and blue
+         * channels swap. */
+        .rgb_endian = LCD_RGB_ENDIAN_BGR,
         .bits_per_pixel = 16,
     };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io, &panel_cfg, &s_panel));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_st7789t(io, &panel_cfg, &s_panel));
 
     ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
-    /* These IPS panels ship inverted; without this every colour is its
-     * complement and the "dark" background comes out white. */
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
+    /* Inversion is already in the vendor init sequence (0x21), so do NOT call
+     * invert_color here — doing both cancels out. */
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, true, false));
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, X_GAP, Y_GAP));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 
@@ -147,7 +188,7 @@ void ui_fill(int x, int y, int w, int h, uint16_t colour) {
     for (int i = 0; i < n; ++i) buf[i] = colour;
     for (int yy = y; yy < y + h; yy += BAND) {
         int rows = (y + h - yy) < BAND ? (y + h - yy) : BAND;
-        esp_lcd_panel_draw_bitmap(s_panel, x, yy, x + w, yy + rows, buf);
+        blit(x, yy, x + w, yy + rows, buf);
     }
 }
 
@@ -162,27 +203,44 @@ int ui_text_width(const char *s, int scale) {
 void ui_text(int x, int y, const char *s, uint16_t fg, uint16_t bg, int scale) {
     if (!s_ready || scale < 1) return;
     const int gw = 6 * scale, gh = 8 * scale;
-    /* One glyph at a time: at scale 4 that is 24x32 px = 1536 B, versus a
-     * whole-line buffer that grows with the string. */
-    uint16_t cell[6 * 4 * 8 * 4];
-    if (gw * gh > (int)(sizeof(cell) / sizeof(cell[0]))) return;
+
+    /* Band the glyph by ROWS, exactly as ui_fill does, so the scratch buffer is
+     * bounded by width alone and ANY scale renders.
+     *
+     * The previous version used one fixed 768-pixel cell and simply `return`ed
+     * when a glyph did not fit. At scale 12 a glyph needs 6912, so the big
+     * orientation "F" on the test card silently never drew — and it was the one
+     * element whose whole job was to be unmissable. A guard that quietly drops
+     * output is worse than no guard: it cost a flash cycle and a photograph to
+     * notice something was absent rather than wrong. */
+    enum { BAND = 16 };
+    static uint16_t band[UI_W * BAND];
+    if (gw > UI_W) return;
 
     for (const char *p = s; *p; ++p, x += gw) {
         char c = *p;
         if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
         int idx = (c < 32 || c > 90) ? 0 : (c - 32);
-        if (x + gw > UI_W) break;
-        for (int i = 0; i < gw * gh; ++i) cell[i] = bg;
-        for (int col = 0; col < 5; ++col) {
-            uint8_t bits = font5x7[idx][col];
-            for (int row = 0; row < 7; ++row) {
-                if (!(bits & (1 << row))) continue;
-                for (int sy = 0; sy < scale; ++sy)
-                    for (int sx = 0; sx < scale; ++sx)
-                        cell[(row * scale + sy) * gw + (col * scale + sx)] = fg;
+        if (x < 0 || x + gw > UI_W) break;
+
+        for (int y0 = 0; y0 < gh; y0 += BAND) {
+            int rows = (gh - y0) < BAND ? (gh - y0) : BAND;
+            if (y + y0 + rows > UI_H) break;
+            for (int i = 0; i < gw * rows; ++i) band[i] = bg;
+            for (int col = 0; col < 5; ++col) {
+                uint8_t bits = font5x7[idx][col];
+                for (int row = 0; row < 7; ++row) {
+                    if (!(bits & (1 << row))) continue;
+                    for (int sy = 0; sy < scale; ++sy) {
+                        int py = row * scale + sy - y0;
+                        if (py < 0 || py >= rows) continue;
+                        for (int sx = 0; sx < scale; ++sx)
+                            band[py * gw + (col * scale + sx)] = fg;
+                    }
+                }
             }
+            blit(x, y + y0, x + gw, y + y0 + rows, band);
         }
-        if (y + gh <= UI_H) esp_lcd_panel_draw_bitmap(s_panel, x, y, x + gw, y + gh, cell);
     }
 }
 
