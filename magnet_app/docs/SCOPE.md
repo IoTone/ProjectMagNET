@@ -36,8 +36,13 @@ doing its job".
 almost nothing in firmware (the teardown call is already conditional) and turns
 the phone into the §11.2 host the protocol was designed around.
 
-> **Decision needed** before Milestone 3 can start. Milestones 1–2 do not
-> depend on it.
+> **Decided 2026-08-02: Option A** (C later, B only if a lab need appears).
+> Firmware env `esp32c6_ble_resident` landed in `firmware-idf/platformio.ini` —
+> same source as `esp32c6_ble` with `-DMN_BLE_RESIDENT=1`, which skips the
+> post-provisioning teardown and advertises regardless of provisioning state.
+> Per-verb bonding enforcement (E_NOT_BONDED) is unchanged. Not yet
+> hardware-soaked for BLE/Thread coexistence (SW coexist is already enabled in
+> the BLE sdkconfig); that soak is the first M3 task. Milestone 3 is unblocked.
 
 ---
 
@@ -141,7 +146,7 @@ allow-list, so this needed no new C.
 *Ends when:* a node provisioned by this phone will accept a fleet command from
 it and refuse one from anything else.
 
-### M3 — Live mesh view *(depends on the §1 decision)*
+### M3 — Live mesh view *(§1 decided: Option A, companion node)*
 
 With a companion node the app stops being a one-shot configurator.
 
@@ -206,10 +211,11 @@ Everything the bench scripts do this session, but in your hand.
    everything below it.
 2. **M1 credential helpers** — small, and it fixes the weakest part of the
    security story (people typing passphrases).
-3. **Decide the §1 question.** If Option A, the firmware change is one flag.
+3. ~~Decide the §1 question.~~ **Decided: Option A** — the
+   `esp32c6_ble_resident` env exists; flash one bench node with it and soak.
 4. **M3**, because a live mesh view is what makes this a tool you reach for
    rather than a wizard you run once.
 5. **M2** and **M4** in either order.
 
-M1 + M2 need no firmware work at all. M3 and M4 need the companion-node
-decision first.
+M1 + M2 need no firmware work at all. M3 and M4 need a companion node flashed
+with `esp32c6_ble_resident` on the bench.

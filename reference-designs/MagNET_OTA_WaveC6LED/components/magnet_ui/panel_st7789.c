@@ -128,6 +128,14 @@ esp_err_t ui_init(void) {
     return ESP_OK;
 }
 
+void ui_set_mirror(bool mx, bool my) {
+    if (s_panel) esp_lcd_panel_mirror(s_panel, mx, my);
+}
+
+void ui_set_swap_xy(bool swap) {
+    if (s_panel) esp_lcd_panel_swap_xy(s_panel, swap);
+}
+
 void ui_fill(int x, int y, int w, int h, uint16_t colour) {
     if (!s_ready || w <= 0 || h <= 0) return;
     if (x < 0 || y < 0 || x + w > UI_W || y + h > UI_H) return;
@@ -176,4 +184,38 @@ void ui_text(int x, int y, const char *s, uint16_t fg, uint16_t bg, int scale) {
         }
         if (y + gh <= UI_H) esp_lcd_panel_draw_bitmap(s_panel, x, y, x + gw, y + gh, cell);
     }
+}
+
+/*
+ * Test card. Everything here is deliberately ASYMMETRIC so a single photograph
+ * is decisive:
+ *
+ *   corner squares  R top-left, G top-right, B bottom-left, W bottom-right
+ *                   -> names the mirror axis AND proves the RGB channel order
+ *   1px white border-> proves the 34-column gap; a wrong gap loses an edge or
+ *                      wraps one round
+ *   big "F"         -> the classic orientation glyph: mirrored, rotated and
+ *                      upside-down F are all instantly distinguishable, which
+ *                      is not true of a symmetric shape
+ *   "TOP" under it  -> settles 180-degree rotation, which the F alone leaves open
+ */
+void ui_testcard(void) {
+    const int M = 24;
+    ui_clear(ui_rgb565(0, 0, 0));
+
+    /* 1px border in white */
+    ui_fill(0, 0, UI_W, 1, ui_rgb565(0xFF, 0xFF, 0xFF));
+    ui_fill(0, UI_H - 1, UI_W, 1, ui_rgb565(0xFF, 0xFF, 0xFF));
+    ui_fill(0, 0, 1, UI_H, ui_rgb565(0xFF, 0xFF, 0xFF));
+    ui_fill(UI_W - 1, 0, 1, UI_H, ui_rgb565(0xFF, 0xFF, 0xFF));
+
+    ui_fill(2,          2,          M, M, ui_rgb565(0xFF, 0, 0));      /* R TL */
+    ui_fill(UI_W-M-2,   2,          M, M, ui_rgb565(0, 0xFF, 0));      /* G TR */
+    ui_fill(2,          UI_H-M-2,   M, M, ui_rgb565(0, 0, 0xFF));      /* B BL */
+    ui_fill(UI_W-M-2,   UI_H-M-2,   M, M, ui_rgb565(0xFF,0xFF,0xFF));  /* W BR */
+
+    ui_text(8, 34, "TOP", ui_rgb565(0xFF,0xFF,0xFF), ui_rgb565(0,0,0), 2);
+    ui_text(30, 120, "F", ui_rgb565(0xFF,0xFF,0xFF), ui_rgb565(0,0,0), 12);
+    ui_text(8, 250, "R-TL G-TR", ui_rgb565(0xFF,0xFF,0xFF), ui_rgb565(0,0,0), 1);
+    ui_text(8, 264, "B-BL W-BR", ui_rgb565(0xFF,0xFF,0xFF), ui_rgb565(0,0,0), 1);
 }

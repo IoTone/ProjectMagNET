@@ -636,8 +636,12 @@ int mn_channel_set(const char *cred, size_t len, char *info, size_t cap) {
     memset(s_peers, 0, sizeof(s_peers));
     if (info) snprintf(info, cap, "%s selector=%04x path=%c",
                        s_chan.name, s_chan.selector, s_chan.cred_path);
-    /* §12.9 Q3: provisioning done → reclaim the radio and NimBLE's RAM */
+    /* §12.9 Q3: provisioning done → reclaim the radio and NimBLE's RAM.
+     * Companion builds (MN_BLE_RESIDENT) keep the stack up — the bonded link
+     * IS the app's window into the mesh. */
+#if !MN_BLE_RESIDENT
     if (mn_ble_running()) mn_ble_stop();
+#endif
     if (s_state == MN_READY) announce_name();
     return 0;
 }

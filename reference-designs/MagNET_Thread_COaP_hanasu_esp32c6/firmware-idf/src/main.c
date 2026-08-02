@@ -101,7 +101,16 @@ void app_main(void) {
     gpio_set_level(GPIO_NUM_14, 0);
     mn_emit_event("# xiao rf-switch: enabled, internal antenna");
 #endif
-#if MN_ENABLE_BLE
+#if MN_BLE_RESIDENT
+    /* Companion build (magnet_app SCOPE §1 Option A, decided 2026-08-02):
+     * BLE stays up for the life of the node, provisioned or not, so the phone
+     * app can attach to THIS node as its live window into the mesh. This
+     * deliberately re-opens the bonding window on every boot — acceptable for
+     * the one bench/diagnostic node, which is why deployed nodes keep the
+     * provisioning-only build below. Privileged verbs still require a bonded
+     * link (per-verb E_NOT_BONDED enforcement). */
+    if (mn_ble_start() == 0) raw_print("# ble: resident (companion node)\r\n");
+#elif MN_ENABLE_BLE
     /* Provisioning-only BLE (§11.2.1 / §12.9 Q3): advertise so a phone can
      * push a credential with no cable. mn_channel_set() tears the stack down
      * the moment a channel lands, returning the radio + RAM to Thread. */

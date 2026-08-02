@@ -11,8 +11,11 @@
  *
  * What a phone can therefore do: scan, bond, read CAPS, write CHANNEL SET /
  * NAME, and watch !STATE — i.e. onboard a node with no cable. What it cannot
- * do: stay attached as a live chat client. That needs the resident-BLE build,
- * which is deliberately not this one.
+ * do: stay attached as a live chat client. That needs the resident-BLE
+ * companion build (MN_BLE_RESIDENT=1, env esp32c6_ble_resident — magnet_app
+ * SCOPE §1 Option A): same source, the teardown in mn_channel_set() and the
+ * unprovisioned-only gate in main.c are simply compiled out, and ONE bench
+ * node stays attachable as the app's window into the mesh.
  *
  * The GATT service is a byte pipe: exactly the same HCP line grammar as
  * USB-CDC, so the host SDK's framing layer is unchanged (that is the whole

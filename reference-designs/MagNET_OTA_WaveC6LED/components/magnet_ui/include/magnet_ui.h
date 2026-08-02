@@ -7,6 +7,7 @@
  */
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -45,6 +46,16 @@ int  ui_text_width(const char *s, int scale);
 void ui_backlight(int pct);
 
 /* Single WS2812-family LED on GPIO8. */
+/* Orientation + colour diagnostic. Draws unambiguous corner markers, a 1px
+ * border and a big asymmetric glyph, so ONE photograph settles mirror state,
+ * rotation, the column gap and the RGB channel order at once — instead of
+ * guessing at each from a picture of mirrored text. */
+void ui_testcard(void);
+
+/* Panel orientation. Call before drawing; both default false. */
+void ui_set_mirror(bool mx, bool my);
+void ui_set_swap_xy(bool swap);
+
 esp_err_t led_init(void);
 void led_rgb(uint8_t r, uint8_t g, uint8_t b);
 

@@ -101,8 +101,9 @@ void app_main(void) {
 
     if (ui_init() == ESP_OK) {
         usb_print("display: ST7789 172x320 up\r\n");
-        draw_status("BOOTING", UI_AMBER,
-                    heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        /* DIAGNOSTIC BUILD: test card instead of the status screen, until
+         * orientation and channel order are settled from a photograph. */
+        ui_testcard();
     } else {
         usb_print("display: FAILED\r\n");
     }
@@ -124,7 +125,7 @@ void app_main(void) {
     /* IDLE, not READY: nothing is provisioned yet and the device is not doing
      * anything on anyone's behalf. Overstating readiness on a status display is
      * how a demo goes wrong in front of people. */
-    draw_status("IDLE", UI_GREEN, freeb);
+    (void)freeb;   /* status screen suppressed while the test card is up */
     led_rgb(0, 24, 8);                      /* dim green: idle, alive */
 
     forth_repl(repl_getchar, repl_putchar);

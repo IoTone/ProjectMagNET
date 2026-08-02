@@ -197,6 +197,15 @@ pio run -e esp32c6 -t upload -t monitor
 # Without it the XIAO meshes at near-zero range. NanoC6/devkit: plain esp32c6.
 pio run -e esp32c6_xiao -t upload
 
+# BLE provisioning build: advertises until a channel is set, then tears BLE down
+pio run -e esp32c6_ble -t upload
+
+# Companion node (magnet_app SCOPE §1 Option A, decided 2026-08-02): BLE stays
+# resident so the phone app can attach as its live window into the mesh.
+# Flash exactly ONE bench node with this — it re-opens the bonding window on
+# every boot, so it's a diagnostic anchor, not a fielded node.
+pio run -e esp32c6_ble_resident -t upload
+
 # baseline without OpenThread (footprint comparison)
 #   NOTE: for a truly clean baseline also set CONFIG_OPENTHREAD_ENABLED=n,
 #   then  rm sdkconfig.esp32c6  and rebuild (PlatformIO caches sdkconfig.<env>).

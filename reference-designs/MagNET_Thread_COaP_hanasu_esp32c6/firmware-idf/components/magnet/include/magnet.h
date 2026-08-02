@@ -99,10 +99,12 @@ int  mn_rotate(void);                        /* signed system/rotate bcast */
  * has flushed its response. 0 = ok. */
 int  mn_factory_reset(void);
 
-/* ---- E-F: BLE-GATT HCP binding (§11.2.1), PROVISIONING-ONLY ----
+/* ---- E-F: BLE-GATT HCP binding (§11.2.1) ----
  * Decision §12.9 Q3: BLE is torn down once a channel is provisioned, so the
  * 2.4 GHz front end and ~40-60 KB of NimBLE RAM go back to Thread. Compiled
- * out unless MN_ENABLE_BLE=1. */
+ * out unless MN_ENABLE_BLE=1. MN_BLE_RESIDENT=1 (env esp32c6_ble_resident)
+ * skips the teardown so one companion node stays attachable as the phone
+ * app's window into the mesh (magnet_app SCOPE §1 Option A). */
 int  mn_ble_start(void);
 int  mn_ble_stop(void);
 bool mn_ble_running(void);
