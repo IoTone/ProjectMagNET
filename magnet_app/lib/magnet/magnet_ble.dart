@@ -178,16 +178,25 @@ class MagnetBleTransport implements HcpTransport {
     } catch (_) {}
 
     final Completer<BondOutcome> done = Completer<BondOutcome>();
-    bool sawBonding = false;
+    DateTime? bondingSince;
     final StreamSubscription<BluetoothBondState> sub =
         _device.bondState.listen((BluetoothBondState s) {
       if (s == BluetoothBondState.bonded) {
         if (!done.isCompleted) done.complete(BondOutcome.bonded);
       } else if (s == BluetoothBondState.bonding) {
-        sawBonding = true;                    // prompt is up
-      } else if (s == BluetoothBondState.none && sawBonding) {
-        // bonding -> none means the request was refused or dismissed
-        if (!done.isCompleted) done.complete(BondOutcome.declined);
+        bondingSince = DateTime.now();        // prompt is up
+      } else if (s == BluetoothBondState.none && bondingSince != null) {
+        // `bonding -> none` is ambiguous: the user refused, *or* nobody
+        // answered and Android expired the request on its own. It expires at
+        // almost exactly 30 s (measured on SH-53D: BONDING 00:59:51.857 ->
+        // NONE 01:00:21.864), so treat a collapse at that mark as unanswered.
+        // The difference matters — "you declined" is the wrong thing to tell
+        // someone who never saw a prompt.
+        final Duration held = DateTime.now().difference(bondingSince!);
+        final bool expired = held >= const Duration(seconds: 28);
+        if (!done.isCompleted) {
+          done.complete(expired ? BondOutcome.timedOut : BondOutcome.declined);
+        }
       }
     });
 
@@ -211,6 +220,50 @@ class MagnetBleTransport implements HcpTransport {
       await releaseWakelock();
     }
     return outcome;
+  }
+
+  /// Drop this phone's half of a bond the node no longer holds.
+  ///
+  /// A node keeps its BLE *address* across `FACTORY RESET` (it advertises with
+  /// `BLE_OWN_ADDR_PUBLIC`, i.e. the MAC) but loses its keys. The phone is then
+  /// left believing it is bonded to something that has forgotten it, and
+  /// nothing recovers on its own: Android keeps offering an LTK the node cannot
+  /// match, `bond()` short-circuits to [BondOutcome.alreadyBonded] so no system
+  /// prompt is ever raised, and every privileged verb answers `E_NOT_BONDED`
+  /// forever. Observed 2026-08-02 — the node logged `enc_change status=13`.
+  ///
+  /// This matters because `FACTORY RESET` is the *documented* recovery path:
+  /// without this the act of recovering a node makes it unprovisionable by the
+  /// phone that recovered it.
+  ///
+  /// `removeBond()` tears the connection down, so the caller must reconnect
+  /// before using the transport again. Android only — iOS gives an app no way
+  /// to forget a pairing, so there the user must do it in Settings.
+  Future<bool> clearStaleBond() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      await _device.removeBond();
+      await _device.bondState
+          .firstWhere((BluetoothBondState s) => s == BluetoothBondState.none)
+          .timeout(const Duration(seconds: 10));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Reconnect after [clearStaleBond], then bond afresh. Returns the outcome
+  /// of the new pairing — which *will* raise a system prompt, because the
+  /// platform no longer thinks it knows this node.
+  Future<BondOutcome> recoverStaleBondAndRebond({
+    Duration timeout = const Duration(seconds: 120),
+  }) async {
+    if (!await clearStaleBond()) return BondOutcome.unsupported;
+    _cmd = _evt = _auth = null;
+    await _notifySub?.cancel();
+    _notifySub = null;
+    await connect();
+    return bond(timeout: timeout);
   }
 
   /// Release the screen lock taken for bonding.

@@ -909,6 +909,49 @@ void mn_admin_list_print(void) {
 
 const uint8_t *mn_pubkey(void) { return s_pub; }
 
+/* ---- factory reset (§11.3.4) ----
+ * Erase every byte this node has been told, so it comes back indistinguishable
+ * from one fresh off the reel: channel credential, name, admin allow-list,
+ * autorun script, replay counter block, and the device identity key.
+ *
+ * Deliberately erase_all on the namespace rather than naming each key. A
+ * key-by-key list is a maintenance trap — add a setting later, forget to add
+ * it here, and "factory reset" quietly leaves state behind. That is exactly
+ * the failure a reset must never have.
+ *
+ * The identity key goes too. A reset node is one leaving your trust domain
+ * (resold, redeployed, handed on); keeping its keypair would let it carry the
+ * authority some other node's allow-list still grants it. mn_ident_load_or_gen()
+ * mints a fresh one on the next boot, exactly as it does on a virgin part.
+ *
+ * BLE bonds live in NimBLE's own namespace, so they need a second erase — a
+ * node that kept its bonds would refuse to re-pair with a phone that has
+ * forgotten it (mismatched LTKs), which is the one state a reset must resolve.
+ * Erased unconditionally: a node reflashed from a BLE build to a non-BLE one
+ * still has the old bonds sitting in flash.
+ *
+ * Does NOT reboot — RAM still holds the old state, so the caller must restart
+ * once it has flushed its response.
+ */
+int mn_factory_reset(void) {
+    nvs_handle_t h;
+    int rc = 0;
+
+    if (nvs_open("magnet", NVS_READWRITE, &h) == ESP_OK) {
+        if (nvs_erase_all(h) != ESP_OK || nvs_commit(h) != ESP_OK) rc = -1;
+        nvs_close(h);
+    } else {
+        rc = -1;   /* nothing to erase is fine; unable to open is not */
+    }
+
+    if (nvs_open("nimble_bond", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_all(h);          /* absent on a non-BLE build — not an error */
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    return rc;
+}
+
 static bool admin_verify(const uint8_t *signed_part, size_t len, const uint8_t sig[64]) {
     for (int i = 0; i < MN_ADMIN_MAX; i++)
         if (s_admins[i].used &&

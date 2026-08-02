@@ -13,6 +13,7 @@ Exit code is 1 if the node answered `-ERR`, so callers can branch on it.
 """
 import argparse
 import glob
+import os
 import sys
 import time
 
@@ -24,9 +25,19 @@ except ImportError:                                    # pragma: no cover
 BAUD = 115200
 
 
+# Ports on this bench that are NOT Hanasu nodes. Other ESP32 boards enumerate
+# with the same Espressif USB-JTAG VID/PID (303a:1001) and the same
+# description, so nothing but the port path tells them apart — and `all` /
+# `flash` must never touch them. Override with
+# MAGNET_HCP_SKIP=<substr>[,<substr>…] (empty string = skip nothing).
+SKIP_DEFAULT = 'usbmodem1101'
+
+
 def ports():
     """C6 dev boards enumerate as usbmodem* on macOS, ttyACM* on Linux."""
-    return sorted(glob.glob('/dev/cu.usbmodem*') + glob.glob('/dev/ttyACM*'))
+    skip = [s for s in os.environ.get('MAGNET_HCP_SKIP', SKIP_DEFAULT).split(',') if s]
+    found = sorted(glob.glob('/dev/cu.usbmodem*') + glob.glob('/dev/ttyACM*'))
+    return [p for p in found if not any(s in p for s in skip)]
 
 
 def _open(port, retries=40, reset=False):
@@ -90,6 +101,31 @@ def send(port, line, wait=1.5):
     return out
 
 
+def timed(port, line, wait=15.0):
+    """Send, and report seconds until the first +/-/@ response line.
+
+    Verbs whose cost is the point — CHANNEL SET's PBKDF2 stretch, SELFTEST's
+    CoAP loopback — need a number, not a guess. `wait` is an upper bound; this
+    returns as soon as the response lands.
+    """
+    ser = _open(port)
+    ser.read(8192)
+    t0 = time.time()
+    ser.write((line + '\n').encode())
+    end, buf, elapsed = t0 + wait, b'', None
+    while time.time() < end and elapsed is None:
+        try:
+            buf += ser.read(4096)
+        except (OSError, serial.SerialException):
+            break
+        for ln in buf.split(b'\n'):
+            if ln[:1] in (b'+', b'-', b'@'):
+                elapsed = time.time() - t0
+                break
+    ser.close()
+    return elapsed, buf.decode('utf-8', 'replace')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('port', nargs='?')
@@ -97,6 +133,8 @@ def main():
     ap.add_argument('--reboot', action='store_true')
     ap.add_argument('--watch', type=float, metavar='SECS')
     ap.add_argument('--wait', type=float, default=1.5)
+    ap.add_argument('--time', action='store_true',
+                    help='report seconds until the response (for slow verbs)')
     a = ap.parse_args()
 
     if a.port in (None, 'list'):
@@ -137,6 +175,13 @@ def main():
                 sys.stdout.flush()
         ser.close()
         return 0
+
+    if a.time:
+        secs, out = timed(a.port, ' '.join(a.command),
+                          a.wait if a.wait != 1.5 else 15.0)
+        sys.stdout.write(out)
+        print(f'# elapsed {secs:.2f}s' if secs is not None else '# no response')
+        return 1 if '-ERR' in out else 0
 
     out = send(a.port, ' '.join(a.command), a.wait)
     sys.stdout.write(out)

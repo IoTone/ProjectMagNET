@@ -7,10 +7,63 @@
 #include "mbedtls/ccm.h"
 #include "mbedtls/hkdf.h"
 #include "mbedtls/md.h"
-#include "mbedtls/pkcs5.h"
 #include "mbedtls/base64.h"
+#include "mbedtls/platform_util.h"
+/* Only for the cooperative yield inside the PBKDF2 loop — see pbkdf2_yielding. */
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const uint8_t CHAN_SALT[] = "MagNET/v2.1/chan-salt";
+
+/* PBKDF2-HMAC-SHA256 producing exactly one 32-byte block, yielding as it goes.
+ *
+ * mbedtls_pkcs5_pbkdf2_hmac_ext() does all MN_PBKDF2_ITERS iterations without
+ * ever returning, which on this single-core part starves IDLE for seconds and
+ * trips the task watchdog mid-`CHANNEL SET`. Same arithmetic, just interrupted
+ * often enough for the scheduler to breathe.
+ *
+ * dkLen == hLen == 32, so RFC 8018 collapses to a single block:
+ *     DK = T_1 = U_1 XOR U_2 XOR … XOR U_c
+ *     U_1 = HMAC(P, S ‖ INT_32_BE(1)),  U_i = HMAC(P, U_{i-1})
+ * Byte-identical to the mbedtls call it replaces — the well-known "magnet"
+ * channel must keep deriving selector 82f7, which is the regression test.
+ */
+static int pbkdf2_yielding(const uint8_t *pw, size_t pw_len,
+                           const uint8_t *salt, size_t salt_len,
+                           uint32_t iters, uint8_t out32[32]) {
+    const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    const uint8_t idx_be[4] = { 0, 0, 0, 1 };
+    mbedtls_md_context_t ctx;
+    uint8_t u[32], t[32];
+    int rc = -1;
+
+    if (!md || iters == 0) return -1;
+    mbedtls_md_init(&ctx);
+    if (mbedtls_md_setup(&ctx, md, 1) != 0) goto done;      /* 1 = HMAC */
+
+    if (mbedtls_md_hmac_starts(&ctx, pw, pw_len) != 0 ||
+        mbedtls_md_hmac_update(&ctx, salt, salt_len) != 0 ||
+        mbedtls_md_hmac_update(&ctx, idx_be, sizeof(idx_be)) != 0 ||
+        mbedtls_md_hmac_finish(&ctx, u) != 0) goto done;
+    memcpy(t, u, sizeof(t));
+
+    for (uint32_t i = 1; i < iters; i++) {
+        if (mbedtls_md_hmac_reset(&ctx) != 0 ||             /* re-primes with pw */
+            mbedtls_md_hmac_update(&ctx, u, sizeof(u)) != 0 ||
+            mbedtls_md_hmac_finish(&ctx, u) != 0) goto done;
+        for (size_t j = 0; j < sizeof(t); j++) t[j] ^= u[j];
+        /* vTaskDelay, not taskYIELD: mn_link outranks IDLE, so only actually
+         * blocking lets IDLE run and the watchdog get fed. */
+        if (i % MN_PBKDF2_YIELD_EVERY == 0) vTaskDelay(1);
+    }
+    memcpy(out32, t, sizeof(t));
+    rc = 0;
+done:
+    mbedtls_md_free(&ctx);
+    mbedtls_platform_zeroize(u, sizeof(u));
+    mbedtls_platform_zeroize(t, sizeof(t));
+    return rc;
+}
 
 static int hkdf32(const uint8_t *ikm, size_t ikm_len, const char *info,
                   uint8_t *out, size_t out_len) {
@@ -72,11 +125,9 @@ int mn_cred_derive(const char *cred, size_t cred_len, mn_channel_t *out) {
         /* salt bound to the channel name (= the passphrase itself when no
          * separate name is given, §11.1.2) */
         hkdf32((const uint8_t *)cred, cred_len, "chan-salt-ikm", salt, 32);
-        if (mbedtls_pkcs5_pbkdf2_hmac_ext(MBEDTLS_MD_SHA256,
-                                          (const uint8_t *)cred, cred_len,
-                                          salt, sizeof(salt),
-                                          MN_PBKDF2_ITERS,
-                                          32, out->root) != 0) return -4;
+        if (pbkdf2_yielding((const uint8_t *)cred, cred_len,
+                            salt, sizeof(salt),
+                            MN_PBKDF2_ITERS, out->root) != 0) return -4;
         out->cred_path = 'B';
         size_t n = cred_len < sizeof(out->name) - 1 ? cred_len : sizeof(out->name) - 1;
         memcpy(out->name, cred, n);

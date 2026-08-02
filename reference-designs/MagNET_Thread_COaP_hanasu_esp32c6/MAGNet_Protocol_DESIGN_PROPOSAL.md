@@ -1523,6 +1523,7 @@ comment   = "#" *VCHAR LF
 | `ADMIN ADD` | `ADMIN ADD <pubkey-hex>` | READY (bonded) | Add admin key to allow-list. |
 | `ADMIN LIST` | `ADMIN LIST` | READY | List admin keys. |
 | `RAW` | `RAW <hex-envelope>` | READY (bonded) | Inject a raw envelope (advanced). |
+| `FACTORY RESET` | `FACTORY RESET CONFIRM` | all (bonded over BLE) | Erase **all** provisioned state — channel credential, name, admin allow-list, autorun script, replay-counter block, device identity key, and any BLE bonds — then reboot. The node comes back indistinguishable from a virgin part, advertising for provisioning again. The literal `CONFIRM` is required: bare `FACTORY RESET` returns `-ERR E_CONFIRM_REQUIRED`. Added rev 2.2 — without it a mis-provisioned node needs a USB NVS wipe to become configurable, which is not a field-recoverable state. |
 
 State-gating (which commands are accepted in BOOTING/CONFIGURING/ATTACHING/READY/DEGRADED) follows the
 table in §4.6, extended with the verbs above. Commands invalid in the current state return
@@ -1567,6 +1568,7 @@ table in §4.6, extended with the verbs above. Commands invalid in the current s
 | `E_NOT_ADMIN` | Caller/signer not on admin allow-list |
 | `E_BUSY` | Resource busy (e.g. transfer in progress) |
 | `E_RATE_LIMITED` | Host multicast send exceeded the §4.9 token bucket (burst 8, 10/s) — added rev 2.2 after the E-B saturation measurements |
+| `E_CONFIRM_REQUIRED` | Irreversible op needs its explicit confirmation word (`FACTORY RESET CONFIRM`) — added rev 2.2 |
 | `E_INTERNAL` | Unexpected fault |
 
 #### 11.3.5 Secrets handling

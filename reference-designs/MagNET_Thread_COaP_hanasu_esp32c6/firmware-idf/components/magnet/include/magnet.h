@@ -93,6 +93,12 @@ int  mn_admin_add(const uint8_t pub65[65]);  /* allow-list, NVS, max 4     */
 void mn_admin_list_print(void);
 int  mn_rotate(void);                        /* signed system/rotate bcast */
 
+/* Erase all provisioned state (channel, name, admins, script, counter block,
+ * identity key) plus any BLE bonds — the node comes back virgin. Does NOT
+ * reboot; RAM still holds the old state, so the caller must restart after it
+ * has flushed its response. 0 = ok. */
+int  mn_factory_reset(void);
+
 /* ---- E-F: BLE-GATT HCP binding (§11.2.1), PROVISIONING-ONLY ----
  * Decision §12.9 Q3: BLE is torn down once a channel is provisioned, so the
  * 2.4 GHz front end and ~40-60 KB of NimBLE RAM go back to Thread. Compiled

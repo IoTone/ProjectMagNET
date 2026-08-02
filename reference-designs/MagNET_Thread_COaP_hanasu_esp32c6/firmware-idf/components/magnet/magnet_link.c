@@ -24,6 +24,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "esp_system.h"      /* esp_restart() for FACTORY RESET */
 
 /* internals from magnet_core.c */
 void              mn_core_set_putc(mn_putc_fn p);
@@ -60,7 +61,8 @@ static bool verb_is_privileged(const char *verb, const char *rest) {
     if (!strcmp(verb, "NAME") || !strcmp(verb, "ADMIN") ||
         !strcmp(verb, "ROTATE") || !strcmp(verb, "RAW") ||
         !strcmp(verb, "SCRIPT") || !strcmp(verb, "HOOK") ||
-        !strcmp(verb, "FORTH") || !strcmp(verb, "STRESS")) {
+        !strcmp(verb, "FORTH") || !strcmp(verb, "STRESS") ||
+        !strcmp(verb, "FACTORY")) {
         return true;
     }
     /* CHANNEL SHOW/LIST are public info; SET/JOIN rewrite the node's keys. */
@@ -94,7 +96,7 @@ static void emit_caps(const char *tag) {
     respond(tag,
         "+OK proto=2.1 fw=0.5.0-ee maxline=512 "
         "transports=usbcdc verbs=STATUS,CAPS,HELP,PING,CHAT,DM,PEERS,WHOAMI,NAME,"
-        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FORTH "
+        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH "
         "events=ready,state,chat,dm,cmd,peer,role,heartbeat,warn queue=4 mode=HCP");
 }
 
@@ -104,6 +106,7 @@ static void emit_help(const char *tag) {
     mn_write_line("#            SYSINFO MESH BENCH SELFTEST STATS [RESET] STRESS <secs> <len>");
     mn_write_line("#            HEARTBEAT <secs|0> FORTH PUBKEY ADMIN ADD|LIST ROTATE");
     mn_write_line("#            HOOK CHAT|CMD <word>|LIST|CLEAR  SCRIPT SET|SHOW|RUN|CLEAR");
+    mn_write_line("#            FACTORY RESET CONFIRM  (erases everything, reboots)");
     mn_write_line("# FORTH drops into the Forth REPL; type  .hcp  to return.");
     respond(tag, "+OK");
 }
@@ -266,6 +269,33 @@ static void handle_hcp_line(char *line) {
         } else {
             respond_err(tag, "E_SYNTAX", "CHANNEL SET|JOIN <cred> | LIST | SHOW");
         }
+    }
+    else if (!strcmp(verb, "FACTORY")) {
+        /* FACTORY RESET CONFIRM — wipes every provisioned byte, then reboots.
+         * The CONFIRM word is not ceremony: this verb sits one typo away from
+         * FACTORY RESET being the tail of some other paste, and it is the only
+         * command here that cannot be undone. Same reason `git push --force`
+         * makes you say it twice. */
+        if (strcmp(rest, "RESET") && strcmp(rest, "RESET CONFIRM")) {
+            respond_err(tag, "E_SYNTAX", "FACTORY RESET CONFIRM");
+            return;
+        }
+        if (!strcmp(rest, "RESET")) {
+            respond_err(tag, "E_CONFIRM_REQUIRED",
+                        "erases channel, name, admins, script, identity and BLE "
+                        "bonds — say FACTORY RESET CONFIRM");
+            return;
+        }
+        if (mn_factory_reset() != 0) {
+            respond_err(tag, "E_INTERNAL", "nvs erase failed");
+            return;
+        }
+        respond(tag, "+OK erased, rebooting");
+        mn_write_line("# factory reset: all provisioned state erased");
+        /* Let the response actually leave the node before the CPU does: the
+         * USB-CDC FIFO and the BLE notify queue are both still draining. */
+        vTaskDelay(pdMS_TO_TICKS(600));
+        esp_restart();
     }
     else if (!strcmp(verb, "SYSINFO")) { mn_sysinfo_print(); respond(tag, "+OK"); }
     else if (!strcmp(verb, "MESH"))    { mn_mesh_print(); respond(tag, "+OK"); }

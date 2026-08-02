@@ -112,8 +112,10 @@ allow-list, so this needed no new C.
       verb tears the BLE stack down and nothing can be done over the link after it
 - [x] `ADMIN LIST` review, with a warning card when the allow-list is empty
 - [ ] Signed `ROTATE` from the app (needs a live node link — gated on M3)
-- [ ] Enrolment on hardware: `ADMIN ADD` is privileged and now reachable —
-      bonding works, so this is unblocked and is the next thing to run
+- [x] **Enrolment on hardware (2026-08-02, 17/17)** — bonded BLE link to
+      `MagNET-98db`, `ADMIN ADD` accepted, key `04e3feeb3e560aeb…` verified
+      present in the node's `ADMIN LIST` over serial, and re-adding proven
+      idempotent (the allow-list is only 4 slots and provisioning gets retried)
 
 > **`cryptography` is unusable here.** Its P-256 is a platform-binding shim
 > whose pure-Dart path throws `UnimplementedError` — it cannot be unit-tested
@@ -191,7 +193,7 @@ Everything the bench scripts do this session, but in your hand.
 | Risk | Why it bites | Mitigation |
 |------|--------------|------------|
 | **Nothing in the BLE path has run on hardware** | Written from the spec and the firmware source, verified only by unit tests and a LightBlue poke. Bonded writes are the most likely to surprise. | M1's hardware pass, before anything is built on top |
-| Provisioning is one-way | A mis-provisioned node needs an NVS wipe over USB to become configurable again | Ship a documented recovery (a `FACTORY RESET` verb is ~20 lines of firmware and worth adding) |
+| ~~Provisioning is one-way~~ **closed 2026-08-01** | A mis-provisioned node needed an NVS wipe over USB to become configurable again | `FACTORY RESET CONFIRM` shipped and hardware-validated — erases channel, name, allow-list, script, identity and BLE bonds, reboots advertising. Note it mints a **new device id**, so the app must re-read `WHOAMI` and re-enrol rather than assume the id it knew |
 | iOS hides service UUIDs pre-connect | Filtering by service alone would show nothing | Already handled: name-prefix **or** service match |
 | Companion-node build drifts from the deployed build | Two firmware variants diverge quietly | Same source, one build flag; CI builds both |
 | Seed-phrase UX invites weak input | A typed phrase is Path B (PBKDF2, weaker) not Path C | Generate by default, warn on typed, show the derivation path in the UI (already displayed) |

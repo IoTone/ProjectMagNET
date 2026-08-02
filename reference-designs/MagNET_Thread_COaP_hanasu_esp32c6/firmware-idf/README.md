@@ -257,6 +257,92 @@ function (§12.1 one-implementation rule):
 | `STATS [RESET]` | `mn-stats` | tx try/ok/err/bytes + rx msgs/dup/err/bytes since boot or last reset |
 | `STRESS <secs> <len>` | `<secs> <len> mn-stress` | saturation burst: a task multicasts `<len>`-byte marked chat frames back-to-back for `<secs>`; receivers count them silently (no `!CHAT` flood); `!STRESS` progress every 30 s, `!STRESS_DONE` with totals |
 
+## Path B derivation cost (and the watchdog it used to trip)
+
+`CHANNEL SET <passphrase>` takes Path B: PBKDF2-HMAC-SHA256, `MN_PBKDF2_ITERS`
+= 100 000. Measured on the C6: **≈7.9 s**.
+
+That used to trip the task watchdog. mbedtls runs all 100 k iterations in one
+call that never returns, and on this single-core part `mn_link` therefore
+starved IDLE for the whole stretch — `E (…) task_wdt: - IDLE (CPU 0)` plus a
+register dump in the middle of the headline provisioning flow. The derivation
+completed correctly, so it was cosmetic, but it looked like a crash.
+
+Fixed by open-coding the one-block PBKDF2 in `magnet_crypto.c`
+(`pbkdf2_yielding`) and `vTaskDelay(1)`-ing every `MN_PBKDF2_YIELD_EVERY`
+(5 000) iterations — `vTaskDelay`, not `taskYIELD`, because `mn_link` outranks
+IDLE and only actually blocking lets IDLE run. ~20 yields, ~200 ms added.
+
+Since `dkLen == hLen == 32` this is a single RFC 8018 block, so the arithmetic
+collapses to `T_1 = U_1 ⊕ … ⊕ U_c` — byte-identical to the call it replaced.
+Verified three ways (2026-08-01): the well-known `magnet` channel still derives
+**selector 82f7 / ff05::e139:9682**, a custom passphrase still derives
+**selector 7770**, and an independent Python `hashlib.pbkdf2_hmac`
+implementation agrees with both. `SELFTEST` still passes all three stages.
+
+> **Open: 100 000 iterations costs ~7.9 s, not the ~1 s the header comment
+> targets.** Retuning is a security *and* compatibility decision — changing
+> `MN_PBKDF2_ITERS` changes the derived root, so every already-provisioned node
+> lands on a different channel and the fleet silently splits. Left alone
+> deliberately; decide before the first real deployment, not after.
+
+## Recovery: `FACTORY RESET`
+
+Provisioning used to be one-way. A node given the wrong credential tore its BLE
+stack down, joined a channel nobody could reach, and needed a USB NVS wipe to
+become configurable again — fine on a bench, useless in a field.
+
+```
+FACTORY RESET            → -ERR E_CONFIRM_REQUIRED …
+FACTORY RESET CONFIRM    → +OK erased, rebooting
+```
+
+Erases the whole `magnet` NVS namespace **and** NimBLE's `nimble_bond`
+namespace, then reboots. The node comes back virgin: default channel, no name,
+empty allow-list, no script, **new device identity**, no bonds, BLE advertising
+for provisioning again.
+
+Two deliberate choices worth knowing before you change it:
+
+- **`nvs_erase_all` on the namespace, not a list of keys.** A key-by-key list
+  is a maintenance trap — add a setting later, forget to add it here, and
+  "factory reset" quietly leaves state behind. That is the one bug a reset must
+  never have.
+- **The identity key goes too.** A reset node is one leaving your trust domain
+  (resold, redeployed, handed on). Keeping its keypair would let it carry
+  whatever authority some other node's allow-list still grants it. A fresh key
+  is minted on the next boot exactly as on a virgin part — so **`WHOAMI` reports
+  a different `id` afterwards**, and anything that had this node allow-listed
+  must re-add the new key.
+
+Privileged like any other config verb: over BLE it needs a bonded link, over
+USB-CDC physical access is the trust boundary (§4.6).
+
+> **The BLE address does *not* change.** Advertising uses `BLE_OWN_ADDR_PUBLIC`
+> — the MAC — so a phone that was bonded before the reset still lists the node
+> as bonded afterwards, while the node has no key. Android raises no pairing
+> prompt in that state and every privileged verb answers `E_NOT_BONDED`
+> indefinitely. A host must detect this and drop its own half of the bond;
+> `magnet_app` does (`recoverStaleBondAndRebond`). See `../docs/BLE-PAIRING.md`.
+
+### Validated on hardware (2026-08-01, M5NanoC6, `esp32c6_ble`)
+
+Provisioned a node with name `wipeme`, two admin keys, an autorun script and a
+non-default channel (`correct-horse-ba`, selector 7770), then reset it:
+
+| Check | Before | After |
+|-------|--------|-------|
+| `WHOAMI` id | `baf892cb` | **`1fa5d82e`** — identity regenerated |
+| name | `wipeme` | `-` |
+| channel | `correct-horse-ba` selector=7770 | `magnet` selector=82f7 (default) |
+| admin allow-list | 2 keys | empty |
+| autorun script | `: hello ." hi" ;` | empty |
+| BLE | torn down (provisioned) | `# ble: provisioning window open` |
+
+Guards: bare `FACTORY RESET` → `-ERR E_CONFIRM_REQUIRED`; `FACTORY NUKE` →
+`-ERR E_SYNTAX`. New identity stable across a further reboot (regenerated once,
+then persisted).
+
 Quick smoke sequence after flashing (HCP mode):
 
 ```

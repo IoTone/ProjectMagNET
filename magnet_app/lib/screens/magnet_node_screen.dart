@@ -138,10 +138,28 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
     }, 'ADMIN ADD');
   }
 
-  Future<void> _guard(Future<void> Function() action, String label) async {
+  /// Run a privileged action, repairing a stale bond if the node rejects it.
+  ///
+  /// `E_NOT_BONDED` on a link the *platform* calls bonded means the node forgot
+  /// us — factory-reset or reflashed while this phone kept its half. The BLE
+  /// address is unchanged, so Android sees no new device and never re-prompts;
+  /// left alone this fails forever. Drop our half, pair again, retry once.
+  /// See `docs/BLE-PAIRING.md`.
+  Future<void> _guard(Future<void> Function() action, String label,
+      {bool recoverStaleBond = true}) async {
     try {
       await action();
     } on HcpError catch (e) {
+      final MagnetBleTransport? t = _transport;
+      if (e.code == 'E_NOT_BONDED' && recoverStaleBond && t != null) {
+        _snack('This node no longer recognises this phone — re-pairing');
+        final BondOutcome o = await t.recoverStaleBondAndRebond();
+        if (o == BondOutcome.bonded) {
+          return _guard(action, label, recoverStaleBond: false);
+        }
+        _snack('$label failed: could not re-pair (${o.name})');
+        return;
+      }
       _snack('$label failed: ${e.code}');
     } catch (e) {
       _snack('$label failed: $e');

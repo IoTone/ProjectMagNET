@@ -219,6 +219,28 @@ class HcpClient {
 
   Future<void> setName(String name) => command('NAME $name');
 
+  /// Enrol an operator key. `publicKeyHex` is SEC1 uncompressed (`04 ‖ X ‖ Y`,
+  /// 130 chars) — exactly what [OperatorIdentity.publicKeyHex] produces.
+  /// Idempotent on the node: re-adding a key already present is `+OK`.
+  Future<void> adminAdd(String publicKeyHex) =>
+      command('ADMIN ADD $publicKeyHex');
+
+  /// Enrolled admin keys as the node reports them — the leading 8 bytes of
+  /// each 65-byte pubkey, lowercase hex. Empty list means an empty allow-list,
+  /// which is the state where *anyone* can still claim the node.
+  ///
+  /// The node answers with `#` comment lines, so this reads [lastComments]
+  /// rather than the `+OK` body (same shape as [stats]).
+  Future<List<String>> adminList() async {
+    await command('ADMIN LIST');
+    final List<String> out = <String>[];
+    for (final String c in lastComments) {
+      final Match? m = RegExp(r'^admin key \d+:\s*([0-9a-f]+)').firstMatch(c);
+      if (m != null) out.add(m.group(1)!);
+    }
+    return out;
+  }
+
   Future<void> chat(String text) => command('CHAT $text');
 
   Future<void> subscribe(List<String> classes) =>

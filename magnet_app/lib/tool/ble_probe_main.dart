@@ -23,6 +23,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../magnet/hcp.dart';
 import '../magnet/magnet_ble.dart';
+import '../magnet/operator_identity.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -196,7 +197,13 @@ Future<void> _run() async {
     // from an empty room, and easy to hit when re-running a probe like this.
     // So: if a scan sees literally nothing, wait out the window and try once
     // more before believing it.
-    _out('\n--- scanning for a MagNET node ---');
+    // With more than one node on the bench, "first MagNET-* seen" picks an
+    // arbitrary one — and then the console you are watching stays silent while
+    // the probe talks to a different board. Pin the target:
+    //     flutter run … --dart-define=MAGNET_TARGET=MagNET-98db
+    const String want = String.fromEnvironment('MAGNET_TARGET');
+    _out('\n--- scanning for a MagNET node'
+        '${want.isEmpty ? "" : " (target $want)"} ---');
     BluetoothDevice? node;
     String advName = '';
     final Set<String> allSeen = <String>{};
@@ -213,7 +220,9 @@ Future<void> _run() async {
         final List<String> uuids = r.advertisementData.serviceUuids
             .map((Guid g) => g.str.toLowerCase())
             .toList();
-        if (node == null && MagnetUuids.looksLikeNode(name: n, serviceUuids: uuids)) {
+        final bool wanted = want.isEmpty || n == want;
+        if (node == null && wanted &&
+            MagnetUuids.looksLikeNode(name: n, serviceUuids: uuids)) {
           node = r.device;
           advName = n;
           _out('  found "$n"  ${r.device.remoteId.str}  '
@@ -280,6 +289,30 @@ Future<void> _run() async {
     final List<String> traffic = <String>[];
     hcp.traffic.listen(traffic.add);
 
+    // A bond the *platform* reports but the node does not honour is the
+    // signature of a node that was FACTORY RESET (or reflashed) while this
+    // phone kept its half. The address is unchanged, so Android sees no new
+    // device and never prompts — it just keeps offering an LTK the node lost.
+    // One privileged verb reveals it; nothing else will.
+    bool linkBonded = bonded;
+    if (bonded) {
+      try {
+        await hcp.setName('probe');
+      } on HcpError catch (e) {
+        if (e.code == 'E_NOT_BONDED') {
+          _out('stale bond — node forgot us; clearing and re-pairing');
+          _pairing.value = true;
+          final BondOutcome again = await t.recoverStaleBondAndRebond(
+              timeout: const Duration(seconds: 90));
+          _pairing.value = false;
+          linkBonded = again == BondOutcome.bonded;
+          _check('stale bond detected and recovered', linkBonded, again.name);
+        }
+      } catch (_) {
+        // Any other failure here is reported by the checks that follow.
+      }
+    }
+
 
     // 4. the round trip that proves framing over GATT
     try {
@@ -336,10 +369,46 @@ Future<void> _run() async {
       _check('privileged verb (NAME) applied', w['name'] == 'probe', '${w['name']}');
     } on HcpError catch (e) {
       // Unbonded this is the *correct* answer; bonded it is a failure.
-      _check(bonded ? 'privileged verb applied' : 'privileged verb gated cleanly',
-          !bonded && e.code == 'E_NOT_BONDED', e.code);
+      _check(linkBonded ? 'privileged verb applied' : 'privileged verb gated cleanly',
+          !linkBonded && e.code == 'E_NOT_BONDED', e.code);
     } catch (e) {
       _check('privileged verb (NAME)', false, '$e');
+    }
+
+    // 10. operator enrolment — SCOPE.md M2. This is the step that makes the
+    //     node answer to *this phone* and refuse everyone else, and it must
+    //     happen before CHANNEL SET, which takes BLE away for good.
+    if (linkBonded) {
+      try {
+        final OperatorIdentity op = await OperatorIdentity.loadOrCreate();
+        _out('operator key ${op.fingerprint} (${op.publicKeyHex.length} hex)');
+        _check('operator key is SEC1 uncompressed',
+            op.publicKeyHex.length == 130 && op.publicKeyHex.startsWith('04'),
+            op.publicKeyHex.substring(0, 16));
+
+        await hcp.adminAdd(op.publicKeyHex);
+        List<String> keys = await hcp.adminList();
+        // The node prints the first 8 bytes: '04' + the first 7 of X. The
+        // app's fingerprint is the first 4 bytes of X — so a node entry for
+        // this operator starts with '04' + fingerprint.
+        final String want = '04${op.fingerprint}';
+        _check('ADMIN ADD enrolls the operator key',
+            keys.any((String k) => k.startsWith(want)), '$keys');
+
+        // Re-adding must be a no-op, not a duplicate or an error: provisioning
+        // gets retried, and a 4-slot allow-list fills up fast if it isn't.
+        final int before = keys.length;
+        await hcp.adminAdd(op.publicKeyHex);
+        keys = await hcp.adminList();
+        _check('ADMIN ADD is idempotent', keys.length == before,
+            '$before -> ${keys.length}');
+      } on HcpError catch (e) {
+        _check('ADMIN ADD enrolls the operator key', false, e.code);
+      } catch (e) {
+        _check('ADMIN ADD enrolls the operator key', false, '$e');
+      }
+    } else {
+      _out('skipped enrolment checks: link not bonded');
     }
 
     _out('\n--- traffic sample ---');

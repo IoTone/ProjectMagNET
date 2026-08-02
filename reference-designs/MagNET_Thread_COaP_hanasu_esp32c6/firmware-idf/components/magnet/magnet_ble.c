@@ -190,9 +190,20 @@ static int chr_access(uint16_t conn, uint16_t attr,
         uint8_t tmp[256];
         if (len > sizeof(tmp)) len = sizeof(tmp);
         ble_hs_mbuf_to_flat(ctxt->om, tmp, len, NULL);
-        /* a short write ends the message; a full-MTU write may be a fragment */
+        /* Message-boundary rule. A write SHORTER than the ATT payload limit
+         * ends the message. A write that EXACTLY fills it may be mid-line, so
+         * hold it and wait for more. A write LONGER than the limit can only
+         * have arrived as a queued ("long") write, which NimBLE has already
+         * reassembled — that is a complete message by construction.
+         *
+         * The old rule (`len < limit`) got that last case backwards and parked
+         * such writes in the buffer forever: no response, no error, nothing on
+         * the wire. It only bit commands too long for one payload, so short
+         * verbs worked and `ADMIN ADD <130-hex pubkey>` silently never
+         * answered (observed over BLE 2026-08-02). */
         uint16_t mtu = (conn != BLE_HS_CONN_HANDLE_NONE) ? ble_att_mtu(conn) : 23;
-        bool complete = (len < (mtu > 3 ? mtu - 3 : 20));
+        uint16_t payload = (mtu > 3) ? (uint16_t)(mtu - 3) : 20;
+        bool complete = (len != payload);
         ble_feed(tmp, len, complete);
         return 0;
     }
@@ -312,6 +323,10 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
         if (s_running) advertise();
         break;
     case BLE_GAP_EVENT_MTU:
+        /* Worth a line: the negotiated MTU decides both the notify chunk size
+         * and the write-fragment boundary, so a surprise value here explains a
+         * whole class of "long command never answered" symptoms. */
+        mn_emit_event("# ble: mtu negotiated %u", event->mtu.value);
         break;
     default:
         break;

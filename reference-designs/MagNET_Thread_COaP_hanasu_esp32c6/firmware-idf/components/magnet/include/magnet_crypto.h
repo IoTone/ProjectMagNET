@@ -21,6 +21,14 @@ extern "C" {
 
 #define MN_PBKDF2_ITERS 100000   /* Path B stretch; tune toward ~1 s on the C6 */
 
+/* Path B is deliberately slow, and the C6 is single-core: run all 100k
+ * iterations in one mbedtls call and IDLE never gets scheduled, so the task
+ * watchdog fires mid-`CHANNEL SET` (observed 2026-08-01). Give the CPU up
+ * every this-many iterations instead. Small enough that the gap between
+ * yields stays well under the 5 s watchdog, large enough that the added
+ * ~10 ms-per-yield tick cost stays negligible against the stretch itself. */
+#define MN_PBKDF2_YIELD_EVERY 5000
+
 typedef struct {
     bool     set;
     char     cred_path;          /* 'A' | 'B' | 'C' — how the secret arrived   */
