@@ -34,6 +34,9 @@ void main() {
 /// a hang, so every line lands here as well as in the log.
 final ValueNotifier<List<String>> _lines = ValueNotifier<List<String>>(<String>[]);
 final ValueNotifier<bool> _busy = ValueNotifier<bool>(true);
+/// Shown while pairing is in flight, so the screen is not silent while the
+/// tester is expected to answer the system prompt.
+final ValueNotifier<bool> _pairing = ValueNotifier<bool>(false);
 
 class _ProbeApp extends StatefulWidget {
   const _ProbeApp();
@@ -65,7 +68,33 @@ class _ProbeAppState extends State<_ProbeApp> {
               ),
             ),
           ),
-          body: ValueListenableBuilder<List<String>>(
+          body: Column(children: <Widget>[
+            ValueListenableBuilder<bool>(
+              valueListenable: _pairing,
+              builder: (_, bool active, __) => !active
+                  ? const SizedBox.shrink()
+                  : Container(
+                      width: double.infinity,
+                      color: Colors.amber.shade800,
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          const Text('Pairing — accept on your phone',
+                              style: TextStyle(
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.bold, fontSize: 20)),
+                          const SizedBox(height: 8),
+                          const Text(
+                              'Android will show a pairing request. Accept it. '
+                              'The screen is held awake, so take your time.',
+                              style: TextStyle(
+                                  color: Colors.black87, fontSize: 14)),
+                        ],
+                      ),
+                    ),
+            ),
+            Expanded(child: ValueListenableBuilder<List<String>>(
             valueListenable: _lines,
             builder: (_, List<String> ls, __) => ListView.builder(
               padding: const EdgeInsets.all(12),
@@ -91,7 +120,8 @@ class _ProbeAppState extends State<_ProbeApp> {
                 );
               },
             ),
-          ),
+            )),
+          ]),
         ),
       );
 }
@@ -230,9 +260,26 @@ Future<void> _run() async {
       return _summary();
     }
 
+    // Bond immediately: Android initiates pairing as soon as it sees the
+    // encryption-required characteristic, and if that attempt is left to time
+    // out it takes the whole connection with it.
+    _out('BONDING — accept the pairing request on the phone (2 attempts)');
+    _pairing.value = true;
+    BondOutcome outcome = await t.bond(timeout: const Duration(seconds: 90));
+    if (outcome == BondOutcome.timedOut) {
+      // A missed prompt should not fail the run; ask once more.
+      _out('prompt not answered — asking again');
+      outcome = await t.bond(timeout: const Duration(seconds: 90));
+    }
+    _pairing.value = false;
+    final bool bonded = outcome == BondOutcome.bonded ||
+        outcome == BondOutcome.alreadyBonded;
+    _check('bonding completes', bonded, outcome.name);
+
     final HcpClient hcp = HcpClient(t);
     final List<String> traffic = <String>[];
     hcp.traffic.listen(traffic.add);
+
 
     // 4. the round trip that proves framing over GATT
     try {
@@ -282,10 +329,6 @@ Future<void> _run() async {
     }
 
     // 8. bond, then the privileged verb should be accepted
-    final bool bonded = await t.bond();
-    _check('bonding completes', bonded,
-        bonded ? 'link encrypted' : 'no pairing after 30s');
-
     // 9. privileged write — NAME changes config, so it needs the encrypted link
     try {
       await hcp.setName('probe');

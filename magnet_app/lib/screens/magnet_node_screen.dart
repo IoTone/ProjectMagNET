@@ -130,6 +130,7 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
   Future<void> _enrollOperator() async {
     final OperatorIdentity? op = _operator;
     if (op == null) return;
+    if (!await _ensureBonded()) return;
     await _guard(() async {
       await _hcp!.command(op.adminAddCommand);
       await _readAdmins();
@@ -153,9 +154,102 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
         .showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  /// Ensure the link is bonded before a privileged verb.
+  ///
+  /// Blocks on the platform's own bond state. There is deliberately no
+  /// in-app "pair" button: only the OS prompt can complete a bond, and
+  /// offering a substitute makes users answer the wrong thing and silently
+  /// leaves the real request unanswered.
+  Future<bool> _ensureBonded() async {
+    final MagnetBleTransport? t = _transport;
+    if (t == null) return false;
+
+    bool done = false;
+    BondOutcome? outcome;
+
+    unawaited(t.bond().then((BondOutcome o) {
+      outcome = o;
+      done = true;
+      if (mounted) Navigator.of(context, rootNavigator: true).maybePop();
+    }));
+
+    // Give the platform a moment; if it bonds instantly there is no need to
+    // put a dialog in the user's face at all.
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    if (!done && mounted) {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext ctx) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            title: const Text('Accept the pairing request'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Your phone is showing a Bluetooth pairing request for this '
+                  'node — it may appear as a notification. Accept it to '
+                  'continue.',
+                ),
+                const SizedBox(height: 16),
+                StreamBuilder<BluetoothBondState>(
+                  stream: t.bondState,
+                  builder: (_, AsyncSnapshot<BluetoothBondState> snap) {
+                    final String s = switch (snap.data) {
+                      BluetoothBondState.bonded => 'Paired',
+                      BluetoothBondState.bonding => 'Waiting for you to accept…',
+                      _ => 'Requesting…',
+                    };
+                    return Row(
+                      children: <Widget>[
+                        const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2)),
+                        const SizedBox(width: 12),
+                        Text(s),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    switch (outcome) {
+      case BondOutcome.bonded:
+      case BondOutcome.alreadyBonded:
+        return true;
+      case BondOutcome.declined:
+        _snack('Pairing was declined — the node cannot be configured without it');
+        return false;
+      case BondOutcome.timedOut:
+        _snack('No answer to the pairing request. Try again and accept the '
+            'prompt on your phone.');
+        return false;
+      case BondOutcome.unsupported:
+        _snack('This node firmware does not support pairing');
+        return false;
+      case null:
+        return false;   // cancelled while still in flight
+    }
+  }
+
   Future<void> _setName() async {
     final String n = _nameCtl.text.trim();
     if (n.isEmpty) return;
+    if (!await _ensureBonded()) return;
     await _guard(() async {
       await _hcp!.setName(n);
       await _refresh();
@@ -195,6 +289,7 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
     // down, so anything not done before it cannot be done at all over this
     // link — including handing the node its admin key.
     final OperatorIdentity? op = _operator;
+    if (!await _ensureBonded()) return;
     if (op != null && _adminCount <= 0) {
       try {
         await _hcp!.command(op.adminAddCommand);

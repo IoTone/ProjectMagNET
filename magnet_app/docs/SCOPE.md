@@ -112,20 +112,29 @@ allow-list, so this needed no new C.
       verb tears the BLE stack down and nothing can be done over the link after it
 - [x] `ADMIN LIST` review, with a warning card when the allow-list is empty
 - [ ] Signed `ROTATE` from the app (needs a live node link — gated on M3)
-- [ ] Enrolment on hardware: `ADMIN ADD` is privileged, so it needs a bonded
-      link, which the probe could not establish (see the bonding note below)
+- [ ] Enrolment on hardware: `ADMIN ADD` is privileged and now reachable —
+      bonding works, so this is unblocked and is the next thing to run
 
 > **`cryptography` is unusable here.** Its P-256 is a platform-binding shim
 > whose pure-Dart path throws `UnimplementedError` — it cannot be unit-tested
 > and fails wherever the native binding is absent. Swapped for `pointycastle`,
 > which does keygen, SEC1 encoding and signing in pure Dart everywhere.
 
-> **Bonding is unproven.** The probe reached `E_NOT_BONDED`, which is the
-> correct answer for an unbonded link, but pairing itself never completed on
-> this Mac — most likely a stale CoreBluetooth bond from earlier sessions.
-> Everything behind the bonding gate (NAME, ADMIN ADD, CHANNEL SET over BLE)
-> is therefore still untested. **Testing from a phone that has never paired
-> with the node is the next step.**
+> **Bonding works as of 2026-08-01** — `enc_change status=0`, `NAME` accepted
+> over BLE, real bond recorded on the phone (14/14 on the Android probe).
+>
+> The hard-won lesson: **only the OS pairing prompt can complete a bond.** An
+> in-app "Pair now" button caused eight consecutive false failures, because
+> tapping it left the real system request unanswered. There is now no in-app
+> pairing affordance anywhere; the app follows `device.bondState` and blocks
+> privileged actions behind a non-dismissible dialog until the platform
+> reports bonded, declined, or timed out.
+>
+> See **`reference-designs/MagNET_Thread_COaP_hanasu_esp32c6/docs/BLE-PAIRING.md`**
+> for the full account of what is established on both the NimBLE and Android
+> sides, and — importantly — what remains unverified (bond persistence across
+> reboot, re-pairing after NVS erase, `CHANNEL SET` over BLE end to end, iOS
+> entirely, and whether `ble_store_config_init()` was actually required).
 
 *Ends when:* a node provisioned by this phone will accept a fleet command from
 it and refuse one from anything else.

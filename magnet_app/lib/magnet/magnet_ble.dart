@@ -13,8 +13,28 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'hcp.dart';
+
+/// Why a bond attempt ended. The caller must distinguish "the user said no"
+/// from "the prompt was never answered" — they need different UI.
+enum BondOutcome {
+  /// Already bonded from a previous session; nothing to do.
+  alreadyBonded,
+
+  /// The user accepted the system prompt and the link is encrypted.
+  bonded,
+
+  /// The user actively dismissed or denied the system pairing request.
+  declined,
+
+  /// Nobody answered the prompt in time.
+  timedOut,
+
+  /// This firmware has no auth characteristic, so bonding cannot be triggered.
+  unsupported,
+}
 
 /// Service and characteristic UUIDs (§11.2.1).
 class MagnetUuids {
@@ -130,44 +150,74 @@ class MagnetBleTransport implements HcpTransport {
     throw StateError('write stayed busy: $last');
   }
 
-  /// Bond with the node, so privileged verbs (`NAME`, `ADMIN ADD`,
-  /// `CHANNEL SET`) are accepted instead of answering `E_NOT_BONDED`.
-  ///
-  /// Works by reading the encryption-required auth characteristic: that is an
-  /// operation the central *must* encrypt, so it starts pairing. Returns true
-  /// once the read succeeds, meaning the link is encrypted.
-  Future<bool> bond({Duration timeout = const Duration(seconds: 45)}) async {
-    final BluetoothCharacteristic? a = _auth;
-    if (a == null) return false;            // firmware predates the auth char
+  /// Live bond state, straight from the platform. The UI must follow this
+  /// rather than any in-app affordance: **only the operating system's own
+  /// pairing prompt can complete a bond.** An in-app "pair" button is worse
+  /// than useless — a user who taps it instead of the system prompt believes
+  /// they have answered, while the real request goes unanswered and the link
+  /// dies. Show progress, never a substitute action.
+  Stream<BluetoothBondState> get bondState => _device.bondState;
 
-    // Android: ask for the bond explicitly. Relying on an encrypted read to
-    // trigger it makes the OS post a *notification* ("Tap to pair with …")
-    // rather than a dialog; unattended, nobody taps it and SMP times out
-    // (enc_change status=13). createBond() is the app-initiated path and
-    // completes Just Works pairing without that detour. No iOS equivalent
-    // exists — there the encrypted read below is the trigger.
+  /// Trigger bonding and wait for the user to answer the system prompt.
+  ///
+  /// Returns why it ended so the caller can tell "declined" from "ignored".
+  Future<BondOutcome> bond({
+    Duration timeout = const Duration(seconds: 120),
+  }) async {
+    final BluetoothCharacteristic? a = _auth;
+    if (a == null) return BondOutcome.unsupported;
+
+    if (await _device.bondState.first == BluetoothBondState.bonded) {
+      return BondOutcome.alreadyBonded;
+    }
+
+    // Hold the screen awake: Android's prompt does not survive the display
+    // dimming, and a torn-down prompt reads to the node as a plain timeout.
+    try {
+      await WakelockPlus.enable();
+    } catch (_) {}
+
+    final Completer<BondOutcome> done = Completer<BondOutcome>();
+    bool sawBonding = false;
+    final StreamSubscription<BluetoothBondState> sub =
+        _device.bondState.listen((BluetoothBondState s) {
+      if (s == BluetoothBondState.bonded) {
+        if (!done.isCompleted) done.complete(BondOutcome.bonded);
+      } else if (s == BluetoothBondState.bonding) {
+        sawBonding = true;                    // prompt is up
+      } else if (s == BluetoothBondState.none && sawBonding) {
+        // bonding -> none means the request was refused or dismissed
+        if (!done.isCompleted) done.complete(BondOutcome.declined);
+      }
+    });
+
+    // Ask for the bond. On Android this is the app-initiated path; elsewhere
+    // reading the encryption-required characteristic is the trigger.
     if (Platform.isAndroid) {
       try {
-        if (!(await _device.bondState.first == BluetoothBondState.bonded)) {
-          await _device.createBond();
-        }
-      } catch (_) {
-        // already bonding, or the platform refused — the read still tries
-      }
+        await _device.createBond();
+      } catch (_) {/* already bonding, or the platform refused */}
+    } else {
+      unawaited(a.read().catchError((_) => <int>[]));
     }
 
-    final DateTime deadline = DateTime.now().add(timeout);
-    while (DateTime.now().isBefore(deadline)) {
-      try {
-        await a.read();
-        return true;
-      } catch (_) {
-        // Pairing is in flight (or the user has yet to accept); the read
-        // fails until the link is encrypted.
-        await Future<void>.delayed(const Duration(seconds: 2));
-      }
+    BondOutcome outcome;
+    try {
+      outcome = await done.future.timeout(timeout);
+    } on TimeoutException {
+      outcome = BondOutcome.timedOut;
+    } finally {
+      await sub.cancel();
+      await releaseWakelock();
     }
-    return false;
+    return outcome;
+  }
+
+  /// Release the screen lock taken for bonding.
+  Future<void> releaseWakelock() async {
+    try {
+      await WakelockPlus.disable();
+    } catch (_) {}
   }
 
   Future<void> dispose() async {

@@ -232,6 +232,16 @@ Two build gotchas were hit and fixed (both in this project, both worth knowing):
   breaking every `openthread/*.cpp` with `invalid digit "9" in octal constant`.
   Fixed by `patch_openthread_datetime.py` (pre-build, idempotent).
 
+## BLE pairing
+
+Bonding is subtle and cost a lot of cycles to get right. Before touching
+`magnet_ble.c`'s security configuration or the app's bonding path, read
+**`../docs/BLE-PAIRING.md`** — it records what is established (with evidence)
+and what is still unverified on both the NimBLE and Android sides.
+
+The single most important point: **only the OS pairing prompt can complete a
+bond**; no in-app affordance can substitute for it.
+
 ## Test & diagnostics surface
 
 Every diagnostic exists twice — HCP verb and Forth word — backed by the same C

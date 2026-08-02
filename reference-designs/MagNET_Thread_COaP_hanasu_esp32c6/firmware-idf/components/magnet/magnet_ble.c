@@ -41,6 +41,13 @@
 
 #define TAG "mn_ble"
 
+/* No public header exports this — ESP-IDF's own NimBLE examples forward
+ * declare it exactly like this. It installs the NVS-backed key store; without
+ * it the security manager has nowhere to put link keys, so pairing starts and
+ * then stalls until it times out (enc_change status=13). NimBLE-Arduino calls
+ * it during init too, which is why bonding "just works" there. */
+void ble_store_config_init(void);
+
 /* §11.2.1 provisional UUIDs: 6d61676e-2d68-6370-0001-0000000000NN */
 /* Displayed form (§11.2.1): 6d61676e-2d68-6370-0001-0000000000NN
  * = ASCII "magn" "-h" "cp". BLE_UUID128_INIT wants the bytes REVERSED. */
@@ -250,6 +257,30 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
         }
         break;
 
+    case BLE_GAP_EVENT_PASSKEY_ACTION:
+        /* Under Secure Connections a peer can still ask for numeric
+         * comparison even though we declared NO_INPUT_OUTPUT. Without a
+         * handler the exchange simply stalls until it times out
+         * (enc_change status=13) — which is exactly the symptom we chased.
+         * A screenless node cannot compare anything, so accept. */
+        mn_emit_event("# ble: passkey action=%d", event->passkey.params.action);
+        if (event->passkey.params.action == BLE_SM_IOACT_NUMCMP) {
+            struct ble_sm_io io = {
+                .action = BLE_SM_IOACT_NUMCMP,
+                .numcmp_accept = 1,
+            };
+            int rc = ble_sm_inject_io(event->passkey.conn_handle, &io);
+            mn_emit_event("# ble: numcmp accepted rc=%d", rc);
+        } else if (event->passkey.params.action == BLE_SM_IOACT_OOB ||
+                   event->passkey.params.action == BLE_SM_IOACT_INPUT ||
+                   event->passkey.params.action == BLE_SM_IOACT_DISP) {
+            /* We advertise no I/O, so these should never be requested; log
+             * loudly if they are, rather than hanging. */
+            mn_emit_event("!WARN ble-unsupported-pairing-action %d",
+                          event->passkey.params.action);
+        }
+        return 0;
+
     case BLE_GAP_EVENT_ENC_CHANGE: {
         struct ble_gap_conn_desc d;
         s_encrypted = (event->enc_change.status == 0) &&
@@ -328,14 +359,16 @@ int mn_ble_start(void) {
     ble_hs_cfg.sm_bonding = 1;                 /* LE Secure Connections bond  */
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;  /* screenless: Just Works */
     ble_hs_cfg.sm_sc = 1;
+    /* State it explicitly rather than relying on the default: with no display
+     * and no keypad, MITM protection is impossible, so ask for Just Works. */
+    ble_hs_cfg.sm_mitm = 0;
     /* Distribute identity keys as well as encryption keys: a bond that keeps
      * only an LTK cannot be re-established once either side changes address. */
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
-    /* NB: the NVS-backed key store (ble_store_config_init) is wired up by
-     * NimBLE's own sysinit when CONFIG_BT_NIMBLE_NVS_PERSIST=y — there is no
-     * public header for it and calling it here does not compile. */
+    ble_store_config_init();       /* key store — see the declaration above */
+
     ble_svc_gap_init();
     ble_svc_gatt_init();
     if (ble_gatts_count_cfg(s_svcs) != 0 || ble_gatts_add_svcs(s_svcs) != 0) return -2;
