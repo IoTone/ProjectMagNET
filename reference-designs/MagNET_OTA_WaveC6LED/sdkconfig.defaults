@@ -1,0 +1,32 @@
+# Waveshare ESP32-C6-LCD-1.47 — 4 MB flash, 512 KB HP SRAM, no PSRAM.
+CONFIG_IDF_TARGET="esp32c6"
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Single factory app. Forth bundles are SOURCE, not app images, so this device
+# never needs a dual ota_0/ota_1 layout — which is just as well, because two
+# app slots plus this much WiFi does not fit comfortably in 4 MB.
+CONFIG_PARTITION_TABLE_SINGLE_APP=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Console: LEAVE AT THE DEFAULT (UART). Setting
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y makes USB-serial-JTAG the *only* console,
+# and IDF 5.1.1 then fails to build:
+#   esp_hw_support/sleep_modes.c:153: 'CONFIG_ESP_CONSOLE_UART_BAUDRATE'
+#   undeclared
+# because sleep_modes.c references it unconditionally while the USB-only path
+# never defines it. Do not "fix" this by re-adding the flag.
+#
+# It costs us nothing: the REPL writes through usb_serial_jtag_write_bytes()
+# directly rather than through the console, exactly as ESPIDFORTH does, so the
+# USB-C port is the working I/O path regardless of what the console is set to.
+# The secondary console below puts ESP_LOGx on USB too.
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# WiFi stays OFF for D0. The ESPIDFORTH C6 config disables it "to conserve
+# memory" and networking on this target is unproven (plan §2.2.3) — D1 turns it
+# on and measures, rather than assuming it fits.
+CONFIG_ESP_WIFI_ENABLED=n
+CONFIG_BT_ENABLED=n
