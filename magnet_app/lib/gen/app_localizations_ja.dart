@@ -409,6 +409,9 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
+  String get meshBackfillTag => '接続前';
+
+  @override
   String get meshNeighbors => '近隣ノード';
 
   @override

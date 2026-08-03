@@ -164,6 +164,12 @@ int  mn_recent_fill(uint8_t *buf, size_t cap);  /* [2B BE len][frame]…, oldest
 int  mn_recent_fetch(const char *peer_ipv6);    /* CoAP GET to a peer; frames
                                                    replay async as events.
                                                    0=sent -1=no radio -2=bad ip */
+/* Replay OUR OWN ring to the host as `!RCHAT <chan> <id> <name> <text>` lines
+ * (oldest-first, chat event class). This is how a host that was away — the
+ * phone app reconnecting to its companion — backfills its feed: the node's
+ * dedup would (correctly) swallow these frames on the mesh path, so they get
+ * a distinct event that bypasses mesh processing entirely. */
+void mn_recent_print(void);
 
 /* ---- Event pump (§12.4) ----
  * OpenThread callbacks run with the OT lock held; taking the TX mutex there

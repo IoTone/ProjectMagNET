@@ -169,6 +169,11 @@ via the Dashboard "Live mesh" card, route `/mesh`.
       a peer chats or joins
 - [x] Chat send/receive — the app becomes a mesh client, not just a tool
 - [x] Mesh topology from `MESH`: role, partition, RLOC16, neighbours + RSSI
+- [x] **Feed backfill on connect** *(added 2026-08-03, needs fw ≥ 0.6.0-eg)*:
+      the app sends no-arg `RECENT` after subscribing; the companion replays
+      its ring as `!RCHAT` events → rendered as dimmed "earlier" chat items,
+      deduped against anything the feed already shows. Older firmware answers
+      `E_UNKNOWN_VERB` and the feed simply stays live-only.
 
 *Ends when:* you can watch mesh traffic and talk to the mesh from the phone.
 **Done** — bench chat from `xray1` rendered live on the phone through

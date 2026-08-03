@@ -600,6 +600,64 @@ int mn_recent_fill(uint8_t *buf, size_t cap) {
     return (int)n;
 }
 
+/* Local replay for a reconnecting host (see magnet.h). Statics because both
+ * the serial dispatcher and the BLE worker can run verbs — guarded by their
+ * own mutex. Each frame is snapshotted under the ring mutex then processed
+ * outside it: emitting takes the TX mutex, and the send path already nests
+ * TX-mutex → ring-mutex, so nesting the other way here would ABBA. */
+void mn_recent_print(void) {
+    static SemaphoreHandle_t print_mutex = NULL;
+    static uint8_t frame[MN_ENV_MAX_FRAME], pt[MN_ENV_MAX_FRAME];
+    static char text[MN_ENV_MAX_FRAME];
+    if (!s_recent_mutex) { mn_emit_event("# recent local: 0 frame(s)"); return; }
+    if (!print_mutex) print_mutex = xSemaphoreCreateMutex();  /* first call is
+        long after boot; worst case two callers race once and leak one mutex */
+    xSemaphoreTake(print_mutex, portMAX_DELAY);
+
+    int emitted = 0;
+    for (int i = MN_RECENT_MAX; i >= 1; i--) {               /* oldest first */
+        uint16_t flen = 0;
+        xSemaphoreTake(s_recent_mutex, portMAX_DELAY);
+        int idx = (s_recent_head - i + MN_RECENT_MAX) % MN_RECENT_MAX;
+        if (s_recent[idx].len) {
+            flen = s_recent[idx].len;
+            memcpy(frame, s_recent[idx].frame, flen);
+        }
+        xSemaphoreGive(s_recent_mutex);
+        if (!flen) continue;
+
+        mn_envelope_t env;
+        if (mn_env_unpack(&env, frame, flen) != 0) continue;
+        if (env.selector != s_chan.selector) continue;       /* stale leftovers */
+        if (env.type != MN_T_CHAT) continue;                 /* ring is chat-only */
+        if (env.flags & MN_F_ENCRYPTED) {
+            if (env.payload_len <= 8) continue;
+            size_t ct_len = env.payload_len - 8;
+            uint8_t nonce[13];
+            mn_nonce_build(nonce, env.sender_id, env.counter, env.epoch, env.selector);
+            const uint8_t *key = (env.epoch == s_epoch) ? s_chan.epoch_key :
+                                 (env.epoch == (uint8_t)(s_epoch - 1)) ? s_prev_epoch_key : NULL;
+            if (!key || mn_aead_decrypt(key, nonce, frame, env.payload, ct_len, pt,
+                                        env.payload + ct_len) != 0) continue;
+            env.payload = pt;
+            env.payload_len = ct_len;
+        }
+
+        char idhex[9];
+        snprintf(idhex, sizeof(idhex), "%02x%02x%02x%02x",
+                 env.sender_id[0], env.sender_id[1], env.sender_id[2], env.sender_id[3]);
+        const char *nm = !memcmp(env.sender_id, s_device_id, 4)
+                             ? s_name : peer_name(env.sender_id);
+        size_t n = env.payload_len < sizeof(text) - 1 ? env.payload_len : sizeof(text) - 1;
+        memcpy(text, env.payload, n);
+        text[n] = '\0';
+        emit_class(MN_EC_CHAT, "!RCHAT %s %s %s %s", MN_CHANNEL_NAME, idhex, nm, text);
+        emitted++;
+    }
+    mn_emit_event("# recent local: %d frame(s)", emitted);
+    xSemaphoreGive(print_mutex);
+}
+
 /* =========================== bringup ====================================== */
 void mn_core_init(void) {
     if (!s_tx_mutex) s_tx_mutex = xSemaphoreCreateRecursiveMutex();

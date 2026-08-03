@@ -854,6 +854,12 @@ abstract class AppLocalizations {
   /// **'last seen {ago}s ago'**
   String meshPeerLastSeen(String ago);
 
+  /// No description provided for @meshBackfillTag.
+  ///
+  /// In en, this message translates to:
+  /// **'earlier'**
+  String get meshBackfillTag;
+
   /// No description provided for @meshNeighbors.
   ///
   /// In en, this message translates to:

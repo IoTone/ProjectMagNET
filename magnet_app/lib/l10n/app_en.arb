@@ -151,6 +151,7 @@
   "meshNoPeers": "No peers seen yet.",
   "meshPeerLastSeen": "last seen {ago}s ago",
   "@meshPeerLastSeen": { "placeholders": { "ago": { "type": "String" } } },
+  "meshBackfillTag": "earlier",
   "meshNeighbors": "Neighbors",
   "meshNoNeighbors": "No neighbors reported.",
   "meshRefresh": "Refresh",

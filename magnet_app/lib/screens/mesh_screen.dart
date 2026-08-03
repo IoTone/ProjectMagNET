@@ -367,6 +367,7 @@ class _FeedLine extends StatelessWidget {
     final String when = '$hh:$mm:$ss';
 
     final (IconData icon, Color color) = switch (item.kind) {
+      'chat' when item.backfill => (Icons.history, cs.onSurfaceVariant),
       'chat' => (Icons.chat_bubble_outline, cs.primary),
       'dm' => (Icons.lock_outline, cs.primary),
       'sent' => (Icons.north_east, cs.tertiary),
@@ -396,8 +397,15 @@ class _FeedLine extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(when,
-              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+          Text(
+              item.backfill
+                  ? AppLocalizations.of(context).meshBackfillTag
+                  : when,
+              style: TextStyle(
+                  fontSize: 11,
+                  color: cs.onSurfaceVariant,
+                  fontStyle:
+                      item.backfill ? FontStyle.italic : FontStyle.normal)),
         ],
       ),
     );

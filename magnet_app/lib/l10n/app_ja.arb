@@ -145,6 +145,7 @@
   "meshNoPeers": "ピアはまだ見つかっていません。",
   "meshPeerLastSeen": "{ago}秒前に確認",
   "@meshPeerLastSeen": { "placeholders": { "ago": { "type": "String" } } },
+  "meshBackfillTag": "接続前",
   "meshNeighbors": "近隣ノード",
   "meshNoNeighbors": "近隣ノードは報告されていません。",
   "meshRefresh": "更新",

@@ -102,7 +102,7 @@ static void emit_caps(const char *tag) {
 
 static void emit_help(const char *tag) {
     mn_write_line("# HCP verbs: STATUS CAPS HELP PING CHAT <text> DM <ipv6> <text> PEERS WHOAMI");
-    mn_write_line("#            RECENT <peer-ipv6>  (catch-up: replay the peer's recent chat)");
+    mn_write_line("#            RECENT [peer-ipv6]  (no arg: replay own ring as !RCHAT; with peer: fetch+merge)");
     mn_write_line("#            NAME <name> MODE TERSE|HUMAN SUB/UNSUB <classes> CHANNEL LIST|SHOW");
     mn_write_line("#            SYSINFO MESH BENCH SELFTEST STATS [RESET] STRESS <secs> <len>");
     mn_write_line("#            HEARTBEAT <secs|0> FORTH PUBKEY ADMIN ADD|LIST ROTATE");
@@ -159,9 +159,16 @@ static void handle_hcp_line(char *line) {
     }
     else if (!strcmp(verb, "PEERS"))  { mn_peers_print(); respond(tag, "+OK"); }
     else if (!strcmp(verb, "RECENT")) {
-        /* E-G SED catch-up: CoAP GET magnet/recent from a peer; the frames
-         * replay async through the normal RX path (dupes drop silently). */
-        if (*rest == '\0') { respond_err(tag, "E_SYNTAX", "RECENT <peer-ipv6>"); return; }
+        /* E-G SED catch-up, two forms:
+         *   RECENT              → replay OUR ring to the host (!RCHAT lines) —
+         *                         a reconnecting phone backfills its feed
+         *   RECENT <peer-ipv6>  → CoAP GET magnet/recent from a peer; frames
+         *                         replay through the RX path (dupes drop) */
+        if (*rest == '\0') {
+            mn_recent_print();
+            respond(tag, "+OK");
+            return;
+        }
         mn_state_t st = mn_get_state();
         if (st != MN_READY && st != MN_DEGRADED) {
             respond_err(tag, "E_BAD_STATE", mn_state_name(st)); return;

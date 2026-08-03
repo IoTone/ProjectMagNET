@@ -28,7 +28,8 @@ enum MeshLinkState { idle, connecting, connected, error }
 
 /// One rendered line of the live feed.
 class MeshFeedItem {
-  MeshFeedItem(this.kind, this.text, {this.from, DateTime? at, this.raw = ''})
+  MeshFeedItem(this.kind, this.text,
+      {this.from, DateTime? at, this.raw = '', this.backfill = false})
       : at = at ?? DateTime.now();
 
   /// `chat` | `dm` | `sent` | `peer` | `role` | `state` | `warn` | `info`
@@ -39,6 +40,11 @@ class MeshFeedItem {
   final String? from;
   final DateTime at;
   final String raw;
+
+  /// True for chat replayed from the companion's ring (`!RCHAT`) — it
+  /// happened while this phone was away, so the timestamp is arrival, not
+  /// origin.
+  final bool backfill;
 }
 
 class MeshPeer {
@@ -242,6 +248,10 @@ class MeshSession extends ChangeNotifier {
           'info', 'connected to ${_companionName ?? id} — live'));
       notifyListeners();
 
+      // Backfill what the channel said while we were away: the companion
+      // replays its recent ring as !RCHAT events (fw ≥ 0.6.0-eg).
+      unawaited(_backfill(link));
+
       // Best-effort snapshots; the feed is already live if these are slow.
       unawaited(refreshPeers());
       unawaited(refreshTopology());
@@ -257,6 +267,15 @@ class MeshSession extends ChangeNotifier {
     await _teardown();
     _state = MeshLinkState.idle;
     notifyListeners();
+  }
+
+  /// Ask the companion to replay its ring (`RECENT`, no argument). The
+  /// !RCHAT events flow through [_onEvent] like live traffic; older firmware
+  /// answers E_UNKNOWN_VERB and the feed simply stays live-only.
+  Future<void> _backfill(MeshLink link) async {
+    try {
+      await link.client.command('RECENT');
+    } catch (_) {}
   }
 
   Future<void> _teardown() async {
@@ -281,6 +300,20 @@ class MeshSession extends ChangeNotifier {
             from: e.fields.length > 2 ? e.fields[2] : e.fields.elementAtOrNull(1),
             raw: e.raw));
         _touchPeer(e.fields.elementAtOrNull(1), e.fields.elementAtOrNull(2));
+        break;
+      case 'rchat':
+        // !RCHAT <channel> <idhex> <name> <text…> — ring replay. Skip
+        // anything the feed already shows (live catch, local echo, or an
+        // earlier backfill of the same reconnect session).
+        final String rtext = e.text;
+        final bool seen = _feed.any((MeshFeedItem f) =>
+            f.text == rtext &&
+            (f.kind == 'chat' || f.kind == 'sent'));
+        if (seen) break;
+        _addFeed(MeshFeedItem('chat', rtext,
+            from: e.fields.length > 2 ? e.fields[2] : e.fields.elementAtOrNull(1),
+            raw: e.raw,
+            backfill: true));
         break;
       case 'dm':
         // !DM <idhex> <name> <text…>

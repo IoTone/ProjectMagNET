@@ -7,7 +7,7 @@ import 'package:magnet_app/magnet/hcp.dart';
 import 'package:magnet_app/magnet/mesh_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Scripted node: answers commands like the 0.5.0-ee firmware, and lets a
+/// Scripted node: answers commands like the 0.6.0-eg firmware, and lets a
 /// test inject unsolicited `!` events at any time.
 class FakeNodeTransport implements HcpTransport {
   final StreamController<String> _lines = StreamController<String>.broadcast();
@@ -40,6 +40,13 @@ class FakeNodeTransport implements HcpTransport {
       case 'PEERS':
         emit('# peer 2ca44570 xray1 fdde::1 last-seen=12s ago');
         emit('# peer 46a359bf sdk-b fdde::2 last-seen=61s ago');
+        emit('$tag +OK');
+        break;
+      case 'RECENT':
+        // No-arg form: replay the node's own ring, then answer.
+        emit('!RCHAT magnet 2ca44570 xray1 missed-while-away');
+        emit('!RCHAT magnet e1256131 probe own-echo');
+        emit('# recent local: 2 frame(s)');
         emit('$tag +OK');
         break;
       case 'MESH':
@@ -148,6 +155,34 @@ void main() {
         isTrue);
     expect(session.feed.last.kind, 'sent');
     expect(session.feed.last.text, 'anyone home?');
+  });
+
+  test('connect backfills the feed from the companion ring (!RCHAT)', () async {
+    await session.adopt('X', name: 'probe');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(transport.sent.any((String s) => s.endsWith(' RECENT')), isTrue);
+    final List<MeshFeedItem> backfilled =
+        session.feed.where((MeshFeedItem f) => f.backfill).toList();
+    expect(backfilled, hasLength(2));
+    expect(backfilled.first.kind, 'chat');
+    expect(backfilled.first.text, 'missed-while-away');
+    expect(backfilled.first.from, 'xray1');
+  });
+
+  test('replayed duplicates are skipped', () async {
+    await session.adopt('X');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final int base = session.feed.length; // adopt already backfilled 2 items
+
+    transport.emit('!RCHAT magnet 2ca44570 xray1 missed-while-away'); // dupe
+    transport.emit('!RCHAT magnet 2ca44570 xray1 genuinely-new');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final List<MeshFeedItem> added = session.feed.sublist(base);
+    expect(added, hasLength(1));
+    expect(added.single.text, 'genuinely-new');
+    expect(added.single.backfill, isTrue);
   });
 
   test('forget clears the remembered companion', () async {

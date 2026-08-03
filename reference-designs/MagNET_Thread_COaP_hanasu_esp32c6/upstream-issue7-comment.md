@@ -1,48 +1,80 @@
 # Draft comment for IoTone/PONY-Cyberdeck-25#7 (post manually / edit freely)
 
-## MagNET Hanasu v2 as the mesh add-on — now with an on-device Forth control surface
+## MagNET Hanasu v2 as the mesh add-on — implementation complete, hardware-validated
 
-Status update from the ProjectMagNET side. The OpenThread/CoAP prototype referenced above has
-grown into a formal design (MagNET Hanasu v2, rev 2.2) plus a working ESP-IDF re-platform, and
-it maps onto this issue's requirements as an **add-on option** for the deck:
+Status update from the ProjectMagNET side, and it's a good one: the design
+(MagNET Hanasu v2, rev 2.2) is no longer a proposal with a prototype behind it —
+**the full firmware phase table (E-A through E-G) is implemented and validated on
+a 4-node ESP32-C6 bench** (fw 0.6.0-eg, ESP-IDF 5.3.1). Encrypted mesh chat,
+seed-phrase credentials, signed admin ops, BLE phone access, on-device Forth
+automation, and offline catch-up all work on real hardware today.
 
-**Shape of the add-on:** any ESP32-C6 board ($3–10 — XIAO ESP32C6, M5NanoC6, bare devkit) wired
-to the deck's Arduino-compatible GPIO port (UART) or USB. The deck talks a line-based **Host
-Control Protocol** (HCP): `CHAT hello`, `DM <addr> <text>`, `CHANNEL SET <cred>`, with async
-traffic arriving as `!CHAT …` events — trivial to drive from Python/Node/Rust, a chat UI, or an
-LLM agent. Same grammar later over USB-CDC, BLE-GATT (phones/headsets), and WebSocket.
+**Shape of the add-on (unchanged):** any ESP32-C6 board ($3–10 — XIAO ESP32C6,
+M5NanoC6, bare devkit) wired to the deck's Arduino-compatible GPIO port (UART) or
+USB. The deck talks a line-based **Host Control Protocol** (HCP): `CHAT hello`,
+`DM <addr> <text>`, `CHANNEL SET <cred>`, with async traffic arriving as
+`!CHAT …` events — trivial to drive from Python/Node/Rust, a chat UI, or an LLM
+agent. The same grammar rides USB-CDC, raw UART, and **BLE-GATT** (working; how
+the phone app attaches), with WebSocket specified. A Python host SDK
+(`host-sdk/python/`) and a Flutter app already speak it.
 
-**Requirement mapping (details in the design proposal §11.8):**
-- chat 1-1 + 1-N: ✅ working today (Thread multicast channels + unicast CON)
-- "name a network" config / discovery: ✅ channel = a credential; all network params derived from it
-- key from a 12–24-word seed phrase: ✅ specified (rev 2.2, §11.1.2 Path C — BIP39-style, 11 bits/word,
-  so 12 words ≈ 132-bit key, no KDF stretch needed on-device; kid-shareable)
-- photo sharing: ⚠️ honest gap — envelope currently caps app-layer transfers at ~17 KB, and
-  802.15.4 is ~10 KB/s. Direction specified (extended-transfer type, 16-bit chunk index,
-  host-side re-encode to ~30–100 KB). Video files: same mechanism, but expect minutes of airtime.
+**Requirement mapping (details in the design proposal §11.8) — now all measured,
+not promised:**
+- chat 1-1 + 1-N: ✅ Thread multicast channels + unicast CON; **at chat rates the
+  mesh is lossless** (0.00% measured, 1 msg/s/node single-frame, 5-min runs)
+- "name a network" config / discovery: ✅ channel = a credential; selector,
+  multicast group, and AES-128-CCM keys all derived from it (§11.1); nodes on
+  different channels are cryptographically deaf to each other (verified both
+  directions, zero MIC failures on-air)
+- key from a 12–24-word seed phrase: ✅ **implemented** (§11.1.2 Path C —
+  ≥12 space-separated words, HKDF, no on-device stretch; same phrase ⇒ same
+  network on independent nodes, verified). The phone app generates 13-word EFF
+  phrases (~134-bit) and QR credentials.
+- photo sharing: ⚠️ honest gap unchanged — envelope caps app-layer transfers at
+  ~17 KB and measured bulk goodput is ~4 KB/s per receiver; direction specified
+  (extended-transfer type + host-side re-encode). Video: same mechanism, minutes
+  of airtime.
 - < $15 networking hardware: ✅
-- no bridging required: ✅ (edge routing exists as an optional UART-bridge pattern)
+- no bridging required: ✅ (edge routing stays an optional UART-bridge pattern)
 
-**The new part — R10, ESPIDFORTH:** the node now runs a Forth engine (ESPIDFORTH, the MagNET
-"Hive AI" foundation) alongside the C protocol core. One serial link, two modes: structured HCP
-by default, and a `FORTH` verb that drops to a live `ok>` REPL on the radio module itself. That
-means the deck (or a kid at a serial monitor) can script the node *on-device*:
+**Robustness numbers from the bench** (the deck cares about these in the field):
+leader node killed → survivors re-elect and re-merge in seconds-to-~2.5 min
+depending on topology, chat continues, dead node rejoins automatically; nodes
+that slept or powered off through traffic catch up with one CoAP
+`GET /magnet/recent` poll (`RECENT` verb) — missed messages replay, duplicates
+drop silently; saturation abuse (back-to-back multicast floods) degrades but
+never crashes — heap flat over 5-minute overload runs.
+
+**The R10 part — ESPIDFORTH:** the node runs a Forth engine alongside the C
+protocol core. One serial link, two modes: structured HCP by default, and a
+`FORTH` verb that drops to a live `ok>` REPL on the radio module itself. Scripts
+persist to flash and re-arm at boot with **no host attached** — validated
+end-to-end on hardware:
 
 ```
 ok> : maybe-light  s" lights on" str= if 4 gpio-set then ;
-ok> ' maybe-light mn-on-cmd     \ node now reacts to mesh commands with no host attached
+ok> s" maybe-light" mn-on-cmd    \ node reacts to mesh commands on its own
 ```
 
-Crypto/protocol stay in audited C; Forth is the automation/scripting surface. This fits the
-STEM/EDU angle of the deck: the mesh dongle is itself a programmable computer.
+Crypto/protocol stay in audited C; Forth never touches key material. For the
+deck's STEM/EDU angle: the mesh dongle is itself a programmable computer.
+
+**Phones join without any dongle-side setup:** a companion node keeps BLE
+resident, and the Flutter app (Android-validated) provisions nodes by QR or seed
+phrase, shows a live mesh view (feed backfills what happened while the phone was
+away), and carries a field test console (selftest / stats / bench / stress) —
+the bench scripts, in your hand.
 
 **Where the code is:**
-- Design proposal (rev 2.2): `reference-designs/MagNET_Thread_COaP_hanasu_esp32c6/MAGNet_Protocol_DESIGN_PROPOSAL.md`
-- ESP-IDF firmware (E-Phase B — plaintext mesh chat + HCP + Forth REPL, builds on IDF 5.3.1):
-  `reference-designs/MagNET_Thread_COaP_hanasu_esp32c6/firmware-idf/`
-- Footprint on a no-PSRAM C6: flash ~0.8 MB / 2.6 MB partition, static RAM ~101 KB / 320 KB —
-  fits with room for the crypto phase.
+- Design proposal (rev 2.2, all phase logs): `reference-designs/MagNET_Thread_COaP_hanasu_esp32c6/MAGNet_Protocol_DESIGN_PROPOSAL.md`
+- ESP-IDF firmware (fw 0.6.0-eg, full validation scorecards): `reference-designs/MagNET_Thread_COaP_hanasu_esp32c6/firmware-idf/`
+- Host SDK + Flutter app: `…/host-sdk/`, `magnet_app/`
+- Footprint on a no-PSRAM C6: flash ~39% of a 2.6 MB partition with BLE +
+  crypto + Forth; ~160 KB heap free at runtime with everything on.
 
-Next milestones: on-hardware multi-node validation of the ESP-IDF build, then the crypto/identity
-phase (AES-CCM + Ed25519 + seed-phrase credentials), then the BLE/WebBluetooth binding so phones
-can join without any dongle-side setup.
+One spec note: signatures are **deterministic ECDSA P-256** (not Ed25519 as
+earlier drafts said) — IDF 5.3.1's mbedTLS has no EdDSA, and P-256 is
+hardware-accelerated on the C6.
+
+Remaining open items are scale (32+ node soak needs hardware; everything is
+sized and planned for it) and the extended-transfer type for photos.

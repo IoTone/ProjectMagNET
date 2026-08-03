@@ -265,7 +265,7 @@ function (§12.1 one-implementation rule):
 | `HEARTBEAT <secs>` | `<secs> mn-heartbeat!` | `!HEARTBEAT <state> <uptime> <role> <peers>` cadence (default 30 s, 0 = off; only emits in READY/DEGRADED per §4.6) |
 | `STATS [RESET]` | `mn-stats` | tx try/ok/err/bytes + rx msgs/dup/err/bytes since boot or last reset |
 | `STRESS <secs> <len>` | `<secs> <len> mn-stress` | saturation burst: a task multicasts `<len>`-byte marked chat frames back-to-back for `<secs>`; receivers count them silently (no `!CHAT` flood); `!STRESS` progress every 30 s, `!STRESS_DONE` with totals |
-| `RECENT <peer-ipv6>` | — | E-G catch-up: CoAP `GET magnet/recent` from the peer; its ring of recent multicast chat replays through the normal RX path (missed frames emit `!CHAT`, dupes drop; `# recent N frame(s)` when done) |
+| `RECENT [peer-ipv6]` | — | E-G catch-up. No arg: replay **this node's** ring to the host as `!RCHAT <chan> <id> <name> <text>` (a reconnecting phone backfills its feed — bypasses mesh dedup by design). With a peer: CoAP `GET magnet/recent` from it; frames replay through the normal RX path (missed frames emit `!CHAT`, dupes drop; `# recent N frame(s)` when done) |
 
 ## Path B derivation cost (and the watchdog it used to trip)
 
@@ -431,7 +431,11 @@ default `magnet` channel).
   fetches and replays the frames through the normal RX path, so decrypt +
   high-water dedup give catch-up semantics for free: you get exactly what you
   missed, dupes drop silently. DMs are never stored — a poll cannot leak
-  someone else's unicast. The ring clears on `CHANNEL SET`.
+  someone else's unicast. The ring clears on `CHANNEL SET`. A second, no-arg
+  form — **`RECENT`** — replays *this node's own* ring to the host as
+  `!RCHAT <chan> <id> <name> <text>` lines (deliberately bypassing mesh dedup,
+  which would swallow known frames): it's how the phone app backfills its feed
+  on reconnecting to the companion.
 - **§11.6 scale sizing.** Peer + replay tables 16 → 40 slots (an undersized LRU
   re-admits replayed counters and re-fires `!PEER_JOIN` at 32+ nodes), `MESH`
   neighbor list 8 → 16, event pump queue 8 → 12 (a full catch-up response

@@ -47,7 +47,7 @@ class HcpEvent {
   /// Trailing free-text payload, per event shape (§11.3.3).
   String get text {
     const Map<String, int> from = <String, int>{
-      'chat': 3, 'dm': 2, 'warn': 1, 'state': 1,
+      'chat': 3, 'rchat': 3, 'dm': 2, 'warn': 1, 'state': 1,
     };
     final int? i = from[name];
     if (i == null || fields.length <= i) return '';
