@@ -357,7 +357,11 @@ static void advertise(void) {
 static void on_sync(void) {
     ble_hs_util_ensure_addr(0);
     advertise();
+#if MN_BLE_RESIDENT
+    mn_emit_event("# ble: advertising (resident — survives provisioning)");
+#else
     mn_emit_event("# ble: advertising for provisioning (torn down once a channel is set)");
+#endif
 }
 
 static void host_task(void *param) {

@@ -352,6 +352,55 @@ Guards: bare `FACTORY RESET` → `-ERR E_CONFIRM_REQUIRED`; `FACTORY NUKE` →
 `-ERR E_SYNTAX`. New identity stable across a further reboot (regenerated once,
 then persisted).
 
+### Companion build validated on hardware (2026-08-02, M5NanoC6 `probe`, `esp32c6_ble_resident`)
+
+First soak of the resident-BLE companion variant (magnet_app SCOPE §1 Option A),
+on the 3-node default-channel bench (probe + xray1 + sdk-b):
+
+| Check | Result |
+|-------|--------|
+| `CHANNEL SET qr:…` with BLE up | **BLE survives** — `STATUS … ble=up` after provisioning (the provisioning-only build tears down here) |
+| Reboot while provisioned | BLE advertises at boot (`# ble: advertising (resident — survives provisioning)`), Thread attaches, READY as router |
+| BLE-GATT HCP while Thread up | macOS central (bleak): bonded Just-Works, encrypted, `WHOAMI`/`STATUS`/`SYSINFO` answered over GATT, `!HEARTBEAT` streams |
+| Held connection | 8 min continuous, zero drops, 130 HCP lines notified |
+| Mesh chat during BLE hold | multicast from probe received on xray1 mid-hold |
+| Heap (advertising only) | 176.4 KB free, flat across a ~15-min / 30-cycle poll soak |
+| Heap (BLE connected) | 173.9 KB free — connection costs ~2.5 KB, fully returned on disconnect |
+| `STATUS` | now reports `ble=up|off` (all builds; `off` where BLE is compiled out) |
+
+> **Stale-name gotcha:** the advertised name `MagNET-XXXX` snapshots
+> `mn_device_id()` at `mn_ble_start()`. On the first boot after a factory
+> reset that is the provisional id, and macOS/iOS then *cache* the GAP name
+> per peripheral. Hosts must select by service UUID or address, never by the
+> `MagNET-` suffix matching the device id.
+
+**Real bug found and fixed by this pass — serial TX stall starved the BLE
+path.** With no host reading USB-CDC (the normal state for a phone-only
+companion node) the driver's TX ring fills and `link_putc`'s blocking write
+waited its full 100 ms *per character*. Every line — BLE responses included —
+funnels through the one TX writer, so each verb's dispatch queued behind the
+previous response's multi-second serial stall; past 6 queued commands the BLE
+RX queue dropped verbs silently. Symptom: STATUS answers, then responses
+arrive one-write-late with growing latency (0.06 s → 1.4 s → 8.9 s → 11.9 s →
+never) while `!HEARTBEAT` stays punctual (its BLE mirror fires before its own
+serial write). Every earlier BLE test accidentally passed because a serial
+poller (`hcp.py`) was draining the port at the time. Fix in `link_putc`:
+20 ms grace on first full-buffer write, then drop serial output at 0 timeout
+until a write succeeds again — serial can never again stall the node.
+macOS repro before fix: 7/9 verbs timed out with no serial reader, 0/9 with
+one attached; after fix: 0/9 timeouts, all responses 0.06 s, no reader.
+
+**Phone hardware pass after the fix (Sharp SH-53D, Android 14): 17/17.**
+`ble_probe_main.dart` pinned to the companion node: scan, connect, bond
+(survives node reflash — NVS keeps bonds), STATUS/WHOAMI/CAPS/CHANNEL SHOW
+round-trips, `E_UNKNOWN_VERB`, privileged `NAME` on the bonded link, and
+**operator enrolment over BLE** (`ADMIN ADD` + idempotent re-add) — the
+phone's operator key is now on the companion node's allow-list, which was
+the SCOPE M2 check still marked untested on hardware.
+
+Not yet done: multi-hour soak and throughput under saturation with a BLE
+client attached (§7 numbers were taken without BLE).
+
 Quick smoke sequence after flashing (HCP mode):
 
 ```

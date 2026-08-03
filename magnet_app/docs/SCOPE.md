@@ -40,9 +40,12 @@ the phone into the §11.2 host the protocol was designed around.
 > Firmware env `esp32c6_ble_resident` landed in `firmware-idf/platformio.ini` —
 > same source as `esp32c6_ble` with `-DMN_BLE_RESIDENT=1`, which skips the
 > post-provisioning teardown and advertises regardless of provisioning state.
-> Per-verb bonding enforcement (E_NOT_BONDED) is unchanged. Not yet
-> hardware-soaked for BLE/Thread coexistence (SW coexist is already enabled in
-> the BLE sdkconfig); that soak is the first M3 task. Milestone 3 is unblocked.
+> Per-verb bonding enforcement (E_NOT_BONDED) is unchanged. **First coexistence
+> soak passed 2026-08-02** on the bench node `probe` (M5NanoC6): BLE survives
+> `CHANNEL SET` and provisioned reboot, 8-min held GATT connection with HCP
+> streaming while mesh chat flows, heap flat (~176 KB advertising / ~174 KB
+> connected). Scorecard in `firmware-idf/README.md`. `STATUS` now reports
+> `ble=up|off` for the companion-node picker. Milestone 3 is unblocked.
 
 ---
 
@@ -106,7 +109,7 @@ advertisements (`services=[]`), so the name-prefix fallback is load-bearing.
 
 *Ends when:* a factory-fresh node goes from box to meshed without a cable.
 
-### M2 — Operator identity *(built 2026-07-31; enrolment untested on hardware)*
+### M2 — Operator identity *(built 2026-07-31; enrolment hardware-validated 2026-08-02 — `ADMIN ADD` + idempotent re-add over bonded BLE, probe run 17/17 on the companion node; signed fleet commands still untested)*
 
 The phone is the fleet's admin key holder. The firmware already enforces the
 allow-list, so this needed no new C.

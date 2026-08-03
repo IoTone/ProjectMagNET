@@ -979,10 +979,11 @@ int mn_rotate(void) {
 }
 
 void mn_status_line(char *buf, size_t cap) {
-    snprintf(buf, cap, "state=%s role=%s channel=%s peers=%d name=%s id=%02x%02x%02x%02x",
+    snprintf(buf, cap, "state=%s role=%s channel=%s peers=%d name=%s id=%02x%02x%02x%02x ble=%s",
              mn_state_name(s_state), mn_ot_role_name(), MN_CHANNEL_NAME,
              peer_count(), s_name,
-             s_device_id[0], s_device_id[1], s_device_id[2], s_device_id[3]);
+             s_device_id[0], s_device_id[1], s_device_id[2], s_device_id[3],
+             mn_ble_running() ? "up" : "off");
 }
 
 void mn_peers_print(void) {

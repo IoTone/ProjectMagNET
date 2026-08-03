@@ -1,6 +1,10 @@
 # macOS
 .DS_Store
 
+# Parking lot for untracked work-in-progress moved out of the tree
+# (original relative paths preserved under attic/)
+/attic/
+
 # PlatformIO build trees (some checkouts use .pio.nosync to dodge iCloud sync)
 .pio/
 .pio.nosync/

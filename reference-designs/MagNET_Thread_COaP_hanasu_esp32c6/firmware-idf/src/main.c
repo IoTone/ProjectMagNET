@@ -31,9 +31,23 @@ static int link_getc(void) {
     int n = usb_serial_jtag_read_bytes(&c, 1, pdMS_TO_TICKS(10));
     return (n > 0) ? c : -1;
 }
+/* Serial TX must NEVER stall the node. With no host reading USB-CDC the
+ * driver's TX ring fills and a blocking write waits out its full timeout —
+ * at the old 100 ms/char a 60-char response cost ~6 s, and because every
+ * line (BLE responses included) funnels through the one TX writer, a
+ * phone-only companion node went progressively deaf: each BLE command's
+ * dispatch queued behind the previous response's serial stall until the
+ * 6-deep BLE RX queue overflowed and dropped verbs outright (found by the
+ * 2026-08-02 hardware pass; macOS repro: 0 timeouts with a serial reader
+ * attached, 7/9 without). Policy: first full-buffer write waits one short
+ * grace period; while stalled, drop serial output at 0 timeout (BLE mirror
+ * already went out) and recover the moment a write succeeds again. */
 static void link_putc(int c) {
+    static bool stalled = false;
     uint8_t ch = (uint8_t)c;
-    usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(100));
+    int n = usb_serial_jtag_write_bytes(&ch, 1,
+                                        stalled ? 0 : pdMS_TO_TICKS(20));
+    stalled = (n <= 0);
 }
 static void raw_print(const char *s) {
     usb_serial_jtag_write_bytes((const uint8_t *)s, strlen(s), pdMS_TO_TICKS(500));
