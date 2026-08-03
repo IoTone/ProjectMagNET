@@ -25,8 +25,10 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 # The secondary console below puts ESP_LOGx on USB too.
 CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 
-# WiFi stays OFF for D0. The ESPIDFORTH C6 config disables it "to conserve
-# memory" and networking on this target is unproven (plan §2.2.3) — D1 turns it
-# on and measures, rather than assuming it fits.
-CONFIG_ESP_WIFI_ENABLED=n
+# D1: WiFi ON. The ESPIDFORTH C6 config had this disabled "to conserve memory"
+# and networking on this target was unproven, so the first job of D1 is to turn
+# it on and MEASURE rather than assume it fits in 512 KB alongside Forth.
+CONFIG_ESP_WIFI_ENABLED=y
+# BLE stays off: nothing needs it until R3 (the BLE relay transport), and it is
+# the largest single thing we can decline to link while measuring headroom.
 CONFIG_BT_ENABLED=n
