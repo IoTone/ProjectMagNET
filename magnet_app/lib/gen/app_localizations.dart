@@ -752,6 +752,12 @@ abstract class AppLocalizations {
   /// **'Topology'**
   String get meshTabTopology;
 
+  /// No description provided for @meshTabTest.
+  ///
+  /// In en, this message translates to:
+  /// **'Test'**
+  String get meshTabTest;
+
   /// No description provided for @meshPickTitle.
   ///
   /// In en, this message translates to:
@@ -865,6 +871,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Refresh'**
   String get meshRefresh;
+
+  /// No description provided for @provisionLogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Provisioned nodes'**
+  String get provisionLogTitle;
+
+  /// No description provided for @provisionLogSub.
+  ///
+  /// In en, this message translates to:
+  /// **'Every node this phone has put on a channel'**
+  String get provisionLogSub;
+
+  /// No description provided for @provisionLogEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing provisioned from this phone yet. Nodes appear here the moment you give them a channel.'**
+  String get provisionLogEmpty;
 }
 
 class _AppLocalizationsDelegate

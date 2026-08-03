@@ -127,6 +127,7 @@
   "meshTabFeed": "フィード",
   "meshTabPeers": "ピア",
   "meshTabTopology": "トポロジー",
+  "meshTabTest": "テスト",
   "meshPickTitle": "コンパニオンノードを選択",
   "meshPickHint": "コンパニオンノードはBLEを維持し、このスマートフォンのメッシュへの窓口になります。レジデントビルドを書き込んだノードを選んでください。",
   "meshPickScan": "ノードをスキャン",
@@ -146,5 +147,9 @@
   "@meshPeerLastSeen": { "placeholders": { "ago": { "type": "String" } } },
   "meshNeighbors": "近隣ノード",
   "meshNoNeighbors": "近隣ノードは報告されていません。",
-  "meshRefresh": "更新"
+  "meshRefresh": "更新",
+
+  "provisionLogTitle": "プロビジョニング済みノード",
+  "provisionLogSub": "このスマートフォンからチャンネルに参加させたノード",
+  "provisionLogEmpty": "まだこのスマートフォンからプロビジョニングしていません。ノードにチャンネルを設定するとここに表示されます。"
 }

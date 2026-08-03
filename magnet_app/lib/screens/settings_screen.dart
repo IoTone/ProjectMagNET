@@ -111,6 +111,13 @@ class SettingsScreen extends StatelessWidget {
           trailing: const Icon(Icons.chevron_right),
           onTap: () => context.push('/diagnostics'),
         ),
+        ListTile(
+          leading: const Icon(Icons.hub_outlined),
+          title: Text(l.provisionLogTitle),
+          subtitle: Text(l.provisionLogSub),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.push('/provisioned'),
+        ),
         _Header(l.settingsAbout, cs: cs),
         ListTile(
           leading: const Icon(Icons.info_outline),

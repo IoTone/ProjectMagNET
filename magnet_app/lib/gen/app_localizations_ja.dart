@@ -355,6 +355,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get meshTabTopology => 'トポロジー';
 
   @override
+  String get meshTabTest => 'テスト';
+
+  @override
   String get meshPickTitle => 'コンパニオンノードを選択';
 
   @override
@@ -413,4 +416,14 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get meshRefresh => '更新';
+
+  @override
+  String get provisionLogTitle => 'プロビジョニング済みノード';
+
+  @override
+  String get provisionLogSub => 'このスマートフォンからチャンネルに参加させたノード';
+
+  @override
+  String get provisionLogEmpty =>
+      'まだこのスマートフォンからプロビジョニングしていません。ノードにチャンネルを設定するとここに表示されます。';
 }

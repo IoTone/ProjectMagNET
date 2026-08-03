@@ -340,13 +340,25 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
 static void advertise(void) {
     struct ble_gap_adv_params adv = { 0 };
     struct ble_hs_adv_fields fields = { 0 };
+    struct ble_hs_adv_fields rsp = { 0 };
     const char *name = ble_svc_gap_device_name();
 
+    /* Advert carries the 128-bit HCP service UUID; the name moves to the
+     * scan response. A 31-byte advert cannot hold both, and the UUID is the
+     * one that matters: Android forbids UNFILTERED scans with the screen
+     * off and iOS deprioritises them in the background, so a host must be
+     * able to filter by service. Every active scan still gets the name via
+     * the scan response (flags 3 + uuid 18 = 21 B advert; name 13 B rsp). */
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.name = (uint8_t *)name;
-    fields.name_len = strlen(name);
-    fields.name_is_complete = 1;
+    fields.uuids128 = (ble_uuid128_t *)&SVC_UUID;
+    fields.num_uuids128 = 1;
+    fields.uuids128_is_complete = 1;
     ble_gap_adv_set_fields(&fields);
+
+    rsp.name = (uint8_t *)name;
+    rsp.name_len = strlen(name);
+    rsp.name_is_complete = 1;
+    ble_gap_adv_rsp_set_fields(&rsp);
 
     adv.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv.disc_mode = BLE_GAP_DISC_MODE_GEN;

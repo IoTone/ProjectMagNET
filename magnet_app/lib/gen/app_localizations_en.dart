@@ -361,6 +361,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get meshTabTopology => 'Topology';
 
   @override
+  String get meshTabTest => 'Test';
+
+  @override
   String get meshPickTitle => 'Choose a companion node';
 
   @override
@@ -421,4 +424,14 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get meshRefresh => 'Refresh';
+
+  @override
+  String get provisionLogTitle => 'Provisioned nodes';
+
+  @override
+  String get provisionLogSub => 'Every node this phone has put on a channel';
+
+  @override
+  String get provisionLogEmpty =>
+      'Nothing provisioned from this phone yet. Nodes appear here the moment you give them a channel.';
 }

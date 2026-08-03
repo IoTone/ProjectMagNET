@@ -133,6 +133,7 @@
   "meshTabFeed": "Feed",
   "meshTabPeers": "Peers",
   "meshTabTopology": "Topology",
+  "meshTabTest": "Test",
   "meshPickTitle": "Choose a companion node",
   "meshPickHint": "The companion node keeps BLE on and acts as this phone's window into the mesh. Pick the node flashed with the resident build.",
   "meshPickScan": "Scan for nodes",
@@ -152,5 +153,9 @@
   "@meshPeerLastSeen": { "placeholders": { "ago": { "type": "String" } } },
   "meshNeighbors": "Neighbors",
   "meshNoNeighbors": "No neighbors reported.",
-  "meshRefresh": "Refresh"
+  "meshRefresh": "Refresh",
+
+  "provisionLogTitle": "Provisioned nodes",
+  "provisionLogSub": "Every node this phone has put on a channel",
+  "provisionLogEmpty": "Nothing provisioned from this phone yet. Nodes appear here the moment you give them a channel."
 }

@@ -408,6 +408,22 @@ class MeshSession extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// Run an arbitrary HCP verb on the companion and return the `+OK` body
+  /// plus the `#` comments it produced (M4 test console). Throws
+  /// [StateError] when no link is up; [HcpError]/[HcpTimeout] pass through
+  /// so the console can show the real failure.
+  Future<(String, List<String>)> run(String line,
+      {Duration timeout = const Duration(seconds: 10)}) {
+    final MeshLink? l = _link;
+    if (l == null || _state != MeshLinkState.connected) {
+      throw StateError('not connected to the companion node');
+    }
+    return l.client.commandCaptured(line, timeout: timeout);
+  }
+
+  /// Live `#` commentary from the companion (STRESS progress and friends).
+  Stream<String>? get comments => _link?.client.comments;
+
   @override
   void dispose() {
     _teardown();

@@ -6,6 +6,7 @@ import 'screens/about_screen.dart';
 import 'screens/diagnostics_screen.dart';
 import 'screens/magnet_node_screen.dart';
 import 'screens/mesh_screen.dart';
+import 'screens/provision_log_screen.dart';
 import 'shell/home_shell.dart';
 
 /// App routes. `/` hosts the swipe shell; sub-pages are pushed on top.
@@ -20,6 +21,10 @@ final GoRouter appRouter = GoRouter(
     GoRoute(path: '/about', builder: (_, __) => const AboutScreen()),
     // M3: live mesh view through the resident-BLE companion node.
     GoRoute(path: '/mesh', builder: (_, __) => const MeshScreen()),
+    // M1: local ledger of provisioned nodes.
+    GoRoute(
+        path: '/provisioned',
+        builder: (_, __) => const ProvisionLogScreen()),
     // MagNET node configuration. `id` is the platform device id; the name is
     // passed along so the app bar reads well before the node answers.
     GoRoute(

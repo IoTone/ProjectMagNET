@@ -14,6 +14,7 @@ import 'package:provider/provider.dart';
 import '../gen/app_localizations.dart';
 import '../magnet/magnet_ble.dart';
 import '../magnet/mesh_session.dart';
+import 'mesh_test_tab.dart';
 
 class MeshScreen extends StatelessWidget {
   const MeshScreen({super.key});
@@ -186,7 +187,7 @@ class _LiveMeshViewState extends State<_LiveMeshView> {
     };
 
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: Row(
@@ -233,10 +234,16 @@ class _LiveMeshViewState extends State<_LiveMeshView> {
             Tab(text: l.meshTabFeed),
             Tab(text: l.meshTabPeers),
             Tab(text: l.meshTabTopology),
+            Tab(text: l.meshTabTest),
           ]),
         ),
         body: const TabBarView(
-          children: <Widget>[_FeedTab(), _PeersTab(), _TopologyTab()],
+          children: <Widget>[
+            _FeedTab(),
+            _PeersTab(),
+            _TopologyTab(),
+            MeshTestTab(),
+          ],
         ),
       ),
     );

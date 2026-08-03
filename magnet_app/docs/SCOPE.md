@@ -88,12 +88,13 @@ run could have surfaced:
 Also confirmed: macOS/iOS/Android all withhold service UUIDs from
 advertisements (`services=[]`), so the name-prefix fallback is load-bearing.
 
-> **Product gap worth fixing (not test-only):** the node advertises its name
-> but not its service UUID, so a host can only find it with an *unfiltered*
-> scan — which Android forbids while the screen is off, and which iOS
-> deprioritises in the background. The 31-byte advert cannot hold both a
-> 128-bit UUID and the name; moving the name into the **scan response** and
-> putting the UUID in the advert would fix discovery in both cases.
+> ~~Product gap worth fixing~~ **FIXED 2026-08-02:** the advert now carries
+> the 128-bit HCP service UUID (hosts can run *filtered* scans — works
+> screen-off on Android and in the background on iOS) and the `MagNET-XXXX`
+> name moved to the scan response. Verified on air on both bench builds
+> (`esp32c6_ble` on xray1, `esp32c6_ble_resident` on probe). Bonus: active
+> scans now refresh the platform's cached GAP name, so the stale-name
+> gotcha self-heals for scanning hosts.
 
 - [x] BLE scan, node detection by name prefix + service UUID
 - [x] Connect, discover service, subscribe to notifications
@@ -101,11 +102,14 @@ advertisements (`services=[]`), so the name-prefix fallback is load-bearing.
 - [x] HCP client with `@tag` correlation, typed verbs, `E_*` errors (9 unit tests)
 - [x] **Run it against real hardware** — scan, connect, discover, notify,
       round-trip, chunk reassembly, error codes, and bonding gate all verified
-- [ ] Credential helpers: generate a 12–24 word seed phrase or a 256-bit
-      `qr:` secret in-app, show it as a QR for the next device (§11.4 is
-      explicit that typing a passphrase is the *fallback*, not the path)
-- [ ] Remember what we provisioned: local record of id, name, channel label,
-      when — so the fleet is knowable even after nodes go dark
+- [x] Credential helpers *(shipped 2026-08-02)*: Generate phrase (13 EFF
+      short-list words ≈ 134 bits, Path C) / Generate secret (`qr:` 256-bit,
+      Path A) buttons, live path+entropy hint under the field, QR display
+      (in the provisioned dialog and on demand) for enrolling the next
+      device, and a typed-passphrase (Path B) warning in the confirm dialog
+- [x] Remember what we provisioned *(shipped 2026-08-02)*: `ProvisionLog`
+      records id, name, channel *label* (never the credential — it's a key),
+      selector, path, timestamp; viewer at Settings → Provisioned nodes
 
 *Ends when:* a factory-fresh node goes from box to meshed without a cable.
 
@@ -175,20 +179,25 @@ via the Dashboard "Live mesh" card, route `/mesh`.
 > clear could beat the previous caller's read). `commandCaptured()` snapshots
 > the comments atomically inside the command queue; PEERS/MESH use it.
 
-### M4 — Field test console *(the "test" half of the brief)*
+### M4 — Field test console *(built 2026-08-02 as the Mesh screen's Test tab; on-phone verification pending)*
 
-Everything the bench scripts do this session, but in your hand.
+Everything the bench scripts do this session, but in your hand. Lives on
+the companion connection (`mesh_test_tab.dart`) — the only node reachable
+once the fleet is provisioned.
 
-- [ ] Run `SELFTEST` and show the three stages pass/fail
-- [ ] `STATS` with deltas over time, not just totals — loss and rate are the
-      numbers that matter, and they only exist as differences
-- [ ] `BENCH` (envelope codec + TX latency) surfaced as a one-tap check
-- [ ] `STRESS <secs> <len>` with a live progress feed and a result card —
-      guarded behind a confirm, since it saturates the channel
-- [ ] Export a node report (JSON + shareable text): identity, firmware,
-      channel, counters, selftest, timestamp
-- [ ] Diagnostics for the boring failures: adapter off, permission denied,
-      out of range, node busy
+- [x] Run `SELFTEST` and show the three stages pass/fail (parsed from the
+      `# selftest <stage> ok|FAIL` lines, plus the overall verdict)
+- [x] `STATS` with deltas over time — each Sample keeps the previous
+      snapshot and renders Δ/s per counter
+- [x] `BENCH` (envelope codec + TX latency) surfaced as a one-tap check
+- [x] `STRESS <secs> <len>` with a live progress feed (mirrors `# stress`
+      commentary) — guarded behind a confirm, since it saturates the channel;
+      privileged, so it also exercises the bonded link
+- [x] Export a node report (JSON + shareable text, copied to clipboard):
+      identity, status, channel, sysinfo, counters, selftest, timestamp
+- [x] Diagnostics for the boring failures: adapter off / permission denied
+      (from the BLE adapter state), out of range / node busy / E_NOT_BONDED
+      mapped to plain-language messages
 
 *Ends when:* the bench Python scripts have no capability the phone lacks.
 

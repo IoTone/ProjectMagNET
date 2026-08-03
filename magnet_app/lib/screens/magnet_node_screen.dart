@@ -11,8 +11,11 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
+import '../magnet/credentials.dart';
 import '../magnet/hcp.dart';
 import '../magnet/magnet_ble.dart';
 import '../magnet/operator_identity.dart';
@@ -47,6 +50,10 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
   @override
   void initState() {
     super.initState();
+    // Live path/entropy hint under the credential field.
+    _credCtl.addListener(() {
+      if (mounted) setState(() {});
+    });
     _connect();
   }
 
@@ -281,15 +288,20 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
       _snack('credential must be at least 4 characters');
       return;
     }
+    final CredInfo credInfo = MagnetCredentials.describe(cred);
     final bool? go = await showDialog<bool>(
       context: context,
       builder: (BuildContext ctx) => AlertDialog(
         title: const Text('Provision this node?'),
-        content: const Text(
+        content: Text(
           'The node will derive its channel key, then shut its Bluetooth '
           'radio down and hand the antenna to the mesh.\n\n'
           'It will disappear from this app. To provision it again you must '
-          'clear its stored settings.',
+          'clear its stored settings.'
+          '${credInfo.path == CredPath.passphrase ? '\n\nThis is a TYPED '
+              'passphrase (path B, ~${credInfo.bits} bits). Generated '
+              'phrases and qr: secrets are much stronger — Cancel and tap '
+              'Generate unless you need this exact phrase.' : ''}',
         ),
         actions: <Widget>[
           TextButton(
@@ -322,15 +334,43 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
     await _guard(() async {
       final Map<String, String> r = await _hcp!.setChannel(cred);
       _log('# provisioned: $r');
+
+      // SCOPE M1: remember what we provisioned, so the fleet is knowable
+      // after the node goes dark. The label is derived, NOT the credential —
+      // keys don't belong in an app-readable log.
+      final CredInfo info = MagnetCredentials.describe(cred);
+      final String label = info.path == CredPath.qrSecret
+          ? 'qr-channel'
+          : cred.split(RegExp(r'\s+')).first;
+      await ProvisionLog.add(ProvisionRecord(
+        deviceId: widget.deviceId,
+        nodeId: _who['id'] ?? '?',
+        name: _who['name'] ?? _nameCtl.text.trim(),
+        channelLabel: label,
+        selector: r['selector'] ?? '?',
+        path: r['path'] ?? info.pathLetter,
+        at: DateTime.now(),
+      ));
+
       if (!mounted) return;
       await showDialog<void>(
         context: context,
         builder: (BuildContext ctx) => AlertDialog(
           title: const Text('Provisioned'),
-          content: Text(
-            'Channel selector ${r['selector'] ?? '?'} '
-            '(derivation path ${r['path'] ?? '?'}).\n\n'
-            'Bluetooth is now off on this node; it is meshing on Thread.',
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  'Channel selector ${r['selector'] ?? '?'} '
+                  '(derivation path ${r['path'] ?? '?'}).\n\n'
+                  'To join the next device to the same channel, scan this '
+                  'QR from it — no typing, no wire.',
+                ),
+                const SizedBox(height: 14),
+                _credQrBox(cred),
+              ],
+            ),
           ),
           actions: <Widget>[
             FilledButton(
@@ -342,6 +382,52 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
       if (mounted) Navigator.of(context).pop();
     }, 'CHANNEL SET');
   }
+
+  /// White-backed QR of a credential (scanners need the light background in
+  /// dark theme too).
+  Widget _credQrBox(String cred) => Container(
+        color: Colors.white,
+        padding: const EdgeInsets.all(8),
+        child: QrImageView(data: cred, size: 208),
+      );
+
+  Future<void> _showCredentialQr(String cred) => showDialog<void>(
+        context: context,
+        builder: (BuildContext ctx) => AlertDialog(
+          title: const Text('Channel credential'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                _credQrBox(cred),
+                const SizedBox(height: 10),
+                SelectableText(cred,
+                    style: const TextStyle(
+                        fontFamily: 'monospace', fontSize: 12)),
+                const SizedBox(height: 6),
+                Text(
+                  'This IS the channel key — share it only with devices '
+                  'that belong on the channel.',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(ctx).colorScheme.error),
+                ),
+              ],
+            ),
+          ),
+          actions: <Widget>[
+            TextButton.icon(
+              icon: const Icon(Icons.copy, size: 16),
+              label: const Text('Copy'),
+              onPressed: () =>
+                  Clipboard.setData(ClipboardData(text: cred)),
+            ),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Close')),
+          ],
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -410,10 +496,43 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
                       minLines: 1,
                       maxLines: 3,
                       decoration: const InputDecoration(
-                        hintText: 'correct horse battery staple',
+                        hintText: 'tap Generate — typing one is the fallback',
                         border: OutlineInputBorder(),
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: <Widget>[
+                        OutlinedButton.icon(
+                          onPressed: () => setState(() => _credCtl.text =
+                              MagnetCredentials.generateSeedPhrase()),
+                          icon: const Icon(Icons.casino_outlined, size: 18),
+                          label: const Text('Generate phrase'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => setState(() => _credCtl.text =
+                              MagnetCredentials.generateQrSecret()),
+                          icon: const Icon(Icons.vpn_key_outlined, size: 18),
+                          label: const Text('Generate secret'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _credCtl.text.trim().isEmpty
+                              ? null
+                              : () => _showCredentialQr(_credCtl.text.trim()),
+                          icon: const Icon(Icons.qr_code_2, size: 18),
+                          label: const Text('Show QR'),
+                        ),
+                      ],
+                    ),
+                    if (_credCtl.text.trim().isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 6),
+                      _CredHint(
+                          info:
+                              MagnetCredentials.describe(_credCtl.text),
+                          cs: cs),
+                    ],
                     const SizedBox(height: 10),
                     FilledButton.icon(
                       onPressed: _provision,
@@ -622,6 +741,45 @@ class _Section extends StatelessWidget {
         child: Text(title,
             style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
       );
+}
+
+/// Live derivation-path + entropy readout under the credential field.
+/// Path B (typed) renders in the error color: it is the fallback, not the path.
+class _CredHint extends StatelessWidget {
+  const _CredHint({required this.info, required this.cs});
+  final CredInfo info;
+  final ColorScheme cs;
+
+  @override
+  Widget build(BuildContext context) {
+    final (String text, Color color) = switch (info.path) {
+      CredPath.qrSecret => (
+          'path A — 256-bit random secret',
+          cs.primary
+        ),
+      CredPath.seedPhrase => (
+          'path C — seed phrase, ~${info.bits} bits if randomly chosen',
+          cs.primary
+        ),
+      CredPath.passphrase => (
+          'path B — typed passphrase, ~${info.bits} bits (weak; '
+              'prefer Generate)',
+          cs.error
+        ),
+    };
+    return Row(children: <Widget>[
+      Icon(
+          info.path == CredPath.passphrase
+              ? Icons.warning_amber
+              : Icons.verified_outlined,
+          size: 14,
+          color: color),
+      const SizedBox(width: 6),
+      Expanded(
+          child:
+              Text(text, style: TextStyle(fontSize: 11, color: color))),
+    ]);
+  }
 }
 
 class _Console extends StatelessWidget {
