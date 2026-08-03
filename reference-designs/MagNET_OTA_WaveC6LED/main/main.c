@@ -234,10 +234,11 @@ static void checkin_task(void *arg) {
             /* A failure retries in 10 s rather than 60. A transient blip should
              * not leave the screen showing an error for a full minute after the
              * problem has gone. */
-            vTaskDelay(pdMS_TO_TICKS(a == OTA_ERROR ? 10000 : CHECKIN_PERIOD_MS));
+            /* Sleep until the period elapses OR the console nudges us. */
+            ota_wait_checkin_request(a == OTA_ERROR ? 10000 : CHECKIN_PERIOD_MS);
             continue;
         }
-        vTaskDelay(pdMS_TO_TICKS(CHECKIN_PERIOD_MS));
+        ota_wait_checkin_request(CHECKIN_PERIOD_MS);
     }
 }
 

@@ -34,6 +34,11 @@ esp_err_t cfg_erase(const char *key);
 #define CFG_WIFI_PASS  "wifi_pass"
 #define CFG_SERVER_URL "server_url"
 #define CFG_DEV_TOKEN  "dev_token"
+/* What this device has actually APPLIED. Written by D4 after a successful
+ * apply, read by every check-in. Absent until then — which is the honest
+ * state, and quite different from a fake "0.0.0". */
+#define CFG_APPLIED_ID  "applied_id"
+#define CFG_APPLIED_VER "applied_ver"
 
 /* True when everything needed to reach the server is present. */
 bool cfg_provisioned(void);

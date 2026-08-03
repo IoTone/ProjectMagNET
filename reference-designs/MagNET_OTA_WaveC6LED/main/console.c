@@ -135,18 +135,19 @@ void console_run(int (*getch)(void), void (*putch)(int), void (*print)(const cha
                 cfg_erase(line + 7);
                 out("erased\r\n");
             } else if (strcmp(line, "checkin") == 0) {
-                char m[96];
-                ota_action_t a = ota_checkin();
-                snprintf(m, sizeof m, "check-in: %s (%s)\r\n",
-                         a == OTA_UPDATE ? "UPDATE" : a == OTA_NOOP ? "noop" : "error",
-                         ota_last_status());
+                /* Hand the work to the poll task rather than doing it here.
+                 * One owner of check-ins, so there is no second HTTP client to
+                 * reason about. */
+                char m[128];
+                out("check-in requested...\r\n");
+                ota_request_checkin();
+                vTaskDelay(pdMS_TO_TICKS(4000));
+                snprintf(m, sizeof m, "  %s\r\n", ota_last_status());
                 out(m);
-                if (a == OTA_UPDATE) {
-                    const ota_release_t *r = ota_pending();
+                const ota_release_t *r = ota_pending();
+                if (r) {
                     snprintf(m, sizeof m, "  release %ld  version %s\r\n",
                              r->release_id, r->version);
-                    out(m);
-                    snprintf(m, sizeof m, "  sig %.48s\r\n", r->signature_url);
                     out(m);
                 }
             } else if (strcmp(line, "wifi") == 0) {

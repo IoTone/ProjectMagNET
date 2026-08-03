@@ -17,6 +17,8 @@
 #include "magnet_cfg.h"
 #include "forth_core.h"
 #include "cJSON.h"
+#include "forth_version.h"
+#include "esp_system.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -38,6 +40,7 @@ static const char *TAG = "magnet_ota";
  * failing rather than as an obvious overflow.
  */
 static SemaphoreHandle_t s_lock;
+static SemaphoreHandle_t s_nudge;   /* console -> poll task "check in now" */
 static char s_resp[RESP_CAP];
 
 static magnet_transport_t *s_tx;
@@ -48,8 +51,18 @@ static char s_status[64] = "idle";
 esp_err_t ota_init(void) {
     s_tx = transport_ip();
     if (!s_tx) return ESP_FAIL;
-    if (!s_lock) s_lock = xSemaphoreCreateMutex();
+    if (!s_lock)  s_lock  = xSemaphoreCreateMutex();
+    if (!s_nudge) s_nudge = xSemaphoreCreateBinary();
     return s_tx->open(s_tx);
+}
+
+void ota_request_checkin(void) {
+    if (s_nudge) xSemaphoreGive(s_nudge);
+}
+
+bool ota_wait_checkin_request(uint32_t timeout_ms) {
+    if (!s_nudge) { vTaskDelay(pdMS_TO_TICKS(timeout_ms)); return false; }
+    return xSemaphoreTake(s_nudge, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 }
 
 const ota_release_t *ota_pending(void) { return s_have_pending ? &s_pending : NULL; }
@@ -80,10 +93,38 @@ ota_action_t ota_checkin(void) {
         return OTA_ERROR;
     }
 
-    /* Report what we are running so the server can resolve to noop. Nothing
-     * has been applied yet, so this is the firmware's own version until D4
-     * starts recording applied releases. */
-    snprintf(body, sizeof body, "{\"current_version\":\"%s\"}", "0.0.0");
+    /*
+     * Report what this device has APPLIED, not what firmware it is running.
+     * Those are different version spaces here: the firmware is an ESP-IDF image
+     * flashed over USB, while an "update" is a Forth bundle evaluated into the
+     * dictionary. Mixing them makes the fleet list meaningless.
+     *
+     * current_release_id is the field that matters — the server resolves to
+     * noop by comparing it (src/web.lisp), so a device that never sends it
+     * reports UPDATE forever, including after it has applied successfully.
+     *
+     * Until D4 applies something, BOTH are omitted rather than faked. The
+     * server leaves current_version untouched when it is absent, so an empty
+     * column honestly means "has never applied a bundle" — where a hardcoded
+     * 0.0.0 looked like a broken device and hid the real firmware version.
+     *
+     * The firmware version goes in telemetry, which the server accepts, logs
+     * and discards by documented design.
+     */
+    {
+        char aid[CFG_MAX], aver[CFG_MAX];
+        bool have_id  = cfg_get(CFG_APPLIED_ID,  aid,  sizeof aid);
+        bool have_ver = cfg_get(CFG_APPLIED_VER, aver, sizeof aver);
+        int n = snprintf(body, sizeof body, "{");
+        if (have_ver)
+            n += snprintf(body + n, sizeof body - n, "\"current_version\":\"%s\",", aver);
+        if (have_id)
+            n += snprintf(body + n, sizeof body - n, "\"current_release_id\":%s,", aid);
+        snprintf(body + n, sizeof body - n,
+                 "\"telemetry\":{\"fw\":\"espidforth-%s\",\"free_heap\":%u}}",
+                 ESPIDFORTH_VERSION_STRING,
+                 (unsigned)esp_get_free_heap_size());
+    }
 
     int st = s_tx->request(s_tx, "POST", "/api/devices/check-in",
                            body, s_resp, sizeof s_resp, &rlen);

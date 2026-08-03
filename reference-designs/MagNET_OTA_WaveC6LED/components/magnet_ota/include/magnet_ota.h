@@ -9,6 +9,7 @@
  */
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -32,7 +33,24 @@ typedef struct {
 } ota_release_t;
 
 esp_err_t    ota_init(void);
+
+/*
+ * Perform a check-in. ONE CALLER ONLY — the poll task in main.c owns this.
+ * Anything else asks via ota_request_checkin().
+ *
+ * Two tasks calling it concurrently was not merely a race: the poll task
+ * succeeded every 60 s while an identical console-issued request failed to TCP
+ * connect, on a device answering pings in 6 ms. Rather than explain why two
+ * esp_http_client users on this chip behave differently, there is now one.
+ */
 ota_action_t ota_checkin(void);
+
+/* Ask the poll task to check in now. Returns immediately; watch ota_last_status()
+ * or the [checkin] log line for the outcome. */
+void         ota_request_checkin(void);
+
+/* Blocks until nudged or until timeout_ms elapses. Poll task only. */
+bool         ota_wait_checkin_request(uint32_t timeout_ms);
 
 /* Valid only after ota_checkin() returned OTA_UPDATE. */
 const ota_release_t *ota_pending(void);
