@@ -7,7 +7,30 @@ one.
 
 Plan and phasing: `docs/wavec6led-ota-plan.md` in the RobotARme repo.
 
-**Status: D0 complete — Forth REPL, display and RGB LED all verified on hardware.**
+**Status: D0–D4 complete. The OTA loop closes, unattended, on hardware.**
+
+From a cold boot, with nobody typing anything:
+
+    update available: release 2362 version 1.1.0
+    [ota] fetching + verifying...
+    ota_verify: release 2362 verified: 231 bytes, sha256 ok, Ed25519 ok
+    ota_apply:  applying release 2362 (231 bytes) at dict=69
+    ota_apply:  apply OK: now running release 2362 version 1.1.0
+    ota_apply:  apply-result reported: release 2362 OK
+    [checkin]   up to date          <- converged; it stops asking
+
+And the failure path, which matters more. A bundle whose signature is VALID but
+whose Forth is broken:
+
+    ota_verify: release 2507 verified: 201 bytes, sha256 ok, Ed25519 ok
+    ota_apply:  apply FAILED, rolled back to dict=69 code=0
+                — failed at: : BAD-WORD THIS-WORD-DOES-NOT-EXIST ;
+    ota_apply:  apply-result reported: release 2507 FAILED
+
+Verified afterwards: `GOOD-WORD`, defined on the line *before* the failure, is
+gone — `? GOOD-WORD`. A partial apply leaves no trace. And the server's
+`current_version` stayed at the last GOOD release, so a failed update cannot
+make a device look upgraded.
 
 ## The board
 

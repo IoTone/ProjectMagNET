@@ -194,6 +194,14 @@ bool ota_fetch_pending(void) {
     return ota_fetch_and_verify(s_tx, &s_pending);
 }
 
+bool ota_apply_pending(void) {
+    if (!s_have_pending || !s_tx) return false;
+    if (!ota_fetch_and_verify(s_tx, &s_pending)) return false;
+    return ota_apply(s_tx, &s_pending);
+}
+
+static void w_ota_apply(void) { forth_push((intptr_t)(ota_apply_pending() ? 1 : 0)); }
+
 static void w_ota_verify(void) { forth_push((intptr_t)(ota_fetch_pending() ? 1 : 0)); }
 
 static void w_ota_release(void) {
@@ -205,4 +213,5 @@ void ota_register_forth_words(void) {
     forth_register_word("ota-status",  w_ota_status);
     forth_register_word("ota-release", w_ota_release);
     forth_register_word("ota-verify",  w_ota_verify);
+    forth_register_word("ota-apply",   w_ota_apply);
 }

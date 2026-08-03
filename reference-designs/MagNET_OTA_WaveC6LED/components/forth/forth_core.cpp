@@ -103,6 +103,9 @@ static int      heap_used_bytes = 0;
 static int  (*io_getchar)(void) = nullptr;
 static void (*io_putchar)(int)  = nullptr;
 
+/* Bumped by every "? ..." diagnostic. See forth_error_count(). */
+static int error_count = 0;
+
 static bool running = true;
 static bool compiling = false;
 static int  base = 10;
@@ -138,6 +141,17 @@ static inline cell_t rpop(void) {
 }
 
 // ----- I/O Helpers -----
+/* A NULL output hook must mean "discard", never "crash".
+ *
+ * put_string() always guarded, but w_dot/w_cr/w_emit/w_words called io_putchar
+ * DIRECTLY and unguarded, so a host that had not called forth_set_io() died on
+ * an Instruction access fault the first time anything printed — including the
+ * error message for an unknown word, which is exactly when a new embedder finds
+ * out. Route every character through put_char(). */
+static void put_char(int c) {
+    if (io_putchar) io_putchar(c);
+}
+
 static void put_string(const char *s) {
     if (!io_putchar) return;
     while (*s) io_putchar(*s++);
@@ -193,9 +207,9 @@ static void w_or(void)      { cell_t b = pop(); cell_t a = pop(); push(a | b); }
 static void w_xor(void)     { cell_t b = pop(); cell_t a = pop(); push(a ^ b); }
 static void w_invert(void)  { push(~pop()); }
 
-static void w_dot(void)     { put_number(pop()); io_putchar(' '); }
-static void w_cr(void)      { io_putchar('\n'); }
-static void w_emit(void)    { io_putchar((int)pop()); }
+static void w_dot(void)     { put_number(pop()); put_char(' '); }
+static void w_cr(void)      { put_char('\n'); }
+static void w_emit(void)    { put_char((int)pop()); }
 
 static void w_dots(void) {
     put_string("<");
@@ -203,7 +217,7 @@ static void w_dots(void) {
     put_string("> ");
     for (int i = 0; i <= dsp; i++) {
         put_number(dstack[i]);
-        io_putchar(' ');
+        put_char(' ');
     }
 }
 
@@ -212,14 +226,14 @@ static void w_words(void) {
     for (int i = 0; i < dict_count; i++) {
         int len = strlen(dictionary[i].name);
         if (col + len + 1 > 72) {
-            io_putchar('\n');
+            put_char('\n');
             col = 0;
         }
         put_string(dictionary[i].name);
-        io_putchar(' ');
+        put_char(' ');
         col += len + 1;
     }
-    io_putchar('\n');
+    put_char('\n');
 }
 
 static void w_bye(void) {
@@ -256,7 +270,7 @@ static void w_type(void) {
     cell_t u = pop();
     const char *s = (const char *)pop();
     if (!s) return;
-    for (cell_t i = 0; i < u; i++) io_putchar(s[i]);
+    for (cell_t i = 0; i < u; i++) put_char(s[i]);
 }
 
 // ----- Dictionary Helpers -----
@@ -374,7 +388,7 @@ static void execute_code(int start) {
         } else if (op == CODE_DOTQUOTE) {
             int len = (int)code[ip++];
             const char *str = (const char *)&code[ip];
-            for (int i = 0; i < len; i++) io_putchar(str[i]);
+            for (int i = 0; i < len; i++) put_char(str[i]);
             ip += (len + sizeof(cell_t) - 1) / sizeof(cell_t);
         } else if (op == CODE_SQUOTE) {
             // Push address of the inline string and its length, then skip it.
@@ -666,6 +680,7 @@ static void interpret_token(const char *token) {
             code[code_ptr++] = val;
             return;
         }
+        error_count++;
         put_string("? compile: ");
         put_string(token);
         put_string("\n");
@@ -685,6 +700,7 @@ static void interpret_token(const char *token) {
         return;
     }
 
+    error_count++;
     put_string("? ");
     put_string(token);
     put_string("\n");
@@ -1256,13 +1272,13 @@ void forth_repl(int (*get_char)(void), void (*put_char)(int)) {
             continue;  /* Ignore \n, handle \r only (terminals send \r\n) */
         }
         if (ch == '\r') {
-            io_putchar('\r');
-            io_putchar('\n');
+            put_char('\r');
+            put_char('\n');
             line[pos] = '\0';
             if (pos > 0) {
                 interpret_line(line);
-                io_putchar('\r');
-                io_putchar('\n');
+                put_char('\r');
+                put_char('\n');
             }
             pos = 0;
             if (running) {
@@ -1276,7 +1292,7 @@ void forth_repl(int (*get_char)(void), void (*put_char)(int)) {
             }
         } else if (ch >= 32 && pos < MAX_INPUT - 1) {
             line[pos++] = (char)ch;
-            io_putchar(ch);  // echo
+            put_char(ch);  // echo
         }
     }
 
@@ -1293,6 +1309,27 @@ int forth_eval(const char *text) {
     interpret_line(text);
     return 0;
 }
+
+void forth_save(forth_savepoint_t *sp) {
+    if (!sp) return;
+    sp->dict_count = dict_count;
+    sp->code_ptr   = code_ptr;
+    sp->heap_used  = heap_used_bytes;
+}
+
+void forth_restore(const forth_savepoint_t *sp) {
+    if (!sp) return;
+    /* Truncation only — never grow. Restoring "forward" onto a dictionary that
+     * has since shrunk would expose entries whose code has been overwritten. */
+    if (sp->dict_count < dict_count) dict_count      = sp->dict_count;
+    if (sp->code_ptr   < code_ptr)   code_ptr        = sp->code_ptr;
+    if (sp->heap_used  < heap_used_bytes) heap_used_bytes = sp->heap_used;
+    /* A failed definition can leave the interpreter mid-compile; a rollback
+     * that left `compiling` set would swallow the next line of input. */
+    compiling = false;
+}
+
+int forth_error_count(void) { return error_count; }
 
 int forth_heap_used(void) {
     return heap_used_bytes;

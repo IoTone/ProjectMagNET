@@ -188,6 +188,14 @@ static void wifi_event(craw_wifi_event_t ev, void *ctx) {
 static void checkin_task(void *arg) {
     bool settled = false;
     int  consecutive_failures = 0;
+    /* Give up on a release that has failed repeatedly, rather than re-fetching
+     * and re-failing every minute forever. A bundle with a typo is not going to
+     * start working; retrying it just burns bandwidth, fills the operator's
+     * apply-result history with identical failures, and buries any NEW problem
+     * in the noise. Cleared when the server offers a DIFFERENT release, which is
+     * exactly the signal that someone has fixed it. */
+    long poisoned_release = 0;
+    int  poison_count = 0;
     /* Let WiFi associate before the first attempt, so a fresh boot does not
      * open with a spurious "unreachable" on screen. */
     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -217,10 +225,52 @@ static void checkin_task(void *arg) {
             unsigned long freeb =
                 (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             switch (a) {
-            case OTA_UPDATE:
+            case OTA_UPDATE: {
                 draw_status("UPDATE", UI_AMBER, freeb);
                 led_rgb(48, 28, 0);
+                /* Fetch, verify, apply, report — unattended. This is the whole
+                 * proposition: nobody types anything. */
+                {
+                    const ota_release_t *pr = ota_pending();
+                    long rid = pr ? pr->release_id : 0;
+                    if (rid != poisoned_release) {   /* a different release: fresh start */
+                        poisoned_release = 0;
+                        poison_count = 0;
+                    }
+                    if (rid && rid == poisoned_release && poison_count >= 3) {
+                        usb_printf("[ota] release %ld failed %d times — not retrying "
+                                   "until a different release is offered\r\n",
+                                   rid, poison_count);
+                        draw_status("APPLY FAIL", UI_RED, freeb);
+                        led_rgb(56, 0, 0);
+                        break;
+                    }
+                }
+                usb_print("[ota] fetching + verifying...\r\n");
+                if (ota_apply_pending()) {
+                    poisoned_release = 0; poison_count = 0;
+                    usb_printf("[ota] %s\r\n", ota_apply_status());
+                    draw_status("APPLIED", UI_GREEN,
+                                heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                    /* Apply sequence: three green pulses, so the change is
+                     * visible from across the room and not only on the LCD. */
+                    for (int k = 0; k < 3; ++k) {
+                        led_rgb(0, 60, 20); vTaskDelay(pdMS_TO_TICKS(120));
+                        led_rgb(0, 0, 0);   vTaskDelay(pdMS_TO_TICKS(120));
+                    }
+                    led_rgb(0, 32, 8);
+                } else {
+                    const ota_release_t *pr = ota_pending();
+                    poisoned_release = pr ? pr->release_id : 0;
+                    poison_count++;
+                    usb_printf("[ota] apply failed (%d): %s / %s\r\n", poison_count,
+                               ota_verify_status(), ota_apply_status());
+                    draw_status("APPLY FAIL", UI_RED,
+                                heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                    led_rgb(56, 0, 0);
+                }
                 break;
+            }
             case OTA_NOOP:
                 draw_status("ONLINE", UI_GREEN, freeb);
                 led_rgb(0, 32, 8);
@@ -349,6 +399,13 @@ void app_main(void) {
 
     /* OTA supervisor + its Forth words. Registering here rather than inside
      * ota_init() keeps the engine dependency visible at the call site. */
+    /* Give Forth its output hook. console_run() replaced forth_repl() in D1 and
+     * nothing has set this since, so every Forth print went nowhere — and the
+     * unguarded io_putchar calls in w_dot/w_cr/w_emit turned that into an
+     * Instruction access fault the moment anything printed. Both ends are fixed;
+     * this is the one that matters, because silent Forth is useless anyway. */
+    forth_set_io(repl_getchar, repl_putchar);
+
     ota_init();
     ota_register_forth_words();
     usb_printf("heap after ota init: %lu bytes\r\n",

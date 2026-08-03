@@ -68,6 +68,12 @@ const char  *ota_verify_status(void);
 bool         ota_fetch_pending(void);
 const uint8_t *ota_bundle(size_t *len);
 
+/* D4: evaluate a VERIFIED bundle, roll back on failure, report the outcome. */
+bool         ota_apply(struct magnet_transport *tx, const ota_release_t *rel);
+const char  *ota_apply_status(void);
+/* Fetch, verify, apply and report whatever the last check-in flagged. */
+bool         ota_apply_pending(void);
+
 /* Register the OTA-* words. The ONLY file that changes when the Forth engine
  * is swapped for the full ESP32forth. */
 void         ota_register_forth_words(void);

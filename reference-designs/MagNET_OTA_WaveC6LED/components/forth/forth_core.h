@@ -47,6 +47,32 @@ void forth_push(intptr_t value);
 intptr_t forth_pop(void);
 
 // Cleanup
+/*
+ * DICTIONARY SAVEPOINT — the primitive that makes hot code swap safe to attempt
+ * on a device you cannot physically reach.
+ *
+ * The dictionary is append-only and find_word() searches BACKWARD, so a
+ * redefinition shadows rather than mutates. That means the entire state is three
+ * fill pointers, and rolling back is truncating them: every word defined since
+ * the savepoint disappears and any word it shadowed becomes visible again.
+ */
+typedef struct {
+    int dict_count;
+    int code_ptr;
+    int heap_used;
+} forth_savepoint_t;
+
+void forth_save(forth_savepoint_t *sp);
+void forth_restore(const forth_savepoint_t *sp);
+
+/*
+ * Count of "? ..." errors reported since boot. forth_eval() returns 0 whether
+ * or not the text made sense, so this is the only way for a caller to find out
+ * that a bundle referenced an undefined word — which is precisely the failure a
+ * rollback exists for.
+ */
+int  forth_error_count(void);
+
 void forth_deinit(void);
 
 #ifdef __cplusplus
