@@ -94,14 +94,15 @@ static int  forth_in(void)   { return -1; } /* engine is driven by forth_eval, n
 /* ---- HCP command handling ---- */
 static void emit_caps(const char *tag) {
     respond(tag,
-        "+OK proto=2.1 fw=0.5.0-ee maxline=512 "
-        "transports=usbcdc verbs=STATUS,CAPS,HELP,PING,CHAT,DM,PEERS,WHOAMI,NAME,"
+        "+OK proto=2.1 fw=0.6.0-eg maxline=512 "
+        "transports=usbcdc verbs=STATUS,CAPS,HELP,PING,CHAT,DM,PEERS,RECENT,WHOAMI,NAME,"
         "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH "
         "events=ready,state,chat,dm,cmd,peer,role,heartbeat,warn queue=4 mode=HCP");
 }
 
 static void emit_help(const char *tag) {
     mn_write_line("# HCP verbs: STATUS CAPS HELP PING CHAT <text> DM <ipv6> <text> PEERS WHOAMI");
+    mn_write_line("#            RECENT <peer-ipv6>  (catch-up: replay the peer's recent chat)");
     mn_write_line("#            NAME <name> MODE TERSE|HUMAN SUB/UNSUB <classes> CHANNEL LIST|SHOW");
     mn_write_line("#            SYSINFO MESH BENCH SELFTEST STATS [RESET] STRESS <secs> <len>");
     mn_write_line("#            HEARTBEAT <secs|0> FORTH PUBKEY ADMIN ADD|LIST ROTATE");
@@ -157,6 +158,19 @@ static void handle_hcp_line(char *line) {
         respond(tag, body);
     }
     else if (!strcmp(verb, "PEERS"))  { mn_peers_print(); respond(tag, "+OK"); }
+    else if (!strcmp(verb, "RECENT")) {
+        /* E-G SED catch-up: CoAP GET magnet/recent from a peer; the frames
+         * replay async through the normal RX path (dupes drop silently). */
+        if (*rest == '\0') { respond_err(tag, "E_SYNTAX", "RECENT <peer-ipv6>"); return; }
+        mn_state_t st = mn_get_state();
+        if (st != MN_READY && st != MN_DEGRADED) {
+            respond_err(tag, "E_BAD_STATE", mn_state_name(st)); return;
+        }
+        int rc = mn_recent_fetch(rest);
+        if (rc == -2)      respond_err(tag, "E_NO_PEER", "bad ipv6 address");
+        else if (rc != 0)  respond_err(tag, "E_INTERNAL", "send failed");
+        else               respond(tag, "+OK fetching (frames replay as events)");
+    }
     else if (!strcmp(verb, "PUBKEY")) {          /* full 65B uncompressed, hex */
         char hex[133];
         const uint8_t *pk = mn_pubkey();

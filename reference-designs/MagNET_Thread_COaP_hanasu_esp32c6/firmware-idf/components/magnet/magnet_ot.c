@@ -130,6 +130,99 @@ static otCoapResource s_magnet_res = {
     .mNext    = NULL,
 };
 
+/* ---- E-G: GET magnet/recent — SED/late-joiner catch-up (§11.5) ----
+ * Serves the core's recent-frames ring as [2B BE len][frame]… oldest-first in
+ * ONE response (no block-wise; the fill cap keeps it inside a single 6LoWPAN-
+ * fragmented message). Frames are served as stored — still ciphertext — so a
+ * stranger polling this learns nothing the radio didn't already broadcast. */
+#define MN_RECENT_RSP_MAX 960
+
+static void coap_recent_handler(void *ctx, otMessage *msg, const otMessageInfo *mi) {
+    (void)ctx;
+    if (otCoapMessageGetCode(msg) != OT_COAP_CODE_GET) return;
+
+    static uint8_t buf[MN_RECENT_RSP_MAX];   /* OT mainloop only — safe static */
+    int n = mn_recent_fill(buf, sizeof(buf));
+
+    otMessage *rsp = otCoapNewMessage(s_inst, NULL);
+    if (!rsp) return;
+    otCoapMessageInitResponse(rsp, msg,
+                              otCoapMessageGetType(msg) == OT_COAP_TYPE_CONFIRMABLE
+                                  ? OT_COAP_TYPE_ACKNOWLEDGMENT
+                                  : OT_COAP_TYPE_NON_CONFIRMABLE,
+                              OT_COAP_CODE_CONTENT);
+    otError err = OT_ERROR_NONE;
+    if (n > 0) {
+        err = otCoapMessageSetPayloadMarker(rsp);
+        if (err == OT_ERROR_NONE) err = otMessageAppend(rsp, buf, (uint16_t)n);
+    }
+    if (err != OT_ERROR_NONE || otCoapSendResponse(s_inst, rsp, mi) != OT_ERROR_NONE)
+        otMessageFree(rsp);
+}
+
+static otCoapResource s_recent_res = {
+    .mUriPath = "magnet/recent",
+    .mHandler = coap_recent_handler,
+    .mContext = NULL,
+    .mNext    = NULL,
+};
+
+/* Response side of RECENT <ipv6>: split the length-prefixed frames and replay
+ * each through the pump exactly like live traffic (decrypt/dedup do the rest).
+ * Runs in the OT mainloop task — post, don't emit. */
+static void recent_rsp_handler(void *ctx, otMessage *msg,
+                               const otMessageInfo *mi, otError result) {
+    (void)ctx; (void)mi;
+    if (result != OT_ERROR_NONE || !msg) {
+        mn_post_note("# recent: no response (peer down or timeout)");
+        return;
+    }
+    uint16_t off = otMessageGetOffset(msg);
+    uint16_t len = otMessageGetLength(msg) - off;
+    static uint8_t buf[MN_RECENT_RSP_MAX];   /* OT mainloop only */
+    if (len > sizeof(buf)) len = sizeof(buf);
+    otMessageRead(msg, off, buf, len);
+
+    int frames = 0;
+    size_t p = 0;
+    while (p + 2 <= len) {
+        uint16_t flen = (uint16_t)((buf[p] << 8) | buf[p + 1]);
+        p += 2;
+        if (flen == 0 || p + flen > len) break;      /* malformed tail: stop */
+        mn_post_rx_recent(buf + p, flen);
+        p += flen;
+        frames++;
+    }
+    mn_post_note("# recent %d frame(s) from peer (dupes drop silently)", frames);
+}
+
+int mn_recent_fetch(const char *peer_ipv6) {
+    if (!s_inst) return -1;
+    otIp6Address dst;
+    if (!peer_ipv6 || otIp6AddressFromString(peer_ipv6, &dst) != OT_ERROR_NONE)
+        return -2;
+
+    esp_openthread_lock_acquire(portMAX_DELAY);
+    otError err = OT_ERROR_NO_BUFS;
+    otMessage *msg = otCoapNewMessage(s_inst, NULL);
+    if (msg) {
+        otCoapMessageInit(msg, OT_COAP_TYPE_CONFIRMABLE, OT_COAP_CODE_GET);
+        /* a token is what the (separate or piggybacked) response matches on */
+        otCoapMessageGenerateToken(msg, OT_COAP_DEFAULT_TOKEN_LENGTH);
+        err = otCoapMessageAppendUriPathOptions(msg, "magnet/recent");
+        if (err == OT_ERROR_NONE) {
+            otMessageInfo mi;
+            memset(&mi, 0, sizeof(mi));
+            mi.mPeerAddr = dst;
+            mi.mPeerPort = OT_DEFAULT_COAP_PORT;
+            err = otCoapSendRequest(s_inst, msg, &mi, recent_rsp_handler, NULL);
+        }
+        if (err != OT_ERROR_NONE) otMessageFree(msg);
+    }
+    esp_openthread_lock_release();
+    return (err == OT_ERROR_NONE) ? 0 : -3;
+}
+
 static void on_ot_state_changed(otChangedFlags flags, void *ctx) {
     (void)ctx;
     if (!(flags & OT_CHANGED_THREAD_ROLE)) return;
@@ -184,7 +277,9 @@ int mn_ot_local_eid(char *buf, size_t cap) {
 
 /* Thread detail. Snapshot under the OT lock, emit AFTER releasing it — never
  * take the TX mutex while holding the OT lock (see magnet.h). */
-#define MN_MESH_NEIGHBOR_MAX 8
+/* E-G (§11.6): a router in a 32+ node mesh legitimately carries more than 8
+ * neighbors; truncating MESH output hides exactly the links you debug with. */
+#define MN_MESH_NEIGHBOR_MAX 16
 
 void mn_mesh_print(void) {
     if (!s_inst) { mn_emit_event("# mesh: radio not up"); return; }
@@ -265,6 +360,7 @@ static void ot_configure(otInstance *inst) {
 
     ESP_ERROR_CHECK(otCoapStart(inst, OT_DEFAULT_COAP_PORT) == OT_ERROR_NONE ? ESP_OK : ESP_FAIL);
     otCoapAddResource(inst, &s_magnet_res);
+    otCoapAddResource(inst, &s_recent_res);      /* E-G catch-up (§11.5) */
 
     mcast_from_suffix(&s_mcast, mn_channel_mcast_suffix());
     ESP_ERROR_CHECK(otIp6SubscribeMulticastAddress(inst, &s_mcast) == OT_ERROR_NONE ? ESP_OK : ESP_FAIL);
@@ -328,6 +424,8 @@ void mn_mesh_print(void) { mn_emit_event("# mesh: openthread disabled in this bu
 int mn_ot_local_eid(char *buf, size_t cap) { (void)buf; (void)cap; return -1; }
 
 int mn_ot_set_mcast(const uint8_t suffix[4]) { (void)suffix; return -1; }
+
+int mn_recent_fetch(const char *peer_ipv6) { (void)peer_ipv6; return -1; }
 
 int mn_ot_send(const uint8_t *buf, size_t len, const char *dst_ipv6, bool confirmable) {
     (void)buf; (void)confirmable;

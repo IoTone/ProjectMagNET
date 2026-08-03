@@ -31,7 +31,7 @@
 #include "forth_core.h"
 #include "sdkconfig.h"
 
-#define MN_FW_VERSION "0.5.0-ee"
+#define MN_FW_VERSION "0.6.0-eg"
 #define MN_NAME_MAX   16
 
 /* E-D: the active channel — everything (selector, mcast, key) derives from
@@ -166,7 +166,10 @@ void mn_emit_event(const char *fmt, ...) {
 SemaphoreHandle_t mn_tx_mutex(void) { return s_tx_mutex; }
 
 /* ================= peers (E-B: learned from received envelopes) ============ */
-#define MN_PEER_MAX 16
+/* E-G (§11.6): sized for the 32+ node target — an undersized LRU table
+ * thrashes at scale, which silently re-announces PEER_JOIN and re-admits
+ * replayed counters. 40 slots ≈ 3 KB; cheap insurance. */
+#define MN_PEER_MAX 40
 
 typedef struct {
     bool     used;
@@ -237,8 +240,9 @@ static int peer_count(void) {
 /* ============ replay protection (§11.1.6 high-water table) =================
  * Senders use PERSISTENT monotonic counters (NVS block-reserve), so a frame
  * with counter ≤ the sender's high-water mark is a replay/duplicate → drop.
- * Unknown sender → trust-on-first-use. LRU-bounded. */
-#define MN_DEDUP_MAX 16
+ * Unknown sender → trust-on-first-use. LRU-bounded.
+ * E-G: sized with the peer table — an evicted entry re-admits old counters. */
+#define MN_DEDUP_MAX 40
 
 static struct { bool used; uint8_t id[4]; uint32_t hi; uint32_t ticks; } s_dedup[MN_DEDUP_MAX];
 
@@ -264,6 +268,7 @@ static bool dedup_seen(const uint8_t id[4], uint32_t counter) {
 
 /* forward decls (defined with the send path below; used by the pump/init) */
 static void announce_name(void);
+static void announce_schedule(void);
 static void queue_drain(void);
 static void name_load(void);
 static void counter_load(void);
@@ -277,13 +282,15 @@ static int  send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
                           const char *dst, bool con, bool admin);
 
 /* ==================== event pump (§12.4) =================================== */
-typedef enum { MN_EVT_RX, MN_EVT_ROLE, MN_EVT_HEARTBEAT } mn_evt_kind_t;
+typedef enum { MN_EVT_RX, MN_EVT_ROLE, MN_EVT_HEARTBEAT,
+               MN_EVT_ANNOUNCE, MN_EVT_NOTE } mn_evt_kind_t;
 
 typedef struct {
     mn_evt_kind_t kind;
-    /* RX */
+    /* RX (data doubles as the NOTE text) */
     uint16_t len;
     bool     was_multicast;
+    bool     from_recent;    /* catch-up replay: src is the server, not sender */
     char     src[46];
     uint8_t  data[MN_ENV_MAX_FRAME];
     /* ROLE */
@@ -299,9 +306,22 @@ void mn_post_rx(const uint8_t *data, size_t len,
     evt.kind = MN_EVT_RX;
     evt.len = (uint16_t)len;
     evt.was_multicast = was_multicast;
+    evt.from_recent = false;
     strlcpy(evt.src, src_ipv6, sizeof(evt.src));
     memcpy(evt.data, data, len);
     xQueueSend(s_evt_q, &evt, 0);        /* full queue → drop (mesh is lossy anyway) */
+}
+
+void mn_post_rx_recent(const uint8_t *data, size_t len) {
+    if (!s_evt_q || len > MN_ENV_MAX_FRAME) return;
+    static mn_evt_t evt;                 /* OT mainloop is the only poster too */
+    evt.kind = MN_EVT_RX;
+    evt.len = (uint16_t)len;
+    evt.was_multicast = true;            /* recent ring holds multicast chat */
+    evt.from_recent = true;
+    strlcpy(evt.src, "(recent)", sizeof(evt.src));
+    memcpy(evt.data, data, len);
+    xQueueSend(s_evt_q, &evt, 0);
 }
 
 void mn_post_role(const char *role_name) {
@@ -309,6 +329,17 @@ void mn_post_role(const char *role_name) {
     static mn_evt_t evt;                 /* same single-poster discipline */
     evt.kind = MN_EVT_ROLE;
     strlcpy(evt.role, role_name, sizeof(evt.role));
+    xQueueSend(s_evt_q, &evt, 0);
+}
+
+void mn_post_note(const char *fmt, ...) {
+    if (!s_evt_q) return;
+    static mn_evt_t evt;                 /* OT mainloop is the only poster */
+    evt.kind = MN_EVT_NOTE;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf((char *)evt.data, sizeof(evt.data), fmt, ap);
+    va_end(ap);
     xQueueSend(s_evt_q, &evt, 0);
 }
 
@@ -386,13 +417,20 @@ static void handle_rx(const mn_evt_t *evt) {
 
     s_stats.rx_msgs++;
     s_stats.rx_bytes += env.payload_len;
-    peer_seen(env.sender_id, evt->src);
+    /* catch-up frames arrive FROM the serving node — its address says nothing
+     * about where the original sender lives, so don't teach the peer table */
+    if (!evt->from_recent) peer_seen(env.sender_id, evt->src);
 
     /* stress frames: count only, never emit (they'd flood the console) */
     if (env.type == MN_T_CHAT && env.payload_len >= sizeof(MN_STRESS_MARK) &&
         !memcmp(env.payload, MN_STRESS_MARK, sizeof(MN_STRESS_MARK))) {
         return;
     }
+
+    /* E-G: accepted multicast chat goes into the catch-up ring, raw wire bytes
+     * (still ciphertext — serving it reveals nothing the air didn't) */
+    if (env.type == MN_T_CHAT && evt->was_multicast && !evt->from_recent)
+        mn_recent_store(evt->data, evt->len);
 
     char idhex[9];
     snprintf(idhex, sizeof(idhex), "%02x%02x%02x%02x",
@@ -449,12 +487,16 @@ static void pump_task(void *arg) {
                 !strcmp(evt.role, "child")) {
                 if (s_state != MN_READY) {
                     mn_set_state(MN_READY);
-                    announce_name();          /* tell the mesh who we are */
+                    announce_schedule();      /* jittered announce (§11.6) */
                     queue_drain();            /* replay DEGRADED-queued sends */
                 }
             } else if (!strcmp(evt.role, "detached")) {
                 mn_set_state(s_state == MN_READY ? MN_DEGRADED : MN_ATTACHING);
             }
+        } else if (evt.kind == MN_EVT_ANNOUNCE) {
+            if (s_state == MN_READY) announce_name();
+        } else if (evt.kind == MN_EVT_NOTE) {
+            mn_write_line((const char *)evt.data);
         } else if (evt.kind == MN_EVT_HEARTBEAT) {
             /* §4.6: heartbeat only once READY/DEGRADED */
             if (s_state == MN_READY || s_state == MN_DEGRADED) {
@@ -490,6 +532,74 @@ void mn_heartbeat_set(uint32_t secs) {
     }
 }
 
+/* ---- E-G jittered announce (§11.6 Trickle-style suppression) ----
+ * On a partition heal every node enters READY within the same MLE beat; an
+ * immediate announce from each is a synchronized burst that scales with node
+ * count. Waiting a random 200–1700 ms spreads the burst across ~10 slots. */
+static TimerHandle_t s_announce_timer = NULL;
+
+static void announce_timer_cb(TimerHandle_t t) {
+    (void)t;
+    if (!s_evt_q) return;
+    static mn_evt_t evt;                 /* timer-daemon task is the only poster */
+    evt.kind = MN_EVT_ANNOUNCE;
+    xQueueSend(s_evt_q, &evt, 0);
+}
+
+static void announce_schedule(void) {
+    if (!s_announce_timer) { announce_name(); return; }
+    uint32_t ms = 200 + (esp_random() % 1500);
+    /* one-shot: ChangePeriod also (re)starts it, collapsing rapid role flaps
+     * into a single announce */
+    xTimerChangePeriod(s_announce_timer, pdMS_TO_TICKS(ms), 0);
+}
+
+/* ---- E-G recent-frames ring (SED catch-up, §11.5) ----
+ * Raw wire frames (header + ciphertext + MIC) so serving them is a memcpy and
+ * reveals nothing beyond what already went over the air. Multicast chat only:
+ * DMs are never stored — a poll must not leak someone else's unicast. */
+#define MN_RECENT_MAX 12
+
+static struct { uint16_t len; uint8_t frame[MN_ENV_MAX_FRAME]; } s_recent[MN_RECENT_MAX];
+static int s_recent_head = 0;            /* next write slot */
+static SemaphoreHandle_t s_recent_mutex = NULL;   /* pump task vs. senders vs. OT GET */
+
+void mn_recent_store(const uint8_t *frame, size_t len) {
+    if (!s_recent_mutex || len == 0 || len > MN_ENV_MAX_FRAME) return;
+    xSemaphoreTake(s_recent_mutex, portMAX_DELAY);
+    s_recent[s_recent_head].len = (uint16_t)len;
+    memcpy(s_recent[s_recent_head].frame, frame, len);
+    s_recent_head = (s_recent_head + 1) % MN_RECENT_MAX;
+    xSemaphoreGive(s_recent_mutex);
+}
+
+int mn_recent_fill(uint8_t *buf, size_t cap) {
+    if (!s_recent_mutex) return 0;
+    xSemaphoreTake(s_recent_mutex, portMAX_DELAY);
+    /* pick newest-first until the response is full… */
+    int pick[MN_RECENT_MAX], np = 0;
+    size_t need = 0;
+    for (int i = 1; i <= MN_RECENT_MAX; i++) {
+        int idx = (s_recent_head - i + MN_RECENT_MAX) % MN_RECENT_MAX;
+        uint16_t flen = s_recent[idx].len;
+        if (!flen) break;                /* ring not yet wrapped: older = empty */
+        if (need + 2 + flen > cap) break;
+        need += 2 + flen;
+        pick[np++] = idx;
+    }
+    /* …then emit oldest-first so the poller's high-water dedup admits them all */
+    size_t n = 0;
+    for (int i = np - 1; i >= 0; i--) {
+        uint16_t flen = s_recent[pick[i]].len;
+        buf[n]     = (uint8_t)(flen >> 8);
+        buf[n + 1] = (uint8_t)flen;
+        memcpy(buf + n + 2, s_recent[pick[i]].frame, flen);
+        n += 2 + flen;
+    }
+    xSemaphoreGive(s_recent_mutex);
+    return (int)n;
+}
+
 /* =========================== bringup ====================================== */
 void mn_core_init(void) {
     if (!s_tx_mutex) s_tx_mutex = xSemaphoreCreateRecursiveMutex();
@@ -506,15 +616,22 @@ void mn_core_init(void) {
     if (!strcmp(s_chan.name, "magnet"))
         mn_emit_event("!WARN default-channel-insecure use CHANNEL SET");
     if (!s_evt_q) {
-        s_evt_q = xQueueCreate(8, sizeof(mn_evt_t));
+        /* E-G: 12 deep — a catch-up response replays up to 12 frames back-to-
+         * back from the OT task; an 8-deep queue dropped the tail */
+        s_evt_q = xQueueCreate(12, sizeof(mn_evt_t));
         xTaskCreate(pump_task, "mn_pump", 4096, NULL, 5, NULL);
     }
     if (!s_selftest_sem) s_selftest_sem = xSemaphoreCreateBinary();
     if (!s_forth_mutex)  s_forth_mutex  = xSemaphoreCreateMutex();
+    if (!s_recent_mutex) s_recent_mutex = xSemaphoreCreateMutex();
     if (!s_hb_timer) {
         s_hb_timer = xTimerCreate("mn_hb", pdMS_TO_TICKS(30 * 1000), pdTRUE,
                                   NULL, hb_timer_cb);
         xTimerStart(s_hb_timer, 0);
+    }
+    if (!s_announce_timer) {
+        s_announce_timer = xTimerCreate("mn_ann", pdMS_TO_TICKS(1000), pdFALSE,
+                                        NULL, announce_timer_cb);
     }
 }
 
@@ -588,8 +705,19 @@ static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
 
     s_stats.tx_try++;
     int rc = mn_ot_send(frame, (size_t)n, dst, con);
-    if (rc == 0) { s_stats.tx_ok++; s_stats.tx_bytes += len; }
-    else         s_stats.tx_err++;
+    if (rc == 0) {
+        s_stats.tx_ok++;
+        s_stats.tx_bytes += len;
+        /* E-G: our own multicast chat joins the catch-up ring too, so a
+         * poller gets the full channel history, not just what we overheard.
+         * Stress frames stay out — they'd flush 12 real messages in ~10 ms. */
+        if (type == MN_T_CHAT && !dst &&
+            !(len >= sizeof(MN_STRESS_MARK) &&
+              !memcmp(payload, MN_STRESS_MARK, sizeof(MN_STRESS_MARK))))
+            mn_recent_store(frame, (size_t)n);
+    } else {
+        s_stats.tx_err++;
+    }
     return rc;
 }
 
@@ -634,6 +762,12 @@ int mn_channel_set(const char *cred, size_t len, char *info, size_t cap) {
     mn_ot_set_mcast(s_chan.mcast_suffix);        /* no-op if radio not up */
     memset(s_dedup, 0, sizeof(s_dedup));         /* new channel, new peers */
     memset(s_peers, 0, sizeof(s_peers));
+    if (s_recent_mutex) {                        /* stale-channel frames out */
+        xSemaphoreTake(s_recent_mutex, portMAX_DELAY);
+        memset(s_recent, 0, sizeof(s_recent));
+        s_recent_head = 0;
+        xSemaphoreGive(s_recent_mutex);
+    }
     if (info) snprintf(info, cap, "%s selector=%04x path=%c",
                        s_chan.name, s_chan.selector, s_chan.cred_path);
     /* §12.9 Q3: provisioning done → reclaim the radio and NimBLE's RAM.

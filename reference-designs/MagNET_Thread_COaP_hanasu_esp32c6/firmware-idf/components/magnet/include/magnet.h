@@ -117,7 +117,9 @@ void mn_link_feed_line(const char *line);
 
 /* ---- E-E: Forth automation hooks + script persistence (§12.3) ----
  * Hooks are registered by WORD NAME (the stub engine exposes no execution
- * tokens; spec's `( xt -- )` form returns with the full ESP32forth port, E-G).
+ * tokens). E-G decision: the stub STAYS — it never blocked a real script
+ * through E-E/E-F, so the full ESP32forth port (and the `( xt -- )` hook
+ * form) remains deferred until a script actually needs it.
  * The hook word is invoked ON THE PUMP TASK — never in OT/lwIP callback
  * context — with the message pushed as ( c-addr u ) plus the sender id.
  *   kind 0 = chat, 1 = m2m cmd */
@@ -150,6 +152,19 @@ int  mn_stress_start(uint32_t secs, uint32_t payload_len); /* saturation burst:
                                             count them silently. 0=started,
                                             -1=already running, -2=bad args    */
 
+/* ---- E-G: SED catch-up (§11.5/§11.6) ----
+ * Every accepted multicast chat frame (sent or received, raw wire bytes) goes
+ * into a small ring; peers poll it with CoAP GET magnet/recent. Frames are
+ * served ciphertext-as-stored — the poller runs them through its normal
+ * decrypt/dedup path, so catch-up delivers exactly the frames it missed and
+ * silently drops the ones it already has. */
+void mn_recent_store(const uint8_t *frame, size_t len);
+int  mn_recent_fill(uint8_t *buf, size_t cap);  /* [2B BE len][frame]…, oldest
+                                                   first; returns bytes filled */
+int  mn_recent_fetch(const char *peer_ipv6);    /* CoAP GET to a peer; frames
+                                                   replay async as events.
+                                                   0=sent -1=no radio -2=bad ip */
+
 /* ---- Event pump (§12.4) ----
  * OpenThread callbacks run with the OT lock held; taking the TX mutex there
  * can ABBA-deadlock against a Forth/HCP task that holds the TX mutex while
@@ -157,7 +172,13 @@ int  mn_stress_start(uint32_t secs, uint32_t payload_len); /* saturation burst:
  * a pump task does the core processing + emission. */
 void mn_post_rx(const uint8_t *data, size_t len,
                 const char *src_ipv6, bool was_multicast);
+/* Same, for catch-up frames served by a peer: the UDP source is the SERVING
+ * node, not the original sender, so peer-table learning is skipped. */
+void mn_post_rx_recent(const uint8_t *data, size_t len);
 void mn_post_role(const char *role_name);
+/* Post one preformatted '#'/'!' line to be emitted from the pump task (for
+ * OT-context code that must not touch the TX mutex). */
+void mn_post_note(const char *fmt, ...);
 
 /* ---- Mesh transport (implemented by magnet_ot.c; stubbed when OT disabled) ---- */
 /* dst_ipv6 == NULL → the default channel multicast group. */

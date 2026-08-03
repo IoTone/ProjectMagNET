@@ -265,6 +265,7 @@ function (§12.1 one-implementation rule):
 | `HEARTBEAT <secs>` | `<secs> mn-heartbeat!` | `!HEARTBEAT <state> <uptime> <role> <peers>` cadence (default 30 s, 0 = off; only emits in READY/DEGRADED per §4.6) |
 | `STATS [RESET]` | `mn-stats` | tx try/ok/err/bytes + rx msgs/dup/err/bytes since boot or last reset |
 | `STRESS <secs> <len>` | `<secs> <len> mn-stress` | saturation burst: a task multicasts `<len>`-byte marked chat frames back-to-back for `<secs>`; receivers count them silently (no `!CHAT` flood); `!STRESS` progress every 30 s, `!STRESS_DONE` with totals |
+| `RECENT <peer-ipv6>` | — | E-G catch-up: CoAP `GET magnet/recent` from the peer; its ring of recent multicast chat replays through the normal RX path (missed frames emit `!CHAT`, dupes drop; `# recent N frame(s)` when done) |
 
 ## Path B derivation cost (and the watchdog it used to trip)
 
@@ -414,6 +415,76 @@ BENCH           → # bench env pack=…us/op …
 Caveat: run `SELFTEST` from HCP mode. At the `ok>` prompt the dispatcher holds
 the TX writer across the whole eval, so the pump/loopback stages would stall —
 they detect this and report *skipped* (envelope roundtrip still runs).
+
+## E-G: scale + SED catch-up + hardening (fw 0.6.0-eg, validated 2026-08-03)
+
+The last firmware phase of the design proposal (§11.5/§11.6). Bench: **4 nodes**
+— `probe` (resident companion), `xray1`, `sdk-b`, `xray2` (all M5NanoC6-class,
+default `magnet` channel).
+
+**What shipped:**
+
+- **SED / late-joiner catch-up.** Every accepted multicast chat frame (sent or
+  received, raw wire bytes — still ciphertext) lands in a 12-slot ring;
+  `GET magnet/recent` (CoAP) serves it as `[2B BE len][frame]…` oldest-first in
+  one response (≤960 B, no block-wise). New HCP verb **`RECENT <peer-ipv6>`**
+  fetches and replays the frames through the normal RX path, so decrypt +
+  high-water dedup give catch-up semantics for free: you get exactly what you
+  missed, dupes drop silently. DMs are never stored — a poll cannot leak
+  someone else's unicast. The ring clears on `CHANNEL SET`.
+- **§11.6 scale sizing.** Peer + replay tables 16 → 40 slots (an undersized LRU
+  re-admits replayed counters and re-fires `!PEER_JOIN` at 32+ nodes), `MESH`
+  neighbor list 8 → 16, event pump queue 8 → 12 (a full catch-up response
+  replays 12 frames back-to-back). Net RAM cost ≈ 13 KB (measured).
+- **Jittered announce (Trickle-style suppression).** On a partition heal every
+  node hits READY in the same MLE beat; announcing immediately is a
+  synchronized burst that scales with node count. The READY announce now waits
+  a random 200–1700 ms (one-shot timer; rapid role flaps collapse into one
+  announce). Forwarding-layer suppression is already Thread's job: multicast
+  rides **MPL, which *is* Trickle** (RFC 7731) — the app layer adds the
+  sender/counter dedup and this jitter, not another rebroadcast layer.
+- **ESP32forth port decision: the stub stays.** The spec gated the full
+  v7.0.8.0 port on "iff the stub blocks real scripts". Through E-E/E-F it never
+  did — hooks, autorun scripts and the FFI vocabulary all run on the stub. The
+  port (and the `( xt -- )` hook form) stays deferred until a script actually
+  needs it.
+
+**Validation scorecard (all on hardware):**
+
+| Test | Result |
+|------|--------|
+| Selftest, all 4 nodes | 4/4 PASS (env roundtrip, event pump, CoAP loopback) |
+| Catch-up, hard outage | sdk-b held in **bootloader** through 3 chats → boots with `rx msgs=0` → `RECENT <xray1>` replays 6 frames as `!CHAT` |
+| Catch-up idempotence | second fetch: 6 frames served, **6 deduped, 0 emitted** |
+| Catch-up vs MPL window | a *fast* reboot needs no catch-up: MPL's Trickle retransmissions delivered the "missed" multicast on reattach, and the later `RECENT` replay deduped cleanly (`msgs=3 dup=3`) |
+| Leader failover | leader (xray2) radio-dead via bootloader hold → xray1 forms new partition + takes leadership, observed **≤ ~15 s**; sdk-b + probe merge; xray2 rejoins as child — no partition fight |
+| Saturation (STRESS 15 s, 200 B, all 4 nodes BLE up) | sender accepted 30.1 msg/s (OT backpressure rejects the rest, as designed); per-receiver delivery 74–93/452 (16–21%), `rx err=0`, MPL dupes silently suppressed |
+| Announce jitter | names propagate to all peer tables after every reboot/rejoin in the run |
+| Heap, resident build (worst case) | 161.7 KB free / 160.5 KB min-ever — E-F baseline minus the ~13 KB of new tables, no leak |
+
+Saturation context: 200 B ⇒ 2–3 802.15.4 fragments, unacknowledged multicast —
+same congestive-collapse regime the E-B table above characterizes, now with
+NimBLE advertising on all four nodes sharing the 2.4 GHz front end. Chat-rate
+traffic remains the E-B story (lossless single-frame at 1 msg/s/node).
+
+> **Bench technique — killing a node for real:** RTS "hold in reset" power-
+> cycles the C6 (the USB bridge is on-die; see the E-B note above). What *does*
+> work without touching cables: `esptool.py --after no_reset chip_id` leaves
+> the chip parked in the ROM bootloader — radio genuinely dead until the next
+> RTS pulse (`hcp.py <port> --reboot`). That is how the catch-up outage and the
+> leader kill above were staged.
+
+**32+ node soak — status and plan.** Four nodes is the bench ceiling; the 32+
+soak needs hardware that doesn't exist here yet. What E-G changes ship ready
+for it: tables sized for 40 senders, heal-storm jitter, catch-up for nodes that
+sleep through traffic. The soak plan, when hardware lands: (1) 32× C6 on one
+powered USB fabric, staggered boot; (2) steady-state 1 msg/s/node paced chat
+for 24 h — expect 0% single-frame loss per the E-B steady-state table, watch
+`rx dup` (MPL suppression working) and `!PEER_JOIN` churn (table thrash — must
+be zero); (3) leader kill + partition-heal cycles hourly via the bootloader
+trick, watching announce-burst collapse; (4) heap min-ever on every node
+before/after. Go/no-go: no WDT, no heap slide, dedup tables never evict a
+live sender.
 
 ## Go / No-Go criteria
 
