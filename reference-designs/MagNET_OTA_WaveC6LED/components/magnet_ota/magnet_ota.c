@@ -18,6 +18,8 @@
 #include "forth_core.h"
 #include "cJSON.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "magnet_ota";
 
@@ -25,6 +27,18 @@ static const char *TAG = "magnet_ota";
  * which measures a few hundred bytes. The transport flags truncation rather
  * than letting a clipped body parse as "noop". */
 #define RESP_CAP 2048
+
+/*
+ * Check-ins are SERIALISED and the response buffer is STATIC.
+ *
+ * Two callers exist — the 60 s poll task and the console's `checkin` command —
+ * and nothing stopped them overlapping. Worse, a 2 KB response buffer as a
+ * local put ~2.4 KB of locals on a 6 KB task stack before esp_http_client added
+ * its own frames, which is how you get corruption that presents as sockets
+ * failing rather than as an obvious overflow.
+ */
+static SemaphoreHandle_t s_lock;
+static char s_resp[RESP_CAP];
 
 static magnet_transport_t *s_tx;
 static ota_release_t s_pending;
@@ -34,6 +48,7 @@ static char s_status[64] = "idle";
 esp_err_t ota_init(void) {
     s_tx = transport_ip();
     if (!s_tx) return ESP_FAIL;
+    if (!s_lock) s_lock = xSemaphoreCreateMutex();
     return s_tx->open(s_tx);
 }
 
@@ -50,14 +65,18 @@ static void jstr(cJSON *o, const char *key, char *dst, size_t cap) {
 }
 
 ota_action_t ota_checkin(void) {
-    char resp[RESP_CAP];
     size_t rlen = 0;
     char body[192];
     char ver[CFG_MAX];
 
     if (!s_tx) { snprintf(s_status, sizeof s_status, "not initialised"); return OTA_ERROR; }
+    if (s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(15000)) != pdTRUE) {
+        snprintf(s_status, sizeof s_status, "busy");
+        return OTA_ERROR;
+    }
     if (!cfg_get(CFG_SERVER_URL, ver, sizeof ver)) {
         snprintf(s_status, sizeof s_status, "no server_url");
+        if (s_lock) xSemaphoreGive(s_lock);
         return OTA_ERROR;
     }
 
@@ -67,16 +86,15 @@ ota_action_t ota_checkin(void) {
     snprintf(body, sizeof body, "{\"current_version\":\"%s\"}", "0.0.0");
 
     int st = s_tx->request(s_tx, "POST", "/api/devices/check-in",
-                           body, resp, sizeof resp, &rlen);
-    if (st < 0) {
-        snprintf(s_status, sizeof s_status, "unreachable");
-        return OTA_ERROR;
-    }
-    if (st == 401) { snprintf(s_status, sizeof s_status, "bad token"); return OTA_ERROR; }
-    if (st == 429) { snprintf(s_status, sizeof s_status, "cooldown"); return OTA_ERROR; }
+                           body, s_resp, sizeof s_resp, &rlen);
+    if (s_lock) xSemaphoreGive(s_lock);
+
+    if (st < 0)    { snprintf(s_status, sizeof s_status, "unreachable"); return OTA_ERROR; }
+    if (st == 401) { snprintf(s_status, sizeof s_status, "bad token");   return OTA_ERROR; }
+    if (st == 429) { snprintf(s_status, sizeof s_status, "cooldown");    return OTA_ERROR; }
     if (st != 200) { snprintf(s_status, sizeof s_status, "http %d", st); return OTA_ERROR; }
 
-    cJSON *root = cJSON_ParseWithLength(resp, rlen);
+    cJSON *root = cJSON_ParseWithLength(s_resp, rlen);
     if (!root) { snprintf(s_status, sizeof s_status, "bad json"); return OTA_ERROR; }
 
     char action[16];

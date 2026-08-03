@@ -20,6 +20,7 @@
 #include "craw_wifi.h"
 #include "console.h"
 #include "magnet_ota.h"
+#include "esp_wifi.h"
 
 /* 100 KB dictionary. No PSRAM on this board, and 512 KB of HP SRAM has to also
  * hold WiFi + TLS from D1 onward, so this stays modest until measured. */
@@ -103,6 +104,12 @@ static void draw_status(const char *state, uint16_t state_colour,
     ui_text(6, 148, "STATE", UI_DIM, UI_BG, 1);
     ui_text(6, 162, state, state_colour, UI_BG, 2);
 
+    /* Check-in outcome in words. An operator in front of the device should be
+     * able to tell "up to date" from "cannot reach the server" without a
+     * serial cable — that distinction is the whole point of having a screen. */
+    ui_text(6, 190, "CHECK-IN", UI_DIM, UI_BG, 1);
+    ui_text(6, 204, ota_last_status(), UI_CYAN, UI_BG, 1);
+
     ui_text(6, 200, "FREE RAM", UI_DIM, UI_BG, 1);
     snprintf(line, sizeof(line), "%lu KB", heap_free / 1024);
     ui_text(6, 214, line, UI_WHITE, UI_BG, 2);
@@ -135,6 +142,19 @@ static void wifi_event(craw_wifi_event_t ev, void *ctx) {
     unsigned long freeb = (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     switch (ev) {
     case CRAW_WIFI_EVENT_CONNECTED: {
+        /* TURN OFF MODEM SLEEP.
+         *
+         * IDF defaults to WIFI_PS_MIN_MODEM, which parks the radio between
+         * beacons. On this AP that produced ~300 ms pings and then outright
+         * unreachability: the board held a valid IP and reported "connected"
+         * while inbound TCP connects failed and it stopped answering ICMP
+         * entirely — which reads as a dead server rather than a sleeping radio.
+         *
+         * This device is mains-powered over USB-C and its whole job is to be
+         * reachable, so there is nothing to save and a lot to lose. If a
+         * battery variant ever appears, power save belongs behind a config
+         * flag, not back as the default. */
+        esp_wifi_set_ps(WIFI_PS_NONE);
         char ip[32] = "";
         craw_wifi_get_ip_str(ip, sizeof ip);
         usb_printf("[wifi] connected, ip %s, heap %lu\r\n", ip, freeb);
@@ -152,6 +172,72 @@ static void wifi_event(craw_wifi_event_t ev, void *ctx) {
         draw_status("WIFI FAIL", UI_RED, freeb);
         led_rgb(48, 0, 0);
         break;
+    }
+}
+
+/*
+ * The check-in poll. A device that only checks in when someone types a command
+ * is not an OTA client — the whole proposition is that it updates unattended.
+ *
+ * 60 s by default, per docs/prototype-demo-plan.md. The server enforces its own
+ * 5 s per-device cooldown and answers 429 below that, so this interval is the
+ * device being polite rather than the only thing preventing a hammering.
+ */
+#define CHECKIN_PERIOD_MS (60 * 1000)
+
+static void checkin_task(void *arg) {
+    bool settled = false;
+    /* Let WiFi associate before the first attempt, so a fresh boot does not
+     * open with a spurious "unreachable" on screen. */
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    for (;;) {
+        if (!craw_wifi_is_connected()) {
+            /* Retry SOON, not after a full period. Association typically
+             * completes ~10 s after boot, well past the first tick; sleeping
+             * the whole 60 s here made a healthy device look dead for a minute
+             * after every power-on. */
+            settled = false;
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
+        if (!settled) {
+            /* GOT_IP is not the same as "the network works". A check-in issued
+             * ~2 s after DHCP reliably failed to connect while the identical
+             * request 15 s later succeeded — ARP for the gateway and the route
+             * to the server still have to settle. Firing too early painted
+             * UNREACHABLE on the screen of a device that was perfectly fine,
+             * which is a worse lie than saying nothing yet. */
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            settled = true;
+        }
+        {
+            led_rgb(0, 0, 40);                       /* blue: talking */
+            ota_action_t a = ota_checkin();
+            unsigned long freeb =
+                (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            switch (a) {
+            case OTA_UPDATE:
+                draw_status("UPDATE", UI_AMBER, freeb);
+                led_rgb(48, 28, 0);
+                break;
+            case OTA_NOOP:
+                draw_status("ONLINE", UI_GREEN, freeb);
+                led_rgb(0, 32, 8);
+                break;
+            default:
+                draw_status("CHECKIN ERR", UI_RED, freeb);
+                led_rgb(48, 0, 0);
+                break;
+            }
+            usb_printf("[checkin] %s\r\n", ota_last_status());
+
+            /* A failure retries in 10 s rather than 60. A transient blip should
+             * not leave the screen showing an error for a full minute after the
+             * problem has gone. */
+            vTaskDelay(pdMS_TO_TICKS(a == OTA_ERROR ? 10000 : CHECKIN_PERIOD_MS));
+            continue;
+        }
+        vTaskDelay(pdMS_TO_TICKS(CHECKIN_PERIOD_MS));
     }
 }
 
@@ -231,6 +317,9 @@ void app_main(void) {
     ota_register_forth_words();
     usb_printf("heap after ota init: %lu bytes\r\n",
                (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+    /* 8 KB: esp_http_client needs several KB of frames of its own. */
+    xTaskCreate(checkin_task, "checkin", 8192, NULL, 4, NULL);
 
     console_run(repl_getchar, repl_putchar, usb_print);
     forth_deinit();
