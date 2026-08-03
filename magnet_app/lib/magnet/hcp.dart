@@ -157,8 +157,19 @@ class HcpClient {
   /// Commands are serialized so a tag can never be ambiguous. Returns the
   /// `+OK …` body without the sigil; throws [HcpError] on `-ERR`.
   Future<String> command(String line,
+          {Duration timeout = const Duration(seconds: 8)}) async =>
+      (await commandCaptured(line, timeout: timeout)).$1;
+
+  /// Like [command], but also returns the `#` comment lines that arrived
+  /// during THIS command, captured before the next queued command can clear
+  /// them. Callers that parse comments (PEERS, MESH, STATS, ADMIN LIST) must
+  /// use this rather than [lastComments] whenever another command could be
+  /// queued concurrently — [lastComments] is only safe when the caller owns
+  /// the client exclusively and serialises its own calls.
+  Future<(String, List<String>)> commandCaptured(String line,
       {Duration timeout = const Duration(seconds: 8)}) {
-    final Completer<String> done = Completer<String>();
+    final Completer<(String, List<String>)> done =
+        Completer<(String, List<String>)>();
     _queue = _queue.then((_) async {
       _recentComments.clear();
       _tagSeq = (_tagSeq + 1) % 10000;
@@ -172,7 +183,9 @@ class HcpClient {
           _pending.remove(tag);
           throw HcpTimeout(line);
         });
-        if (!done.isCompleted) done.complete(r);
+        if (!done.isCompleted) {
+          done.complete((r, List<String>.unmodifiable(_recentComments)));
+        }
       } catch (e) {
         _pending.remove(tag);
         if (!done.isCompleted) done.completeError(e);

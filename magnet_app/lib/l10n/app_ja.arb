@@ -1,12 +1,15 @@
 {
   "@@locale": "ja",
 
-  "appTitle": "Responsive IoT 2026",
-  "aboutSubtitle": "BLE・WiFi デバイススキャナー",
+  "appTitle": "MagNET",
+  "aboutSubtitle": "Hanasu メッシュ設定・フィールドコンソール",
   "aboutVersion": "バージョン {version}",
-  "aboutDescription": "Bluetooth LE と WiFi スキャンのためのオープンな Flutter スターター。",
-  "aboutCopyright": "© IoTone Japan, 2024–2026",
+  "aboutDescription": "BLE 経由で MagNET Hanasu Thread メッシュをプロビジョニングし、観察し、会話する — ハードウェアのそばで手に持つツール。",
+  "aboutCopyright": "© 2024–2026 IoTone, Inc.",
   "aboutLicense": "MIT ライセンス",
+  "aboutProtocol": "MagNET HCP プロトコル {proto}",
+  "@aboutProtocol": { "placeholders": { "proto": { "type": "String" } } },
+  "aboutLicensesButton": "オープンソースライセンス",
   "aboutMadeWith": "Flutter で構築。",
 
   "tabDashboard": "ダッシュボード",
@@ -41,6 +44,8 @@
   "radarSelf": "自分",
   "radarLegendBle": "Bluetooth デバイス",
   "radarLegendWifi": "WiFi ネットワーク",
+  "radarLegendMagnet": "MagNET ノード",
+  "radarLegendCompanion": "コンパニオン（メッシュ窓口）",
   "radarLegendRings": "リング = おおよその信号距離（目安）。",
 
   "devicesEmpty": "まだ何も見つかりません — スキャンを開始してください。",
@@ -114,5 +119,32 @@
   "firstRunSkip": "後で",
 
   "langEnglish": "English",
-  "langJapanese": "日本語"
+  "langJapanese": "日本語",
+
+  "meshTitle": "メッシュ",
+  "meshDashboardCard": "ライブメッシュ",
+  "meshDashboardHint": "コンパニオンノード経由でメッシュを見て話す",
+  "meshTabFeed": "フィード",
+  "meshTabPeers": "ピア",
+  "meshTabTopology": "トポロジー",
+  "meshPickTitle": "コンパニオンノードを選択",
+  "meshPickHint": "コンパニオンノードはBLEを維持し、このスマートフォンのメッシュへの窓口になります。レジデントビルドを書き込んだノードを選んでください。",
+  "meshPickScan": "ノードをスキャン",
+  "meshPickScanning": "スキャン中…",
+  "meshPickEmpty": "MagNETノードが見つかりません。コンパニオンの電源と距離を確認してください。",
+  "meshStateConnecting": "接続中…",
+  "meshStateConnected": "ライブ",
+  "meshStateDisconnected": "切断",
+  "meshStateError": "接続が切れました",
+  "meshReconnect": "再接続",
+  "meshChangeCompanion": "コンパニオンノードを変更",
+  "meshComposerHint": "チャンネルへメッセージ…",
+  "meshSend": "送信",
+  "meshFeedEmpty": "まだ何もありません — トラフィックが発生するとここに表示されます。",
+  "meshNoPeers": "ピアはまだ見つかっていません。",
+  "meshPeerLastSeen": "{ago}秒前に確認",
+  "@meshPeerLastSeen": { "placeholders": { "ago": { "type": "String" } } },
+  "meshNeighbors": "近隣ノード",
+  "meshNoNeighbors": "近隣ノードは報告されていません。",
+  "meshRefresh": "更新"
 }

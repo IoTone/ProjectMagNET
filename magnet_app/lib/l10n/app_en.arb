@@ -1,13 +1,16 @@
 {
   "@@locale": "en",
 
-  "appTitle": "Responsive IoT 2026",
-  "aboutSubtitle": "BLE & WiFi device scanner",
+  "appTitle": "MagNET",
+  "aboutSubtitle": "Hanasu mesh configurator & field console",
   "aboutVersion": "Version {version}",
   "@aboutVersion": { "placeholders": { "version": { "type": "String" } } },
-  "aboutDescription": "An open Flutter starter for Bluetooth LE and WiFi scanning.",
-  "aboutCopyright": "© IoTone Japan, 2024–2026",
+  "aboutDescription": "Provision, watch, and talk to a MagNET Hanasu Thread mesh over BLE — the thing you hold while standing next to hardware.",
+  "aboutCopyright": "© 2024–2026 IoTone, Inc.",
   "aboutLicense": "MIT License",
+  "aboutProtocol": "MagNET HCP protocol {proto}",
+  "@aboutProtocol": { "placeholders": { "proto": { "type": "String" } } },
+  "aboutLicensesButton": "Open-source licenses",
   "aboutMadeWith": "Built with Flutter.",
 
   "tabDashboard": "Dashboard",
@@ -42,6 +45,8 @@
   "radarSelf": "You",
   "radarLegendBle": "Bluetooth device",
   "radarLegendWifi": "WiFi network",
+  "radarLegendMagnet": "MagNET node",
+  "radarLegendCompanion": "Companion (mesh window)",
   "radarLegendRings": "Rings = approximate signal distance (rough).",
 
   "devicesEmpty": "Nothing found yet — start a scan.",
@@ -120,5 +125,32 @@
   "firstRunSkip": "Skip for now",
 
   "langEnglish": "English",
-  "langJapanese": "日本語"
+  "langJapanese": "日本語",
+
+  "meshTitle": "Mesh",
+  "meshDashboardCard": "Live mesh",
+  "meshDashboardHint": "Watch and talk to the mesh through the companion node",
+  "meshTabFeed": "Feed",
+  "meshTabPeers": "Peers",
+  "meshTabTopology": "Topology",
+  "meshPickTitle": "Choose a companion node",
+  "meshPickHint": "The companion node keeps BLE on and acts as this phone's window into the mesh. Pick the node flashed with the resident build.",
+  "meshPickScan": "Scan for nodes",
+  "meshPickScanning": "Scanning…",
+  "meshPickEmpty": "No MagNET nodes found. Is the companion powered and in range?",
+  "meshStateConnecting": "Connecting…",
+  "meshStateConnected": "Live",
+  "meshStateDisconnected": "Disconnected",
+  "meshStateError": "Connection lost",
+  "meshReconnect": "Reconnect",
+  "meshChangeCompanion": "Change companion node",
+  "meshComposerHint": "Message the channel…",
+  "meshSend": "Send",
+  "meshFeedEmpty": "Nothing yet — traffic will appear here as it happens.",
+  "meshNoPeers": "No peers seen yet.",
+  "meshPeerLastSeen": "last seen {ago}s ago",
+  "@meshPeerLastSeen": { "placeholders": { "ago": { "type": "String" } } },
+  "meshNeighbors": "Neighbors",
+  "meshNoNeighbors": "No neighbors reported.",
+  "meshRefresh": "Refresh"
 }

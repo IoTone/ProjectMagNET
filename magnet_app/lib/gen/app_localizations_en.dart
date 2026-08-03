@@ -9,10 +9,10 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
-  String get appTitle => 'Responsive IoT 2026';
+  String get appTitle => 'MagNET';
 
   @override
-  String get aboutSubtitle => 'BLE & WiFi device scanner';
+  String get aboutSubtitle => 'Hanasu mesh configurator & field console';
 
   @override
   String aboutVersion(String version) {
@@ -21,13 +21,21 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get aboutDescription =>
-      'An open Flutter starter for Bluetooth LE and WiFi scanning.';
+      'Provision, watch, and talk to a MagNET Hanasu Thread mesh over BLE — the thing you hold while standing next to hardware.';
 
   @override
-  String get aboutCopyright => '© IoTone Japan, 2024–2026';
+  String get aboutCopyright => '© 2024–2026 IoTone, Inc.';
 
   @override
   String get aboutLicense => 'MIT License';
+
+  @override
+  String aboutProtocol(String proto) {
+    return 'MagNET HCP protocol $proto';
+  }
+
+  @override
+  String get aboutLicensesButton => 'Open-source licenses';
 
   @override
   String get aboutMadeWith => 'Built with Flutter.';
@@ -113,6 +121,12 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get radarLegendWifi => 'WiFi network';
+
+  @override
+  String get radarLegendMagnet => 'MagNET node';
+
+  @override
+  String get radarLegendCompanion => 'Companion (mesh window)';
 
   @override
   String get radarLegendRings => 'Rings = approximate signal distance (rough).';
@@ -326,4 +340,85 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get langJapanese => '日本語';
+
+  @override
+  String get meshTitle => 'Mesh';
+
+  @override
+  String get meshDashboardCard => 'Live mesh';
+
+  @override
+  String get meshDashboardHint =>
+      'Watch and talk to the mesh through the companion node';
+
+  @override
+  String get meshTabFeed => 'Feed';
+
+  @override
+  String get meshTabPeers => 'Peers';
+
+  @override
+  String get meshTabTopology => 'Topology';
+
+  @override
+  String get meshPickTitle => 'Choose a companion node';
+
+  @override
+  String get meshPickHint =>
+      'The companion node keeps BLE on and acts as this phone\'s window into the mesh. Pick the node flashed with the resident build.';
+
+  @override
+  String get meshPickScan => 'Scan for nodes';
+
+  @override
+  String get meshPickScanning => 'Scanning…';
+
+  @override
+  String get meshPickEmpty =>
+      'No MagNET nodes found. Is the companion powered and in range?';
+
+  @override
+  String get meshStateConnecting => 'Connecting…';
+
+  @override
+  String get meshStateConnected => 'Live';
+
+  @override
+  String get meshStateDisconnected => 'Disconnected';
+
+  @override
+  String get meshStateError => 'Connection lost';
+
+  @override
+  String get meshReconnect => 'Reconnect';
+
+  @override
+  String get meshChangeCompanion => 'Change companion node';
+
+  @override
+  String get meshComposerHint => 'Message the channel…';
+
+  @override
+  String get meshSend => 'Send';
+
+  @override
+  String get meshFeedEmpty =>
+      'Nothing yet — traffic will appear here as it happens.';
+
+  @override
+  String get meshNoPeers => 'No peers seen yet.';
+
+  @override
+  String meshPeerLastSeen(String ago) {
+    return 'last seen ${ago}s ago';
+  }
+
+  @override
+  String get meshNeighbors => 'Neighbors';
+
+  @override
+  String get meshNoNeighbors => 'No neighbors reported.';
+
+  @override
+  String get meshRefresh => 'Refresh';
 }

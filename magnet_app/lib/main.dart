@@ -17,6 +17,7 @@ import 'package:magnet_app/scanner/scanner_controller.dart';
 import 'package:magnet_app/scanner/wifi_sources.dart';
 import 'package:magnet_app/screens/first_run_intro_screen.dart';
 import 'package:magnet_app/splash/branded_splash_screen.dart';
+import 'package:magnet_app/magnet/mesh_session.dart';
 import 'package:magnet_app/theme/theme_controller.dart';
 
 void main() {
@@ -49,6 +50,11 @@ void main() {
               ble: FlutterBlueScanner(),
               wifi: createWifiSource(),
             ),
+          ),
+          // M3: the companion-node link lives above navigation so the live
+          // feed keeps accumulating while the user is on other screens.
+          ChangeNotifierProvider<MeshSession>(
+            create: (_) => MeshSession()..load(),
           ),
         ],
         child: const MyApp(),

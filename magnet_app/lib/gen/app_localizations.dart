@@ -101,13 +101,13 @@ abstract class AppLocalizations {
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:
-  /// **'Responsive IoT 2026'**
+  /// **'MagNET'**
   String get appTitle;
 
   /// No description provided for @aboutSubtitle.
   ///
   /// In en, this message translates to:
-  /// **'BLE & WiFi device scanner'**
+  /// **'Hanasu mesh configurator & field console'**
   String get aboutSubtitle;
 
   /// No description provided for @aboutVersion.
@@ -119,13 +119,13 @@ abstract class AppLocalizations {
   /// No description provided for @aboutDescription.
   ///
   /// In en, this message translates to:
-  /// **'An open Flutter starter for Bluetooth LE and WiFi scanning.'**
+  /// **'Provision, watch, and talk to a MagNET Hanasu Thread mesh over BLE — the thing you hold while standing next to hardware.'**
   String get aboutDescription;
 
   /// No description provided for @aboutCopyright.
   ///
   /// In en, this message translates to:
-  /// **'© IoTone Japan, 2024–2026'**
+  /// **'© 2024–2026 IoTone, Inc.'**
   String get aboutCopyright;
 
   /// No description provided for @aboutLicense.
@@ -133,6 +133,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'MIT License'**
   String get aboutLicense;
+
+  /// No description provided for @aboutProtocol.
+  ///
+  /// In en, this message translates to:
+  /// **'MagNET HCP protocol {proto}'**
+  String aboutProtocol(String proto);
+
+  /// No description provided for @aboutLicensesButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Open-source licenses'**
+  String get aboutLicensesButton;
 
   /// No description provided for @aboutMadeWith.
   ///
@@ -301,6 +313,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'WiFi network'**
   String get radarLegendWifi;
+
+  /// No description provided for @radarLegendMagnet.
+  ///
+  /// In en, this message translates to:
+  /// **'MagNET node'**
+  String get radarLegendMagnet;
+
+  /// No description provided for @radarLegendCompanion.
+  ///
+  /// In en, this message translates to:
+  /// **'Companion (mesh window)'**
+  String get radarLegendCompanion;
 
   /// No description provided for @radarLegendRings.
   ///
@@ -691,6 +715,156 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'日本語'**
   String get langJapanese;
+
+  /// No description provided for @meshTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Mesh'**
+  String get meshTitle;
+
+  /// No description provided for @meshDashboardCard.
+  ///
+  /// In en, this message translates to:
+  /// **'Live mesh'**
+  String get meshDashboardCard;
+
+  /// No description provided for @meshDashboardHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Watch and talk to the mesh through the companion node'**
+  String get meshDashboardHint;
+
+  /// No description provided for @meshTabFeed.
+  ///
+  /// In en, this message translates to:
+  /// **'Feed'**
+  String get meshTabFeed;
+
+  /// No description provided for @meshTabPeers.
+  ///
+  /// In en, this message translates to:
+  /// **'Peers'**
+  String get meshTabPeers;
+
+  /// No description provided for @meshTabTopology.
+  ///
+  /// In en, this message translates to:
+  /// **'Topology'**
+  String get meshTabTopology;
+
+  /// No description provided for @meshPickTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a companion node'**
+  String get meshPickTitle;
+
+  /// No description provided for @meshPickHint.
+  ///
+  /// In en, this message translates to:
+  /// **'The companion node keeps BLE on and acts as this phone\'s window into the mesh. Pick the node flashed with the resident build.'**
+  String get meshPickHint;
+
+  /// No description provided for @meshPickScan.
+  ///
+  /// In en, this message translates to:
+  /// **'Scan for nodes'**
+  String get meshPickScan;
+
+  /// No description provided for @meshPickScanning.
+  ///
+  /// In en, this message translates to:
+  /// **'Scanning…'**
+  String get meshPickScanning;
+
+  /// No description provided for @meshPickEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No MagNET nodes found. Is the companion powered and in range?'**
+  String get meshPickEmpty;
+
+  /// No description provided for @meshStateConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting…'**
+  String get meshStateConnecting;
+
+  /// No description provided for @meshStateConnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Live'**
+  String get meshStateConnected;
+
+  /// No description provided for @meshStateDisconnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Disconnected'**
+  String get meshStateDisconnected;
+
+  /// No description provided for @meshStateError.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection lost'**
+  String get meshStateError;
+
+  /// No description provided for @meshReconnect.
+  ///
+  /// In en, this message translates to:
+  /// **'Reconnect'**
+  String get meshReconnect;
+
+  /// No description provided for @meshChangeCompanion.
+  ///
+  /// In en, this message translates to:
+  /// **'Change companion node'**
+  String get meshChangeCompanion;
+
+  /// No description provided for @meshComposerHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Message the channel…'**
+  String get meshComposerHint;
+
+  /// No description provided for @meshSend.
+  ///
+  /// In en, this message translates to:
+  /// **'Send'**
+  String get meshSend;
+
+  /// No description provided for @meshFeedEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing yet — traffic will appear here as it happens.'**
+  String get meshFeedEmpty;
+
+  /// No description provided for @meshNoPeers.
+  ///
+  /// In en, this message translates to:
+  /// **'No peers seen yet.'**
+  String get meshNoPeers;
+
+  /// No description provided for @meshPeerLastSeen.
+  ///
+  /// In en, this message translates to:
+  /// **'last seen {ago}s ago'**
+  String meshPeerLastSeen(String ago);
+
+  /// No description provided for @meshNeighbors.
+  ///
+  /// In en, this message translates to:
+  /// **'Neighbors'**
+  String get meshNeighbors;
+
+  /// No description provided for @meshNoNeighbors.
+  ///
+  /// In en, this message translates to:
+  /// **'No neighbors reported.'**
+  String get meshNoNeighbors;
+
+  /// No description provided for @meshRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh'**
+  String get meshRefresh;
 }
 
 class _AppLocalizationsDelegate

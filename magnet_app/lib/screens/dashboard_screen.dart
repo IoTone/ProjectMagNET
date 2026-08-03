@@ -1,6 +1,7 @@
 // Copyright (c) 2026 IoTone, Inc.
 // SPDX-License-Identifier: MIT
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../gen/app_localizations.dart';
@@ -71,6 +72,16 @@ class DashboardScreen extends StatelessWidget {
           Text(l.dashScanHint,
               style: TextStyle(color: cs.onSurfaceVariant, height: 1.4)),
         ],
+        const SizedBox(height: 20),
+        Card(
+          child: ListTile(
+            leading: Icon(Icons.hub_outlined, color: cs.primary),
+            title: Text(l.meshDashboardCard),
+            subtitle: Text(l.meshDashboardHint),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/mesh'),
+          ),
+        ),
       ],
     );
   }

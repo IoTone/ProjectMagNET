@@ -9,10 +9,10 @@ class AppLocalizationsJa extends AppLocalizations {
   AppLocalizationsJa([String locale = 'ja']) : super(locale);
 
   @override
-  String get appTitle => 'Responsive IoT 2026';
+  String get appTitle => 'MagNET';
 
   @override
-  String get aboutSubtitle => 'BLE・WiFi デバイススキャナー';
+  String get aboutSubtitle => 'Hanasu メッシュ設定・フィールドコンソール';
 
   @override
   String aboutVersion(String version) {
@@ -21,13 +21,21 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get aboutDescription =>
-      'Bluetooth LE と WiFi スキャンのためのオープンな Flutter スターター。';
+      'BLE 経由で MagNET Hanasu Thread メッシュをプロビジョニングし、観察し、会話する — ハードウェアのそばで手に持つツール。';
 
   @override
-  String get aboutCopyright => '© IoTone Japan, 2024–2026';
+  String get aboutCopyright => '© 2024–2026 IoTone, Inc.';
 
   @override
   String get aboutLicense => 'MIT ライセンス';
+
+  @override
+  String aboutProtocol(String proto) {
+    return 'MagNET HCP プロトコル $proto';
+  }
+
+  @override
+  String get aboutLicensesButton => 'オープンソースライセンス';
 
   @override
   String get aboutMadeWith => 'Flutter で構築。';
@@ -112,6 +120,12 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get radarLegendWifi => 'WiFi ネットワーク';
+
+  @override
+  String get radarLegendMagnet => 'MagNET ノード';
+
+  @override
+  String get radarLegendCompanion => 'コンパニオン（メッシュ窓口）';
 
   @override
   String get radarLegendRings => 'リング = おおよその信号距離（目安）。';
@@ -321,4 +335,82 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get langJapanese => '日本語';
+
+  @override
+  String get meshTitle => 'メッシュ';
+
+  @override
+  String get meshDashboardCard => 'ライブメッシュ';
+
+  @override
+  String get meshDashboardHint => 'コンパニオンノード経由でメッシュを見て話す';
+
+  @override
+  String get meshTabFeed => 'フィード';
+
+  @override
+  String get meshTabPeers => 'ピア';
+
+  @override
+  String get meshTabTopology => 'トポロジー';
+
+  @override
+  String get meshPickTitle => 'コンパニオンノードを選択';
+
+  @override
+  String get meshPickHint =>
+      'コンパニオンノードはBLEを維持し、このスマートフォンのメッシュへの窓口になります。レジデントビルドを書き込んだノードを選んでください。';
+
+  @override
+  String get meshPickScan => 'ノードをスキャン';
+
+  @override
+  String get meshPickScanning => 'スキャン中…';
+
+  @override
+  String get meshPickEmpty => 'MagNETノードが見つかりません。コンパニオンの電源と距離を確認してください。';
+
+  @override
+  String get meshStateConnecting => '接続中…';
+
+  @override
+  String get meshStateConnected => 'ライブ';
+
+  @override
+  String get meshStateDisconnected => '切断';
+
+  @override
+  String get meshStateError => '接続が切れました';
+
+  @override
+  String get meshReconnect => '再接続';
+
+  @override
+  String get meshChangeCompanion => 'コンパニオンノードを変更';
+
+  @override
+  String get meshComposerHint => 'チャンネルへメッセージ…';
+
+  @override
+  String get meshSend => '送信';
+
+  @override
+  String get meshFeedEmpty => 'まだ何もありません — トラフィックが発生するとここに表示されます。';
+
+  @override
+  String get meshNoPeers => 'ピアはまだ見つかっていません。';
+
+  @override
+  String meshPeerLastSeen(String ago) {
+    return '$ago秒前に確認';
+  }
+
+  @override
+  String get meshNeighbors => '近隣ノード';
+
+  @override
+  String get meshNoNeighbors => '近隣ノードは報告されていません。';
+
+  @override
+  String get meshRefresh => '更新';
 }

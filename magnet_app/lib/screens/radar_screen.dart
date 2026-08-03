@@ -7,6 +7,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 
 import '../gen/app_localizations.dart';
+import '../magnet/magnet_ble.dart';
+import '../magnet/mesh_session.dart';
 import '../scanner/scanned_access_point.dart';
 import '../scanner/scanned_device.dart';
 import '../scanner/scanner_controller.dart';
@@ -28,10 +30,27 @@ class RadarScreen extends StatefulWidget {
 
 /// A positioned radar blip (resolved each layout for paint + hit-test).
 class _Blip {
-  const _Blip(this.offset, {required this.isWifi, this.deviceId});
+  const _Blip(this.offset,
+      {required this.isWifi,
+      this.deviceId,
+      this.isMagnet = false,
+      this.isCompanion = false,
+      this.label});
   final Offset offset;
   final bool isWifi;
   final String? deviceId;
+
+  /// A MagNET node (matched by the HCP service UUID or `MagNET-` name
+  /// prefix — platforms often withhold service UUIDs in adverts, so the
+  /// name fallback is load-bearing).
+  final bool isMagnet;
+
+  /// The adopted companion node — this phone's window into the mesh.
+  /// Matched by device id, never by name (platforms cache GAP names).
+  final bool isCompanion;
+
+  /// Short label painted under MagNET blips.
+  final String? label;
 }
 
 class _RadarScreenState extends State<RadarScreen>
@@ -91,9 +110,26 @@ class _RadarScreenState extends State<RadarScreen>
           return center + Offset(r * math.sin(a), -r * math.cos(a));
         }
 
+        final String? companionId =
+            context.watch<MeshSession>().companionId;
+
         final List<_Blip> blips = <_Blip>[
           for (final ScannedDevice d in ble)
-            _Blip(place(d.rssi, d.id), isWifi: false, deviceId: d.id),
+            () {
+              final bool isCompanion =
+                  companionId != null && d.id == companionId;
+              final bool isMagnet = isCompanion ||
+                  MagnetUuids.looksLikeNode(
+                      name: d.name, serviceUuids: d.serviceUuids);
+              return _Blip(
+                place(d.rssi, d.id),
+                isWifi: false,
+                deviceId: d.id,
+                isMagnet: isMagnet,
+                isCompanion: isCompanion,
+                label: isMagnet && d.name.isNotEmpty ? d.name : null,
+              );
+            }(),
           for (final ScannedAccessPoint ap in wifi)
             _Blip(place(ap.rssi, ap.bssid), isWifi: true),
         ];
@@ -133,6 +169,7 @@ class _RadarScreenState extends State<RadarScreen>
                     sweep: reduceMotion ? null : _sweep,
                     accent: cs.primary,
                     wifiColor: cs.secondary,
+                    magnetColor: cs.tertiary,
                     ring: cs.outline.withValues(alpha: .4),
                     subtle: cs.outline.withValues(alpha: .18),
                     label: cs.onSurfaceVariant,
@@ -158,10 +195,10 @@ class _Legend extends StatelessWidget {
   final AppLocalizations l;
   @override
   Widget build(BuildContext context) {
-    Widget row(Color c, bool diamond, String text) => Padding(
+    Widget row(Color c, IconData icon, String text) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 2),
           child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
-            Icon(diamond ? Icons.diamond : Icons.circle, size: 9, color: c),
+            Icon(icon, size: 10, color: c),
             const SizedBox(width: 6),
             Text(text,
                 style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11)),
@@ -178,8 +215,10 @@ class _Legend extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          row(cs.primary, false, l.radarLegendBle),
-          row(cs.secondary, true, l.radarLegendWifi),
+          row(cs.primary, Icons.circle, l.radarLegendBle),
+          row(cs.secondary, Icons.diamond, l.radarLegendWifi),
+          row(cs.tertiary, Icons.radio_button_checked, l.radarLegendMagnet),
+          row(cs.primary, Icons.adjust, l.radarLegendCompanion),
           const SizedBox(height: 2),
           Text(l.radarLegendRings,
               style: TextStyle(color: cs.onSurfaceVariant, fontSize: 10)),
@@ -197,6 +236,7 @@ class _RadarPainter extends CustomPainter {
     required this.sweep,
     required this.accent,
     required this.wifiColor,
+    required this.magnetColor,
     required this.ring,
     required this.subtle,
     required this.label,
@@ -208,6 +248,7 @@ class _RadarPainter extends CustomPainter {
   final double? sweep;
   final Color accent;
   final Color wifiColor;
+  final Color magnetColor;
   final Color ring;
   final Color subtle;
   final Color label;
@@ -277,9 +318,8 @@ class _RadarPainter extends CustomPainter {
           ..strokeWidth = 1.5
           ..color = accent.withValues(alpha: .6));
 
-    // Blips.
+    // Blips. Plain BLE first so MagNET markers always paint on top.
     for (final _Blip b in blips) {
-      final Color col = b.isWifi ? wifiColor : accent;
       if (b.isWifi) {
         // Small diamond for WiFi.
         final Path p = Path()
@@ -288,10 +328,58 @@ class _RadarPainter extends CustomPainter {
           ..lineTo(b.offset.dx, b.offset.dy + 5)
           ..lineTo(b.offset.dx - 5, b.offset.dy)
           ..close();
-        canvas.drawPath(p, Paint()..color = col);
-      } else {
-        canvas.drawCircle(b.offset, 4.5, Paint()..color = col);
+        canvas.drawPath(p, Paint()..color = wifiColor);
+      } else if (!b.isMagnet) {
+        canvas.drawCircle(b.offset, 4.5, Paint()..color = accent);
       }
+    }
+    for (final _Blip b in blips.where((_Blip b) => b.isMagnet)) {
+      _paintMagnet(canvas, b);
+    }
+  }
+
+  /// MagNET marker: a node dot inside a field ring — the companion gets a
+  /// second ring plus a soft glow so THE window into the mesh is
+  /// unmistakable at a glance.
+  void _paintMagnet(Canvas canvas, _Blip b) {
+    final Color col = b.isCompanion ? accent : magnetColor;
+    if (b.isCompanion) {
+      canvas.drawCircle(
+          b.offset,
+          14,
+          Paint()
+            ..color = col.withValues(alpha: .35)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+    }
+    canvas.drawCircle(b.offset, 5, Paint()..color = col);
+    canvas.drawCircle(
+        b.offset,
+        9,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..color = col.withValues(alpha: .8));
+    if (b.isCompanion) {
+      canvas.drawCircle(
+          b.offset,
+          13,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.2
+            ..color = col.withValues(alpha: .5));
+    }
+    final String? name = b.label;
+    if (name != null) {
+      final TextPainter tp = TextPainter(
+        text: TextSpan(
+          text: name,
+          style: TextStyle(
+              color: col, fontSize: 10, fontFamily: 'monospace'),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: 120);
+      tp.paint(canvas,
+          b.offset + Offset(-tp.width / 2, b.isCompanion ? 16 : 12));
     }
   }
 

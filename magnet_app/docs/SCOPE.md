@@ -149,18 +149,31 @@ allow-list, so this needed no new C.
 *Ends when:* a node provisioned by this phone will accept a fleet command from
 it and refuse one from anything else.
 
-### M3 — Live mesh view *(§1 decided: Option A, companion node)*
+### M3 — Live mesh view *(shipped + hardware-verified 2026-08-02 on SH-53D against the `probe` companion)*
 
 With a companion node the app stops being a one-shot configurator.
+Implementation: `lib/magnet/mesh_session.dart` (session/state) +
+`lib/screens/mesh_screen.dart` (picker + Feed/Peers/Topology tabs), entry
+via the Dashboard "Live mesh" card, route `/mesh`.
 
-- [ ] Companion-node picker: choose which node is the window, remember it
-- [ ] `SUB` to event classes; render `!CHAT`, `!PEER_JOIN/LEAVE`, `!ROLE`,
-      `!STATE`, `!WARN` as a live feed
-- [ ] Peer table from `PEERS`, with names, last-seen, and mesh role
-- [ ] Chat send/receive — the app becomes a mesh client, not just a tool
-- [ ] Mesh topology from `MESH`: role, partition, RLOC16, neighbours + RSSI
+- [x] Companion-node picker: choose which node is the window, remember it
+      (remembered by **device id** — the advertised name is cacheable and
+      can lie, see firmware README's stale-name note)
+- [x] `SUB` to event classes; render `!CHAT`, `!PEER_JOIN/LEAVE`, `!ROLE`,
+      `!STATE`, `!WARN` as a live feed (heartbeats update status silently)
+- [x] Peer table from `PEERS`, with names, last-seen — refreshed live when
+      a peer chats or joins
+- [x] Chat send/receive — the app becomes a mesh client, not just a tool
+- [x] Mesh topology from `MESH`: role, partition, RLOC16, neighbours + RSSI
 
 *Ends when:* you can watch mesh traffic and talk to the mesh from the phone.
+**Done** — bench chat from `xray1` rendered live on the phone through
+`probe`, chat sent back from the composer.
+
+> Fixed along the way: `HcpClient.lastComments` raced when two
+> comment-parsing commands were queued concurrently (the next command's
+> clear could beat the previous caller's read). `commandCaptured()` snapshots
+> the comments atomically inside the command queue; PEERS/MESH use it.
 
 ### M4 — Field test console *(the "test" half of the brief)*
 
