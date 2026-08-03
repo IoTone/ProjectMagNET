@@ -26,6 +26,7 @@
 #include "magnet_cfg.h"
 #include "magnet_ui.h"
 #include "craw_wifi.h"
+#include "magnet_ota.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -87,6 +88,7 @@ static void cmd_help(void) {
         "  set <key> <value>   wifi_ssid | wifi_pass | server_url | dev_token\r\n"
         "  show                current config (secrets masked)\r\n"
         "  wifi                connect using the stored credentials\r\n"
+        "  checkin             POST /api/devices/check-in now\r\n"
         "  forget <key>        erase one key\r\n"
         "  help                this\r\n");
 }
@@ -132,6 +134,21 @@ void console_run(int (*getch)(void), void (*putch)(int), void (*print)(const cha
             } else if (strncmp(line, "forget ", 7) == 0) {
                 cfg_erase(line + 7);
                 out("erased\r\n");
+            } else if (strcmp(line, "checkin") == 0) {
+                char m[96];
+                ota_action_t a = ota_checkin();
+                snprintf(m, sizeof m, "check-in: %s (%s)\r\n",
+                         a == OTA_UPDATE ? "UPDATE" : a == OTA_NOOP ? "noop" : "error",
+                         ota_last_status());
+                out(m);
+                if (a == OTA_UPDATE) {
+                    const ota_release_t *r = ota_pending();
+                    snprintf(m, sizeof m, "  release %ld  version %s\r\n",
+                             r->release_id, r->version);
+                    out(m);
+                    snprintf(m, sizeof m, "  sig %.48s\r\n", r->signature_url);
+                    out(m);
+                }
             } else if (strcmp(line, "wifi") == 0) {
                 char ssid[CFG_MAX], pass[CFG_MAX];
                 if (!cfg_get(CFG_WIFI_SSID, ssid, sizeof ssid)) {

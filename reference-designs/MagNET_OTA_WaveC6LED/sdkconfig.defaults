@@ -5,10 +5,12 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_FREERTOS_HZ=1000
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
-# Single factory app. Forth bundles are SOURCE, not app images, so this device
-# never needs a dual ota_0/ota_1 layout — which is just as well, because two
-# app slots plus this much WiFi does not fit comfortably in 4 MB.
-CONFIG_PARTITION_TABLE_SINGLE_APP=y
+# Custom table (partitions.csv): 3 MB app + ~960 KB spiffs. The default 1 MB app
+# was already 90% full at D2 with WiFi + HTTP + cJSON linked, and D3 adds
+# mbedTLS. Still a SINGLE app slot — Forth bundles are source, not app images,
+# so no ota_0/ota_1 pair is needed.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
 # Console: LEAVE AT THE DEFAULT (UART). Setting

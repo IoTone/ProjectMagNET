@@ -19,6 +19,7 @@
 #include "magnet_cfg.h"
 #include "craw_wifi.h"
 #include "console.h"
+#include "magnet_ota.h"
 
 /* 100 KB dictionary. No PSRAM on this board, and 512 KB of HP SRAM has to also
  * hold WiFi + TLS from D1 onward, so this stays modest until measured. */
@@ -223,6 +224,13 @@ void app_main(void) {
             usb_print("no wifi credentials — use: set wifi_ssid <name>\r\n");
         }
     }
+
+    /* OTA supervisor + its Forth words. Registering here rather than inside
+     * ota_init() keeps the engine dependency visible at the call site. */
+    ota_init();
+    ota_register_forth_words();
+    usb_printf("heap after ota init: %lu bytes\r\n",
+               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
     console_run(repl_getchar, repl_putchar, usb_print);
     forth_deinit();
