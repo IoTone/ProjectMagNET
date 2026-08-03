@@ -187,6 +187,7 @@ static void wifi_event(craw_wifi_event_t ev, void *ctx) {
 
 static void checkin_task(void *arg) {
     bool settled = false;
+    int  consecutive_failures = 0;
     /* Let WiFi associate before the first attempt, so a fresh boot does not
      * open with a spurious "unreachable" on screen. */
     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -230,6 +231,40 @@ static void checkin_task(void *arg) {
                 break;
             }
             usb_printf("[checkin] %s\r\n", ota_last_status());
+
+            /*
+             * SILENT ASSOCIATION LOSS WATCHDOG.
+             *
+             * The board can sit reporting "connected" with a valid IP while the
+             * link is actually dead: no disconnect event fires, craw_wifi still
+             * says connected, and it stops answering pings entirely. Observed
+             * repeatedly — it works from a cold boot and degrades, which reads
+             * as a server fault and cost two rounds of checking the server's
+             * threads and connection table. The server was clean both times.
+             *
+             * So do not trust is_connected() as proof of reachability. Three
+             * consecutive failures means the association is a fiction; tear it
+             * down and rebuild it. A device that wedges until someone walks over
+             * and power-cycles it is not an unattended OTA client.
+             */
+            if (a == OTA_ERROR) {
+                if (++consecutive_failures >= 3) {
+                    usb_print("[wifi] 3 failed check-ins — forcing reassociation\r\n");
+                    draw_status("RECONNECT", UI_AMBER, freeb);
+                    led_rgb(40, 20, 0);
+                    char ssid[CFG_MAX], pass[CFG_MAX];
+                    if (cfg_get(CFG_WIFI_SSID, ssid, sizeof ssid)) {
+                        cfg_get(CFG_WIFI_PASS, pass, sizeof pass);
+                        craw_wifi_disconnect();
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                        craw_wifi_connect(ssid, pass);
+                    }
+                    consecutive_failures = 0;
+                    settled = false;      /* re-settle before the next attempt */
+                }
+            } else {
+                consecutive_failures = 0;
+            }
 
             /* A failure retries in 10 s rather than 60. A transient blip should
              * not leave the screen showing an error for a full minute after the

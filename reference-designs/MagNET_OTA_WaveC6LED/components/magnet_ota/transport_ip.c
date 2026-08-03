@@ -12,6 +12,7 @@
 #include "magnet_cfg.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_system.h"
 
 static const char *TAG = "transport_ip";
 
@@ -62,6 +63,16 @@ static int ip_request(magnet_transport_t *t,
         .user_data = &rx,
         .timeout_ms = 8000,
         .disable_auto_redirect = true,
+        /* NO KEEP-ALIVE. This device polls once a minute — there is nothing to
+         * amortise — and a lingering connection is a socket held open in a pool
+         * of CONFIG_LWIP_MAX_SOCKETS (10 by default).
+         *
+         * Symptom when this leaks: the board keeps a valid IP, answers pings in
+         * 6 ms, and TCP connects simply time out. It works perfectly from a cold
+         * boot and degrades with use, which reads as a server or network fault
+         * and sent me to check the server's threads and connection table twice.
+         * The server was clean both times. */
+        .keep_alive_enable = false,
     };
     esp_http_client_handle_t c = esp_http_client_init(&cfg);
     if (!c) return -1;
@@ -71,13 +82,32 @@ static int ip_request(magnet_transport_t *t,
         snprintf(auth, sizeof auth, "Bearer %s", token);
         esp_http_client_set_header(c, "Authorization", auth);
     }
-    esp_http_client_set_header(c, "Content-Type", "application/json");
-    if (body) esp_http_client_set_post_field(c, body, strlen(body));
+    /* Content-Type ONLY when there is a body.
+     *
+     * Setting it unconditionally made esp_http_client emit
+     * `Content-Type: application/json` together with `Content-Length: 0` on
+     * GETs, and the server returns 500 to that combination — neither header
+     * alone does it. A GET has no entity, so declaring its type was meaningless
+     * anyway; the server is also being fixed, because a well-formed request
+     * should never 500. */
+    if (body) {
+        esp_http_client_set_header(c, "Content-Type", "application/json");
+        esp_http_client_set_post_field(c, body, strlen(body));
+    }
 
     esp_err_t err = esp_http_client_perform(c);
+    ESP_LOGD(TAG, "%s %s heap=%u", method, path, (unsigned)esp_get_free_heap_size());
     int status = -1;
     if (err == ESP_OK) {
         status = esp_http_client_get_status_code(c);
+        if (status != 200) {
+            /* Log the URL we ACTUALLY built, not the one we meant to. A status
+             * alone tells you the server was unhappy; it does not tell you
+             * whether the path, the query string or the base URL was mangled on
+             * the way out, which is where these bugs live. */
+            ESP_LOGW(TAG, "%s %s -> %d", method, url, status);
+            if (rx.len) ESP_LOGW(TAG, "  body: %.200s", resp);
+        }
         if (resp_len) *resp_len = rx.len;
         if (rx.overflow) {
             /* Say so rather than letting a silently clipped body be parsed as
@@ -89,6 +119,9 @@ static int ip_request(magnet_transport_t *t,
     } else {
         ESP_LOGW(TAG, "%s %s failed: %s", method, url, esp_err_to_name(err));
     }
+    /* Close explicitly before cleanup rather than trusting cleanup to do it on
+     * every path — including the error paths, which are the ones that leak. */
+    esp_http_client_close(c);
     esp_http_client_cleanup(c);
     return status;
 }

@@ -89,6 +89,7 @@ static void cmd_help(void) {
         "  show                current config (secrets masked)\r\n"
         "  wifi                connect using the stored credentials\r\n"
         "  checkin             POST /api/devices/check-in now\r\n"
+        "  verify              fetch the pending release + check its signature\r\n"
         "  forget <key>        erase one key\r\n"
         "  help                this\r\n");
 }
@@ -149,6 +150,22 @@ void console_run(int (*getch)(void), void (*putch)(int), void (*print)(const cha
                     snprintf(m, sizeof m, "  release %ld  version %s\r\n",
                              r->release_id, r->version);
                     out(m);
+                }
+            } else if (strcmp(line, "verify") == 0) {
+                char m[128];
+                const ota_release_t *r = ota_pending();
+                if (!r) { out("nothing pending — run checkin first\r\n"); }
+                else {
+                    out("fetching + verifying...\r\n");
+                    bool ok = ota_fetch_pending();
+                    snprintf(m, sizeof m, "  %s\r\n", ota_verify_status());
+                    out(m);
+                    if (ok) {
+                        size_t n = 0; const uint8_t *b = ota_bundle(&n);
+                        snprintf(m, sizeof m, "  bundle %u bytes, first line: %.40s\r\n",
+                                 (unsigned)n, (const char *)b);
+                        out(m);
+                    }
                 }
             } else if (strcmp(line, "wifi") == 0) {
                 char ssid[CFG_MAX], pass[CFG_MAX];

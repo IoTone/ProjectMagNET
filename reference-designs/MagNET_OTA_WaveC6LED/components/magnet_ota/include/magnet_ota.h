@@ -10,6 +10,8 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
+struct magnet_transport;
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -57,6 +59,14 @@ const ota_release_t *ota_pending(void);
 
 /* Last outcome in words, for the screen and the console. */
 const char  *ota_last_status(void);
+
+/* D3: fetch the pending release and PROVE it before anything may run it.
+ * Signature descriptor first, then the body, then SHA256, then Ed25519. */
+bool         ota_fetch_and_verify(struct magnet_transport *tx, const ota_release_t *rel);
+const char  *ota_verify_status(void);
+/* Fetch + verify whatever the last check-in flagged. Poll task / console. */
+bool         ota_fetch_pending(void);
+const uint8_t *ota_bundle(size_t *len);
 
 /* Register the OTA-* words. The ONLY file that changes when the Forth engine
  * is swapped for the full ESP32forth. */

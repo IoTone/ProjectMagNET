@@ -187,6 +187,15 @@ static void w_ota_status(void) {
     forth_push((intptr_t)strlen(s));
 }
 
+/* Fetch + verify the pending release. Exposed so the poll task and the console
+ * share one path. */
+bool ota_fetch_pending(void) {
+    if (!s_have_pending || !s_tx) return false;
+    return ota_fetch_and_verify(s_tx, &s_pending);
+}
+
+static void w_ota_verify(void) { forth_push((intptr_t)(ota_fetch_pending() ? 1 : 0)); }
+
 static void w_ota_release(void) {
     forth_push((intptr_t)(s_have_pending ? s_pending.release_id : 0));
 }
@@ -195,4 +204,5 @@ void ota_register_forth_words(void) {
     forth_register_word("ota-checkin", w_ota_checkin);
     forth_register_word("ota-status",  w_ota_status);
     forth_register_word("ota-release", w_ota_release);
+    forth_register_word("ota-verify",  w_ota_verify);
 }
