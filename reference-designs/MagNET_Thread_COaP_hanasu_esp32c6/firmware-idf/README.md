@@ -478,6 +478,26 @@ traffic remains the E-B story (lossless single-frame at 1 msg/s/node).
 > RTS pulse (`hcp.py <port> --reboot`). That is how the catch-up outage and the
 > leader kill above were staged.
 
+**Multi-hour soak (2026-08-03, 4 nodes, fw 0.6.0-eg) — PASS.** `tools/soak.py`
+held all four serial ports open for **5 h 40 m** (the run was cut ~20 min short
+of its 6 h target by a host-side USB re-enumeration that took out every port at
+once — a Mac/hub event, not firmware; all four nodes stayed up through it, per
+their uptime counters). Round-robin `CHAT` every 60 s (~340 chats), `STATS` +
+`SYSINFO` sweeps every 10 min:
+
+| Metric | Result |
+|--------|--------|
+| Delivery (each chat → other 3 nodes) | **~1,017/1,017 — zero misses over the whole run** |
+| Heap drift, first → last sweep (330 min) | probe/sdk-b/xray2 **byte-identical**; xray1 −132 B (fragmentation noise; its min-ever never moved) |
+| min-ever heap movement | ≤ 4 B on one node, 0 on the rest — no slide |
+| `rx err` / `rx dup` | 0 / 0 on all four nodes at every sweep |
+| Port drops, `-ERR` lines | none until the terminal host-side USB event |
+
+Chat-rate traffic is lossless over multi-hour spans, and the E-G tables
+(40-entry peer/dedup) leak nothing. This soak now runs unattended: the
+`Jenkinsfile` at the design root gates on `soak.py --gate` (delivery ≥ 99.5 %,
+per-node heap loss ≤ 8 KB, `rx err=0`).
+
 **32+ node soak — status and plan.** Four nodes is the bench ceiling; the 32+
 soak needs hardware that doesn't exist here yet. What E-G changes ship ready
 for it: tables sized for 40 senders, heal-storm jitter, catch-up for nodes that

@@ -75,12 +75,13 @@ class Node:
     def poll_lines(self, log):
         """Non-blocking read; yield complete decoded lines."""
         if not self.ser:
-            if self.down_since and self.open():
+            down = self.down_since          # open() clears it on success
+            if down is not None and self.open():
                 self.reconnects += 1
                 log(f'[{self.tag}] port back after '
-                    f'{time.time() - self.down_since:.0f}s '
+                    f'{time.time() - down:.0f}s '
                     f'(reconnect #{self.reconnects})')
-            elif not self.ser:
+            if not self.ser:
                 return
         try:
             data = self.ser.read(8192)
