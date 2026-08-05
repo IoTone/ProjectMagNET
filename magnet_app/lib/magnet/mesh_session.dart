@@ -248,6 +248,10 @@ class MeshSession extends ChangeNotifier {
           'info', 'connected to ${_companionName ?? id} — live'));
       notifyListeners();
 
+      // The phone is the only participant with a real clock, so hand it over
+      // before anything else uses it. Cheap, idempotent, every connect.
+      unawaited(_seedClock(link));
+
       // Backfill what the channel said while we were away: the companion
       // replays its recent ring as !RCHAT events (fw ≥ 0.6.0-eg).
       unawaited(_backfill(link));
@@ -267,6 +271,36 @@ class MeshSession extends ChangeNotifier {
     await _teardown();
     _state = MeshLinkState.idle;
     notifyListeners();
+  }
+
+  /// Seed the companion's clock from the phone.
+  ///
+  /// A Thread-only mesh has no border router, so it has no NTP and no clock of
+  /// its own — the phone is the only participant that knows the real time. The
+  /// companion takes this as stratum 0 and multicasts it to the whole channel,
+  /// so one command anchors every node (see the reference design's
+  /// `docs/MESH-TIME.md`).
+  ///
+  /// Doing it on EVERY connect is the point, not laziness. Node clocks live in
+  /// RAM, so a node that reboots comes back with none and adopts from whichever
+  /// neighbour answers — one hop further from a real source each time. Left
+  /// alone that ratchets up until the mesh refuses to distribute time at all.
+  /// A re-seed collapses the whole mesh back to stratum 0/1 in well under a
+  /// second, and the phone reconnects far more often than nodes reboot, so
+  /// this keeps the mesh permanently anchored for the cost of one line.
+  Future<void> _seedClock(MeshLink link) async {
+    try {
+      final DateTime now = DateTime.now();
+      final int epoch = now.millisecondsSinceEpoch ~/ 1000;
+      // Minutes east of UTC — JST 540, PDT -420. The firmware keeps only the
+      // time of day, so this is what makes it read as local rather than UTC.
+      final int tzMinutes = now.timeZoneOffset.inMinutes;
+      await link.client.command('TIME SET $epoch $tzMinutes');
+    } catch (_) {
+      // Firmware without the TIME verb answers E_UNKNOWN_VERB, and a link that
+      // dropped mid-handshake throws. Neither is worth surfacing: the mesh just
+      // carries on reporting uptime instead of a wall clock.
+    }
   }
 
   /// Ask the companion to replay its ring (`RECENT`, no argument). The

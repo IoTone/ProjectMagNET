@@ -13,6 +13,9 @@ class FakeNodeTransport implements HcpTransport {
   final StreamController<String> _lines = StreamController<String>.broadcast();
   final List<String> sent = <String>[];
 
+  /// Emulate firmware predating the TIME verb (E_UNKNOWN_VERB).
+  bool rejectTime = false;
+
   @override
   Stream<String> get lines => _lines.stream;
 
@@ -36,6 +39,13 @@ class FakeNodeTransport implements HcpTransport {
         break;
       case 'CHAT':
         emit('$tag +OK');
+        break;
+      case 'TIME':
+        if (rejectTime) {
+          emit('$tag -ERR E_UNKNOWN_VERB TIME');
+        } else {
+          emit('$tag +OK clock=14:32:07 tz=-420 stratum=0 src=host age=0s');
+        }
         break;
       case 'PEERS':
         emit('# peer 2ca44570 xray1 fdde::1 last-seen=12s ago');
@@ -104,6 +114,45 @@ void main() {
     // Remembered on disk.
     final SharedPreferences p = await SharedPreferences.getInstance();
     expect(p.getString('mesh.companion.id'), 'AA:BB:CC:DD:EE:FF');
+  });
+
+  test('connect seeds the companion clock, so the mesh stays anchored',
+      () async {
+    await session.adopt('AA:BB:CC:DD:EE:FF', name: 'probe');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    final String seed = transport.sent.firstWhere(
+        (String s) => s.contains('TIME SET'),
+        orElse: () => '');
+    expect(seed, isNotEmpty,
+        reason: 'the phone is the only participant with a real clock; '
+            'without this the node stratum ratchets up on every reboot');
+
+    final Match m = RegExp(r'TIME SET (\d+) (-?\d+)').firstMatch(seed)!;
+    final int epoch = int.parse(m.group(1)!);
+    final int tzMinutes = int.parse(m.group(2)!);
+
+    // Plausibly now (the firmware rejects anything before 2023-11) …
+    final int nowSecs = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    expect(epoch, greaterThan(1700000000));
+    expect((epoch - nowSecs).abs(), lessThan(30));
+    // … and minutes east of UTC, matching this machine's zone.
+    expect(tzMinutes, DateTime.now().timeZoneOffset.inMinutes);
+    expect(tzMinutes, inInclusiveRange(-720, 840));
+  });
+
+  test('a node without the TIME verb does not break connect', () async {
+    // Pre-0.6.1 firmware answers E_UNKNOWN_VERB; the session must still come
+    // up live and simply carry on with uptime instead of a wall clock.
+    final FakeNodeTransport old = FakeNodeTransport()..rejectTime = true;
+    final MeshSession s = MeshSession(linkFactory: (String id) async =>
+        MeshLink(client: HcpClient(old), dispose: () async {}));
+    await s.adopt('X', name: 'probe');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(old.sent.any((String l) => l.contains('TIME SET')), isTrue);
+    expect(s.state, MeshLinkState.connected);
+    expect(s.nodeStatus['ble'], 'up');
   });
 
   test('mesh events land in the feed and touch the peer table', () async {

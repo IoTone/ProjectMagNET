@@ -251,6 +251,47 @@ and what is still unverified on both the NimBLE and Android sides.
 The single most important point: **only the OS pairing prompt can complete a
 bond**; no in-app affordance can substitute for it.
 
+## Bot mode (test builds only) — validated 2026-08-04
+
+`-DMN_ENABLE_BOTS=1`, env **`esp32c6_ble_resident_bots`**, compiles in an
+opt-in auto-responder: `BOTMODE 0` (HCP) or `0 botmode` (Forth) makes a node
+answer inbound chat with a one-line proof of life. Off at every boot, never
+persisted, and compiled out of every other env — so the soaked images stay
+bit-identical. Costs +1,718 B flash / +220 B RAM measured.
+
+The interesting part is loop prevention: two nodes both answering every chat
+volley forever, so replies are marked with a new envelope flag
+(`MN_F_AUTOMATED`, bit 6) that responders refuse to answer, backed by a
+per-peer cooldown and a global reply budget.
+
+See **`../docs/BOT-MODE.md`**, which also carries the effort analysis for
+bot 1 (a gen-1 ELIZA) and why this Forth engine cannot host one as a script.
+
+## Mesh time (all builds) — validated 2026-08-04
+
+A Thread-only mesh has no border router and therefore no SNTP, so `esp_timer`
+only ever gives uptime. `TIME SET <epoch> [<tz-min>]` seeds **one** node from a
+host — `python tools/hcp.py synctime` does it in one command — and that node
+becomes stratum 0 and multicasts the clock as a new system command (ns 0x00,
+cmd 0x04 announce / 0x05 request). Everyone else adopts it at stratum+1;
+`TIME SYNC` pulls on demand and gets exactly one jittered, suppression-guarded
+answer whatever the mesh size. Costs +2,790 B flash / +620 B RAM.
+
+Bench-verified: seed → full 4-node convergence in under a second, every node
+within 1 s of the host, `TIME SYNC` drawing exactly one answer, and a rebooted
+follower re-adopting 1.3 s after boot with no host involvement.
+
+**Know the stratum ratchet before deploying:** the clock is RAM-only, so when
+the stratum-0 node reboots the mesh loses its only real source and each
+subsequent reboot adopts one hop worse (observed climbing to stratum 3 across
+four reflashes) until it caps out and stops distributing time. It self-heals
+while an anchor lives, and one `TIME SET` restores the whole mesh in under
+0.1 s, so the fix is operational — the app should re-seed on connect. Nodes
+now emit `!WARN time-no-anchor` at stratum ≥ 2 rather than degrading silently.
+
+Details, wire format, the stratum tie-break that stops two peers re-adopting
+each other forever, and the trust model are in **`../docs/MESH-TIME.md`**.
+
 ## Test & diagnostics surface
 
 Every diagnostic exists twice — HCP verb and Forth word — backed by the same C

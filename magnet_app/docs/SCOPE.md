@@ -174,6 +174,22 @@ via the Dashboard "Live mesh" card, route `/mesh`.
       its ring as `!RCHAT` events → rendered as dimmed "earlier" chat items,
       deduped against anything the feed already shows. Older firmware answers
       `E_UNKNOWN_VERB` and the feed simply stays live-only.
+- [x] **Clock seed on connect** *(added + hardware-verified 2026-08-04 on
+      SH-53D against `probe`; needs fw with `TIME`)*:
+      the app sends `TIME SET <epoch> <tz-minutes>` on every connect. A
+      Thread-only mesh has no border router and therefore no NTP, so the phone
+      is the only participant with a real clock; the companion takes the seed
+      as stratum 0 and multicasts it to the whole channel. Doing it on every
+      connect is deliberate — node clocks are RAM-only, so a rebooted node
+      adopts from a neighbour one hop further from a real source, and left
+      alone that ratchets until the mesh stops distributing time (see the
+      reference design's `docs/MESH-TIME.md`). Older firmware answers
+      `E_UNKNOWN_VERB` and nodes just report uptime. Covered by
+      `test/magnet/mesh_session_test.dart`. Verified on the bench: `probe` went
+      from `stratum=1 src=2ca44570` to `stratum=0 src=host` on connect, twice,
+      and the mesh then re-anchored on it. Note the seed rides on *successful*
+      connects — after a dropped link the screen stays in `Connection lost`
+      until reconnect is tapped, so it is not automatic from the error state.
 
 *Ends when:* you can watch mesh traffic and talk to the mesh from the phone.
 **Done** — bench chat from `xray1` rendered live on the phone through

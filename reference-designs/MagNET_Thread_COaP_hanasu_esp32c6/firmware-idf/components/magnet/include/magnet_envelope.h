@@ -37,6 +37,13 @@ enum {
     MN_F_REQUIRES_ACK  = 1 << 3,
     MN_F_IS_FRAGMENT   = 1 << 4,
     MN_F_IS_FINAL_FRAG = 1 << 5,
+    /* Machine-generated: this frame was emitted by an auto-responder, not by a
+     * human at a keyboard. Auto-responders MUST NOT answer a frame carrying it
+     * — that is what stops two bot-enabled nodes from volleying forever. The
+     * bit is advisory and purely local to the sender's honesty; the per-peer
+     * cooldown and reply budget in magnet_bot.c are the enforcing guards.
+     * Older firmware ignores unknown flag bits, so this is wire-compatible. */
+    MN_F_AUTOMATED     = 1 << 6,
 };
 
 typedef struct {

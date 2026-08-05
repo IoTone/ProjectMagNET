@@ -383,6 +383,25 @@ Example - Lighting control:
 Delivery: CoAP CON (confirmable) PUT for commands requiring acknowledgment
 ```
 
+**Namespace 0x00 (system) — allocated commands.** These are the ones the
+firmware implements; the namespace is otherwise reserved for future protocol
+use, so user commands belong at 0x03+.
+
+| Cmd | Name | Params | Notes |
+|-----|------|--------|-------|
+| 0x01 | set_channel | credential | §11.1 provisioning |
+| 0x02 | announce | display name | Sent on READY, jittered (§11.6) |
+| 0x03 | rotate | 1 byte: new epoch | MUST be ADMIN\|SIGNED (§11.1.8) |
+| 0x04 | time_announce | 11 bytes: epoch `int64` BE ‖ tz offset minutes `int16` BE ‖ sender stratum `u8` | Mesh clock. Receivers adopt at stratum+1 and **MUST NOT re-broadcast** — Thread MPL already floods realm-local multicast. Stratum ≥ 4 MUST be refused. |
+| 0x05 | time_request | none | Pull. Responders MUST jitter (biased by stratum) and MUST cancel on hearing any 0x04, so one node answers regardless of mesh size. |
+
+Mesh time is **not** NTP: ~±1 s, no round-trip compensation, no date. It is
+channel-encrypted only, so any channel member can set it — acceptable because
+nothing security-critical depends on it (the replay defence is the §11.1
+monotonic counter, not a timestamp). The stratum byte exists so this can become
+ADMIN|SIGNED later without a wire change. See `docs/MESH-TIME.md`, including
+the stratum ratchet when the host-seeded anchor reboots.
+
 **Type 2: M2M Response (R6)**
 ```
 Payload: Response to a command (same structure as command, with status byte prepended)
@@ -1352,7 +1371,8 @@ Header = 16 B. Overhead: +8 MIC (encrypted), +64 sig (signed/admin).
 | 3 | REQUIRES_ACK | Sender expects a Type-4 ACK |
 | 4 | IS_FRAGMENT | App-layer fragment (see Fragment field) |
 | 5 | IS_FINAL_FRAG | Last fragment of the group |
-| 6–7 | reserved | MUST be 0 |
+| 6 | AUTOMATED | Emitted by an auto-responder, not a human. Auto-responders MUST NOT reply to a frame carrying it. Advisory — it relies on the sender's honesty, so responders MUST also apply local rate/cooldown guards. Receivers that do not implement it MUST ignore it. |
+| 7 | reserved | MUST be 0 |
 
 Changes from v2: explicit **sender device_id** (no longer relying on spoofable IPv6 source),
 **32-bit persistent counter** replaces the 16-bit per-loop sequence number (serves both nonce and

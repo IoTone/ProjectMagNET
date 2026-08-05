@@ -30,7 +30,9 @@ BAUD = 115200
 # description, so nothing but the port path tells them apart — and `all` /
 # `flash` must never touch them. Override with
 # MAGNET_HCP_SKIP=<substr>[,<substr>…] (empty string = skip nothing).
-SKIP_DEFAULT = 'usbmodem1101'
+# Both entries are the same physical board: the hub re-enumerates it as
+# usbmodem1101 or usbmodem11101 depending on plug order/topology.
+SKIP_DEFAULT = 'usbmodem1101,usbmodem11101'
 
 
 def ports():
@@ -139,6 +141,24 @@ def main():
 
     if a.port in (None, 'list'):
         print('\n'.join(ports()))
+        return 0
+
+    if a.port == 'synctime':
+        # Seed the mesh clock from THIS host. A Thread-only mesh has no border
+        # router and therefore no NTP, so one node has to be told; it becomes
+        # stratum 0 and multicasts to the channel (see docs/MESH-TIME.md).
+        # Seeding one node is the point — seeding several creates competing
+        # anchors — so this picks the first port unless one is named.
+        now = time.time()
+        tzmin = -int(time.timezone if not time.localtime().tm_isdst
+                     else time.altzone) // 60
+        target = a.command[0] if a.command else (ports() or [None])[0]
+        if not target:
+            print('no nodes found', file=sys.stderr)
+            return 1
+        line = f'TIME SET {int(now)} {tzmin}'
+        print(f'{target}\t{line}')
+        sys.stdout.write(send(target, line, max(a.wait, 3.0)))
         return 0
 
     if a.port == 'all':

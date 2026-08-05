@@ -12,10 +12,14 @@
 #include "magnet.h"
 #include "magnet_envelope.h"
 #include "magnet_crypto.h"
+#include "magnet_bot.h"
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -54,6 +58,28 @@ static uint8_t s_epoch = 0;
 static char s_hook_chat[MN_HOOK_WORD_MAX + 1];
 static char s_hook_cmd[MN_HOOK_WORD_MAX + 1];
 static SemaphoreHandle_t s_forth_mutex = NULL;
+
+/* ---- host-set wall clock + mesh clock distribution ----
+ * Anchored to esp_timer rather than settimeofday: newlib's strftime/tzset path
+ * measured +8.8 KB of flash to print eight characters. Behaviour (and the
+ * stratum rules) lives further down, next to mn_time_set(). */
+#define MN_TIME_MAX_STRATUM   4          /* refuse anything this far from a host */
+#define MN_TIME_REFRESH_MS    (15 * 60 * 1000)   /* stratum-0 re-announce */
+#define MN_TIME_STRATUM_NONE  0xFF
+
+static bool     s_clock_set = false;
+static int64_t  s_epoch_base = 0;     /* UTC epoch at the moment it was set  */
+static int64_t  s_uptime_at_set_us = 0;
+static int      s_tz_offset_min = 0;  /* minutes east of UTC, e.g. JST = 540 */
+static uint8_t  s_time_stratum = MN_TIME_STRATUM_NONE;
+static uint8_t  s_time_src[4];        /* who we learned it from (self if s0) */
+static int64_t  s_time_learned_us = 0;
+static TimerHandle_t s_time_timer = NULL;  /* jittered reply + periodic refresh */
+
+static int  time_apply(int64_t epoch_secs, int tz_offset_min, uint8_t stratum,
+                       const uint8_t src[4]);
+static void time_reply_schedule(void);
+static void time_timer_cb(TimerHandle_t t);
 
 static mn_state_t   s_state = MN_BOOTING;
 static mn_putc_fn   s_putc  = NULL;
@@ -279,11 +305,12 @@ static void hook_invoke(const char *word, const uint8_t *payload, size_t len);
 static bool admin_verify(const uint8_t *signed_part, size_t len, const uint8_t sig[64]);
 static void epoch_apply(uint8_t e);
 static int  send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
-                          const char *dst, bool con, bool admin);
+                          const char *dst, bool con, bool admin,
+                          uint8_t extra_flags);
 
 /* ==================== event pump (§12.4) =================================== */
 typedef enum { MN_EVT_RX, MN_EVT_ROLE, MN_EVT_HEARTBEAT,
-               MN_EVT_ANNOUNCE, MN_EVT_NOTE } mn_evt_kind_t;
+               MN_EVT_ANNOUNCE, MN_EVT_NOTE, MN_EVT_TIMEPUSH } mn_evt_kind_t;
 
 typedef struct {
     mn_evt_kind_t kind;
@@ -448,6 +475,11 @@ static void handle_rx(const mn_evt_t *evt) {
         else
             emit_class(MN_EC_DM, "!DM %s %s %s", idhex, peer_name(env.sender_id), text);
         hook_invoke(s_hook_chat, env.payload, env.payload_len);   /* E-E */
+        /* Bot mode runs AFTER the host event so the console/app always shows
+         * the stimulus before the response, and after the hook so a Forth
+         * script still sees every frame whether or not a bot is armed. */
+        mn_bot_on_chat(env.sender_id, peer_name(env.sender_id), text,
+                       (size_t)n, env.flags, evt->was_multicast);
         break;
     }
     case MN_T_M2M_CMD: {
@@ -460,6 +492,42 @@ static void handle_rx(const mn_evt_t *evt) {
             peer_set_name(env.sender_id, (const char *)&env.payload[4], plen);
         } else if (ns == 0x00 && cmd_id == 0x03) {   /* system/rotate (§11.1.8) */
             if (is_admin && plen == 1) epoch_apply(env.payload[4]);
+        } else if (ns == 0x00 && cmd_id == 0x04 && plen == 11) {  /* system/time */
+            int64_t epoch = 0;
+            for (int i = 0; i < 8; i++)
+                epoch = (epoch << 8) | env.payload[4 + i];
+            int tz = (int16_t)((env.payload[12] << 8) | env.payload[13]);
+            uint8_t from_stratum = env.payload[14];
+            uint8_t mine = (uint8_t)(from_stratum + 1);
+
+            /* Hearing ANY announce cancels a reply we had queued — someone
+             * beat us to it, which is the whole point of the jitter. */
+            if (s_time_timer) xTimerStop(s_time_timer, 0);
+
+            bool take;
+            if (from_stratum >= MN_TIME_MAX_STRATUM) take = false;
+            else if (!s_clock_set)              take = true;
+            else if (mine <  s_time_stratum)    take = true;   /* better source */
+            else if (mine >  s_time_stratum)    take = false;  /* worse — ignore */
+            /* Equal stratum: accept a refresh from the source we already
+             * follow (memcmp == 0), otherwise break the tie on lowest sender
+             * id. Without a deterministic rule here two equal peers re-adopt
+             * each other's clock forever, each hop adding the announce latency
+             * as drift. */
+            else take = memcmp(env.sender_id, s_time_src, 4) <= 0;
+
+            if (take && time_apply(epoch, tz, mine, env.sender_id) == 0) {
+                char info[96];
+                mn_time_info(info, sizeof(info));
+                mn_emit_event("# time adopted from %s (%s)", idhex, info);
+            }
+            /* A stratum-0 node keeps its own refresh cadence running even when
+             * it ignores a peer — it is the anchor, not a follower. */
+            if (s_time_stratum == 0 && s_time_timer)
+                xTimerChangePeriod(s_time_timer,
+                                   pdMS_TO_TICKS(MN_TIME_REFRESH_MS), 0);
+        } else if (ns == 0x00 && cmd_id == 0x05) {   /* system/time request */
+            time_reply_schedule();
         } else {
             emit_class(MN_EC_CMD, "!CMD %s %s %u %u len=%u",
                        MN_CHANNEL_NAME, idhex, ns, cmd_id, plen);
@@ -489,12 +557,22 @@ static void pump_task(void *arg) {
                     mn_set_state(MN_READY);
                     announce_schedule();      /* jittered announce (§11.6) */
                     queue_drain();            /* replay DEGRADED-queued sends */
+                    /* A node that just booted or rejoined has no clock of its
+                     * own; ask rather than wait out the stratum-0 refresh.
+                     * Nodes that already have one stay quiet, so a partition
+                     * heal does not turn into a request storm. */
+                    if (!s_clock_set) mn_time_request();
+                    else if (s_time_stratum == 0) mn_time_push();
                 }
             } else if (!strcmp(evt.role, "detached")) {
                 mn_set_state(s_state == MN_READY ? MN_DEGRADED : MN_ATTACHING);
             }
         } else if (evt.kind == MN_EVT_ANNOUNCE) {
             if (s_state == MN_READY) announce_name();
+        } else if (evt.kind == MN_EVT_TIMEPUSH) {
+            /* Either a jittered answer to a request that nobody else beat us
+             * to, or the stratum-0 refresh. Both are just "announce now". */
+            if (s_state == MN_READY) mn_time_push();
         } else if (evt.kind == MN_EVT_NOTE) {
             mn_write_line((const char *)evt.data);
         } else if (evt.kind == MN_EVT_HEARTBEAT) {
@@ -691,6 +769,14 @@ void mn_core_init(void) {
         s_announce_timer = xTimerCreate("mn_ann", pdMS_TO_TICKS(1000), pdFALSE,
                                         NULL, announce_timer_cb);
     }
+    /* One one-shot timer serves both time jobs: the jittered reply to a
+     * request, and the stratum-0 refresh. They never overlap — a node is
+     * either answering right now or waiting out its long refresh — so one
+     * handle is enough and the reload period is set at each use site. */
+    if (!s_time_timer) {
+        s_time_timer = xTimerCreate("mn_time", pdMS_TO_TICKS(1000), pdFALSE,
+                                    NULL, time_timer_cb);
+    }
 }
 
 /* ====================== core ops (HCP + Forth share these) ================= */
@@ -722,7 +808,8 @@ static void counter_load(void) {
 }
 
 static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
-                         const char *dst, bool con, bool admin) {
+                         const char *dst, bool con, bool admin,
+                         uint8_t extra_flags) {
     if (!payload || len == 0) return -1;
     if (len > MN_ENV_MAX_FRAME - MN_ENV_HDR_LEN - 8 - 64) return -2;
     if (s_counter + 1 >= s_counter_limit && counter_reserve() != 0)
@@ -732,7 +819,8 @@ static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
         .version    = MN_ENV_VERSION,
         .type       = type,
         .flags      = (uint8_t)((s_chan.set ? MN_F_ENCRYPTED : 0) |
-                                (admin ? (MN_F_ADMIN | MN_F_SIGNED) : 0)),
+                                (admin ? (MN_F_ADMIN | MN_F_SIGNED) : 0) |
+                                extra_flags),
         .counter    = ++s_counter,
         .epoch      = s_epoch,
         .selector   = s_chan.selector,
@@ -851,7 +939,7 @@ bool mn_channel_is_default(void) { return strcmp(s_chan.name, "magnet") == 0; }
 
 static int send_frame(uint8_t type, const uint8_t *payload, size_t len,
                       const char *dst, bool con) {
-    return send_frame_ex(type, payload, len, dst, con, false);
+    return send_frame_ex(type, payload, len, dst, con, false, 0);
 }
 
 /* Token bucket for host-initiated multicast (§4.9): burst 8, refill 10/s.
@@ -879,6 +967,173 @@ int mn_chat(const char *msg, size_t len) {
 
 int mn_dm(const char *peer_ipv6, const char *msg, size_t len) {
     return send_frame(MN_T_CHAT, (const uint8_t *)msg, len, peer_ipv6, true);
+}
+
+/* Bot replies go out marked MN_F_AUTOMATED so no other auto-responder answers
+ * them. They still pay the normal §4.9 rate limit — a bot is a host like any
+ * other, and letting it bypass the bucket would defeat the point. */
+int mn_chat_automated(const char *msg, size_t len) {
+    if (!rate_ok()) return -4;
+    return send_frame_ex(MN_T_CHAT, (const uint8_t *)msg, len, NULL, false,
+                         false, MN_F_AUTOMATED);
+}
+
+/* ---- host-set wall clock (§4.6 addendum) ----
+ * A Hanasu mesh has no border router and therefore no SNTP: esp_timer only
+ * ever gives uptime. Any host on the HCP link (the phone app, hcp.py, the
+ * soak harness) does know the time, so it can push it down once per session.
+ * Unset is the normal state and must stay useful — mn_time_str() falls back
+ * to uptime rather than lying about a date.
+ *
+ * Deliberately NOT settimeofday + strftime + tzset: that path costs ~8.8 KB
+ * of flash in newlib's time formatting and TZ parsing, measured, to print
+ * eight characters. The clock is anchored to esp_timer instead and the time
+ * of day comes out of three integer divisions. The trade is that only the
+ * time of day is available (no date, no DST rules) — which is all a bot line
+ * or a log stamp on a bench node ever wanted. */
+/* State and constants live near the top of the file with the rest; only the
+ * behaviour is here. See "host-set wall clock" there.
+ *
+ * ---- mesh-wide clock distribution (system/time, ns 0x00 cmd 0x04/0x05) ----
+ * One host seeds ONE node over HCP; that node becomes stratum 0 and multicasts
+ * the clock to the channel. Everyone else adopts it at stratum+1. The stratum
+ * is what keeps a mesh with two seeded nodes from oscillating: a better source
+ * always wins, an equal source only wins on a deterministic tie-break, and a
+ * worse one is ignored outright.
+ *
+ * Nodes do NOT re-broadcast what they hear. Thread's MPL already floods
+ * realm-local multicast across the whole mesh, so a re-broadcast would buy no
+ * reach and cost a storm. Convergence for late joiners and rebooted nodes
+ * comes from two things instead: the stratum-0 node refreshes periodically,
+ * and any node can pull with a request (cmd 0x05).
+ *
+ * Trust model: these frames are channel-encrypted like everything else, so
+ * anyone who can send chat can set the mesh clock. That is deliberate — it is
+ * the same boundary chat already has, and NOTHING security-critical depends on
+ * the clock (the replay defence is the monotonic counter in §11.1, not a
+ * timestamp). If that ever changes, this becomes an ADMIN|SIGNED frame like
+ * system/rotate, which is why the payload carries a stratum and not a bare
+ * timestamp. */
+
+/* Apply a clock from any source. stratum 0 = seeded here by a host. */
+static int time_apply(int64_t epoch_secs, int tz_offset_min, uint8_t stratum,
+                      const uint8_t src[4]) {
+    if (epoch_secs < 1700000000LL) return -1;      /* sanity: after 2023-11 */
+    if (tz_offset_min < -720 || tz_offset_min > 840) return -1;
+    s_epoch_base = epoch_secs;
+    s_uptime_at_set_us = esp_timer_get_time();
+    s_tz_offset_min = tz_offset_min;
+    s_time_stratum = stratum;
+    s_time_learned_us = s_uptime_at_set_us;
+    memcpy(s_time_src, src, 4);
+    s_clock_set = true;
+
+    /* Receivers never re-broadcast, so the ONLY way to land above stratum 1 is
+     * to have adopted from a node that had itself adopted — i.e. no stratum-0
+     * anchor answered. That is precisely the "the host-seeded node rebooted
+     * and its RAM-only clock went with it" case, and it RATCHETS: every
+     * subsequent reboot adopts from a neighbour one hop worse, until the mesh
+     * hits MN_TIME_MAX_STRATUM and stops distributing time at all. It is
+     * self-healing while an anchor lives (a stratum-0 refresh always wins) and
+     * unrecoverable once one does not, so say so loudly rather than degrade in
+     * silence. Fix is operational: re-seed any node with TIME SET. */
+    if (stratum >= 2)
+        emit_class(MN_EC_WARN,
+                   "!WARN time-no-anchor stratum=%u — no stratum-0 node on this "
+                   "mesh; re-seed with TIME SET (tools/hcp.py synctime)", stratum);
+    return 0;
+}
+
+int mn_time_set(int64_t epoch_secs, int tz_offset_min) {
+    int rc = time_apply(epoch_secs, tz_offset_min, 0, s_device_id);
+    if (rc != 0) return rc;
+    mn_time_push();          /* a host seed is news — tell the mesh at once */
+    return 0;
+}
+
+bool mn_time_is_set(void) { return s_clock_set; }
+
+void mn_time_info(char *buf, size_t cap) {
+    if (!buf || cap == 0) return;
+    if (!s_clock_set) { snprintf(buf, cap, "clock=unset"); return; }
+    char when[32];
+    mn_time_str(when, sizeof(when));
+    unsigned age = (unsigned)((esp_timer_get_time() - s_time_learned_us) / 1000000);
+    if (s_time_stratum == 0) {
+        snprintf(buf, cap, "clock=%s tz=%+d stratum=0 src=host age=%us",
+                 when, s_tz_offset_min, age);
+    } else {
+        snprintf(buf, cap,
+                 "clock=%s tz=%+d stratum=%u src=%02x%02x%02x%02x age=%us",
+                 when, s_tz_offset_min, s_time_stratum, s_time_src[0],
+                 s_time_src[1], s_time_src[2], s_time_src[3], age);
+    }
+}
+
+void mn_time_str(char *buf, size_t cap) {
+    if (!buf || cap == 0) return;
+    if (s_clock_set) {
+        int64_t now = s_epoch_base + s_tz_offset_min * 60 +
+                      (esp_timer_get_time() - s_uptime_at_set_us) / 1000000;
+        int32_t sod = (int32_t)(((now % 86400) + 86400) % 86400);
+        snprintf(buf, cap, "%02d:%02d:%02d", (int)(sod / 3600),
+                 (int)((sod % 3600) / 60), (int)(sod % 60));
+        return;
+    }
+    uint32_t up = (uint32_t)(esp_timer_get_time() / 1000000);
+    snprintf(buf, cap, "up %luh%02lum", (unsigned long)(up / 3600),
+             (unsigned long)((up % 3600) / 60));
+}
+
+/* Current UTC epoch as this node believes it, or 0 when the clock is unset. */
+static int64_t time_now_epoch(void) {
+    if (!s_clock_set) return 0;
+    return s_epoch_base + (esp_timer_get_time() - s_uptime_at_set_us) / 1000000;
+}
+
+/* system/time announce: ns 0x00, cmd 0x04, 11 params —
+ *   [0..7] epoch seconds, int64 BE   [8..9] tz offset minutes, int16 BE
+ *   [10]   stratum of the SENDER (receivers adopt stratum+1)                */
+int mn_time_push(void) {
+    if (!s_clock_set) return -1;
+    int64_t now = time_now_epoch();
+    uint8_t pl[4 + 11];
+    pl[0] = 0x00; pl[1] = 0x04; pl[2] = 0; pl[3] = 11;
+    for (int i = 0; i < 8; i++) pl[4 + i] = (uint8_t)(now >> (56 - 8 * i));
+    pl[12] = (uint8_t)((s_tz_offset_min >> 8) & 0xff);
+    pl[13] = (uint8_t)(s_tz_offset_min & 0xff);
+    pl[14] = s_time_stratum;
+    int rc = send_frame(MN_T_M2M_CMD, pl, sizeof(pl), NULL, false);
+    /* Stratum 0 is the mesh's anchor: keep re-announcing so late joiners and
+     * rebooted nodes converge without anyone having to ask. */
+    if (s_time_timer && s_time_stratum == 0)
+        xTimerChangePeriod(s_time_timer, pdMS_TO_TICKS(MN_TIME_REFRESH_MS), 0);
+    return rc;
+}
+
+/* system/time request: ns 0x00, cmd 0x05, no params. */
+int mn_time_request(void) {
+    uint8_t pl[4] = { 0x00, 0x05, 0x00, 0x00 };
+    return send_frame(MN_T_M2M_CMD, pl, sizeof(pl), NULL, false);
+}
+
+/* Schedule a jittered answer to a request (§11.6 Trickle-style suppression).
+ * The delay is biased by stratum so the best clock in earshot answers first
+ * and everyone else hears it and stands down — one reply, whatever the mesh
+ * size. Nodes with no clock never schedule. */
+static void time_reply_schedule(void) {
+    if (!s_clock_set || !s_time_timer) return;
+    uint32_t base = (uint32_t)s_time_stratum * 400;      /* s0: 0-, s1: 400-… */
+    uint32_t ms = base + 50 + (esp_random() % 350);
+    xTimerChangePeriod(s_time_timer, pdMS_TO_TICKS(ms), 0);
+}
+
+static void time_timer_cb(TimerHandle_t t) {
+    (void)t;
+    if (!s_evt_q) return;
+    static mn_evt_t evt;                 /* timer-daemon task is the only poster */
+    evt.kind = MN_EVT_TIMEPUSH;
+    xQueueSend(s_evt_q, &evt, 0);
 }
 
 /* system/announce: Type 1, ns 0x00, cmd 0x02, params = display name */
@@ -1165,7 +1420,7 @@ static void epoch_apply(uint8_t e) {
 /* signed system/rotate (ns 0, cmd 0x03): ADMIN|SIGNED multicast */
 int mn_rotate(void) {
     uint8_t pl[5] = { 0x00, 0x03, 0x00, 0x01, (uint8_t)(s_epoch + 1) };
-    int rc = send_frame_ex(MN_T_M2M_CMD, pl, sizeof(pl), NULL, false, true);
+    int rc = send_frame_ex(MN_T_M2M_CMD, pl, sizeof(pl), NULL, false, true, 0);
     if (rc == 0) epoch_apply(s_epoch + 1);
     return rc;
 }

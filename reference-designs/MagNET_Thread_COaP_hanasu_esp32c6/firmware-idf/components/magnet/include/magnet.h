@@ -62,6 +62,9 @@ const uint8_t *mn_device_id(void);
  * returns -4 when limited (HCP: -ERR E_RATE_LIMITED). */
 int  mn_chat(const char *msg, size_t len);                   /* multicast, Type 0 */
 int  mn_dm(const char *peer_ipv6, const char *msg, size_t len); /* unicast CON    */
+/* Same as mn_chat but marks the frame MN_F_AUTOMATED, so auto-responders on
+ * other nodes know not to answer it. Used by bot mode (magnet_bot.c). */
+int  mn_chat_automated(const char *msg, size_t len);
 void mn_status_line(char *buf, size_t cap);   /* "state=… role=… peers=… id=…"  */
 void mn_whoami_line(char *buf, size_t cap);   /* "id=… name=… fw=…"             */
 void mn_peers_print(void);
@@ -137,6 +140,30 @@ int  mn_script_run(void);                           /* run the saved script now 
 
 /* Switch the subscribed multicast group at runtime (magnet_ot.c). */
 int  mn_ot_set_mcast(const uint8_t suffix[4]);
+
+/* ---- Host-set wall clock ----
+ * A Hanasu mesh has no border router, so there is no SNTP and esp_timer only
+ * yields uptime. Any host on the HCP link knows the real time and can push it
+ * down once per session (HCP: TIME SET <epoch> [<POSIX-TZ>]; Forth: mn-time!).
+ * Nothing depends on it — mn_time_str() reports uptime until it is set, and
+ * says so, rather than inventing a date. */
+/* tz_offset_min: minutes east of UTC (JST = 540, PST = -480, UTC = 0). Only
+ * the time of day is kept — see the note in magnet_core.c on why this avoids
+ * newlib's strftime/tzset entirely. */
+int  mn_time_set(int64_t epoch_secs, int tz_offset_min); /* 0 ok, -1 implausible */
+bool mn_time_is_set(void);
+void mn_time_str(char *buf, size_t cap);   /* "14:32:07" set, else "up 3h07m" */
+void mn_time_info(char *buf, size_t cap);  /* + tz, stratum, source, age      */
+
+/* Mesh-wide clock (system/time, ns 0x00 cmd 0x04 announce / 0x05 request).
+ * A host seeds ONE node with mn_time_set(); that node becomes stratum 0 and
+ * multicasts to the channel, everyone else adopts at stratum+1. Receivers do
+ * not re-broadcast — Thread MPL already floods the mesh — so convergence for
+ * late joiners comes from the stratum-0 refresh plus mn_time_request().
+ * Replies to a request are jittered and suppressed by the first announce
+ * heard, so one node answers regardless of mesh size. */
+int  mn_time_push(void);      /* announce our clock now; -1 if we have none  */
+int  mn_time_request(void);   /* ask the mesh for the time                   */
 
 /* ---- Diagnostics / test surface (Forth: mn-sysinfo …; HCP: SYSINFO …) ---- */
 void mn_sysinfo_print(void);             /* chip, IDF, heap, forth heap, uptime */

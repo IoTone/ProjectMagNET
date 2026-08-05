@@ -10,6 +10,7 @@
  * The no-arg `mn-hello` remains as a zero-dependency smoke test.
  */
 #include "magnet.h"
+#include "magnet_bot.h"
 #include "forth_core.h"
 
 #include <stdint.h>
@@ -151,6 +152,40 @@ static void w_mn_stress(void) {
     forth_push((intptr_t)mn_stress_start((uint32_t)secs, (uint32_t)len));
 }
 
+/* mn-time! ( epoch-secs -- f )  set the wall clock; 0 = ok.
+ * A cell is 32 bits on the C6, so this carries a Unix epoch until 2038 —
+ * fine for a bench clock, and the HCP `TIME SET` verb takes a 64-bit value
+ * for anything that outlives that. */
+static void w_mn_time(void) {
+    intptr_t secs = forth_pop();
+    forth_push((intptr_t)mn_time_set((int64_t)secs, 0));
+}
+
+/* mn-now ( -- )  print the current time, tz, stratum and source */
+static void w_mn_now(void) {
+    char info[96];
+    mn_time_info(info, sizeof(info));
+    mn_emit_event("# %s", info);
+}
+
+/* mn-time-push ( -- f )  announce our clock to the mesh; 0 = ok */
+static void w_mn_time_push(void) { forth_push((intptr_t)mn_time_push()); }
+
+/* mn-time-sync ( -- f )  ask the mesh for the time; 0 = requested */
+static void w_mn_time_sync(void) { forth_push((intptr_t)mn_time_request()); }
+
+#if MN_ENABLE_BOTS
+/* mn-bot! ( n -- )  arm bot n; negative = off */
+static void w_mn_bot_set(void) {
+    intptr_t id = forth_pop();
+    if (mn_bot_set((int)id) != 0)
+        mn_emit_event("# no such bot: %d (try `botmode` for the list)", (int)id);
+}
+
+/* mn-bots ( -- )  list bots, ascending by id */
+static void w_mn_bots(void) { mn_bot_list(); }
+#endif
+
 void mn_register_forth_vocab(void) {
     forth_register_word("mn-chat",   w_mn_chat);
     forth_register_word("mn-dm",     w_mn_dm);
@@ -175,4 +210,23 @@ void mn_register_forth_vocab(void) {
     forth_register_word("str=",          w_str_eq);
     forth_register_word("gpio-output",   w_gpio_output);
     forth_register_word("gpio-set",      w_gpio_set);
+    forth_register_word("mn-time!",      w_mn_time);
+    forth_register_word("mn-now",        w_mn_now);
+    forth_register_word("mn-time-push",  w_mn_time_push);
+    forth_register_word("mn-time-sync",  w_mn_time_sync);
+#if MN_ENABLE_BOTS
+    forth_register_word("mn-bot!",       w_mn_bot_set);
+    forth_register_word("mn-bots",       w_mn_bots);
+
+    /* `botmode` is the user-facing word, and it is a colon definition rather
+     * than another primitive for one reason: an FFI word cannot tell an empty
+     * stack from a pushed 0. This engine's pop() returns 0 on underflow, so a
+     * bare `botmode` would read as `0 botmode` and arm bot 0 — the exact
+     * opposite of "with no argument, list the bots". `depth` sees the caller's
+     * stack and disambiguates, at a cost of ~10 cells of the 4096-cell code
+     * space. Evaluated directly (not via mn_forth_exec) because bringup runs
+     * this before mn_core_init() has created the engine mutex, and nothing
+     * else is running yet. */
+    forth_eval(": botmode depth 0> if mn-bot! else mn-bots then ;");
+#endif
 }

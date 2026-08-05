@@ -14,6 +14,7 @@
  * TX mutex across the whole forth_eval() call (so it can't be split by events).
  */
 #include "magnet.h"
+#include "magnet_bot.h"
 #include "forth_core.h"
 
 #include <string.h>
@@ -96,7 +97,11 @@ static void emit_caps(const char *tag) {
     respond(tag,
         "+OK proto=2.1 fw=0.6.0-eg maxline=512 "
         "transports=usbcdc verbs=STATUS,CAPS,HELP,PING,CHAT,DM,PEERS,RECENT,WHOAMI,NAME,"
-        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH "
+        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH,TIME"
+#if MN_ENABLE_BOTS
+        ",BOTMODE"
+#endif
+        " "
         "events=ready,state,chat,dm,cmd,peer,role,heartbeat,warn queue=4 mode=HCP");
 }
 
@@ -107,6 +112,12 @@ static void emit_help(const char *tag) {
     mn_write_line("#            SYSINFO MESH BENCH SELFTEST STATS [RESET] STRESS <secs> <len>");
     mn_write_line("#            HEARTBEAT <secs|0> FORTH PUBKEY ADMIN ADD|LIST ROTATE");
     mn_write_line("#            HOOK CHAT|CMD <word>|LIST|CLEAR  SCRIPT SET|SHOW|RUN|CLEAR");
+    mn_write_line("#            TIME | TIME SET <epoch> [<tz-min>] | TIME SYNC | TIME PUSH");
+    mn_write_line("#              (no NTP on a Thread-only mesh: SET seeds this node and");
+    mn_write_line("#               pushes to the channel; SYNC pulls from whoever has one)");
+#if MN_ENABLE_BOTS
+    mn_write_line("#            BOTMODE [<id>|OFF]  (no arg lists bots; Forth: `0 botmode`)");
+#endif
     mn_write_line("#            FACTORY RESET CONFIRM  (erases everything, reboots)");
     mn_write_line("# FORTH drops into the Forth REPL; type  .hcp  to return.");
     respond(tag, "+OK");
@@ -202,6 +213,64 @@ static void handle_hcp_line(char *line) {
             else respond(tag, "+OK");
         }
         else respond_err(tag, "E_SYNTAX", "ADMIN ADD <pubkey-hex> | LIST");
+    }
+    else if (!strcmp(verb, "BOTMODE")) {
+        /* BOTMODE            → list bots (ascending by id) + which is active
+         * BOTMODE <n>        → arm bot n
+         * BOTMODE OFF | -1   → disarm */
+        if (!MN_ENABLE_BOTS) {
+            respond_err(tag, "E_UNSUPPORTED", "not built with MN_ENABLE_BOTS=1");
+            return;
+        }
+        if (*rest == '\0') { mn_bot_list(); respond(tag, "+OK"); return; }
+        int id;
+        if (!strcasecmp(rest, "OFF")) id = -1;
+        else if (sscanf(rest, "%d", &id) != 1) {
+            respond_err(tag, "E_SYNTAX", "BOTMODE [<id> | OFF]"); return;
+        }
+        if (mn_bot_set(id) != 0) respond_err(tag, "E_NO_BOT", "no such bot");
+        else respond(tag, "+OK");
+    }
+    else if (!strcmp(verb, "TIME")) {
+        /* TIME                        → report current time / uptime
+         * TIME SET <epoch> [<TZ>]     → set the wall clock, e.g.
+         *                               TIME SET 1780000000 JST-9          */
+        if (*rest == '\0' || !strncasecmp(rest, "GET", 3)) {
+            char info[96], body[128];
+            mn_time_info(info, sizeof(info));
+            snprintf(body, sizeof(body), "+OK %s", info);
+            respond(tag, body);
+            return;
+        }
+        if (!strncasecmp(rest, "SYNC", 4)) {
+            /* pull: someone on-channel with a clock answers (jittered) */
+            if (mn_time_request() != 0) respond_err(tag, "E_INTERNAL", "send failed");
+            else respond(tag, "+OK requested (adopted async as '# time adopted')");
+            return;
+        }
+        if (!strncasecmp(rest, "PUSH", 4)) {
+            if (mn_time_push() != 0) respond_err(tag, "E_BAD_STATE", "clock unset");
+            else respond(tag, "+OK pushed");
+            return;
+        }
+        if (strncasecmp(rest, "SET ", 4)) {
+            respond_err(tag, "E_SYNTAX", "TIME [SET <epoch> [<tz-offset-min>]]");
+            return;
+        }
+        const char *p2 = rest + 4;
+        while (*p2 == ' ') p2++;
+        long long epoch = 0;
+        int tzmin = 0;
+        int got = sscanf(p2, "%lld %d", &epoch, &tzmin);
+        if (got < 1) { respond_err(tag, "E_SYNTAX", "need unix epoch"); return; }
+        if (mn_time_set((int64_t)epoch, got >= 2 ? tzmin : 0) != 0) {
+            respond_err(tag, "E_SYNTAX", "implausible epoch or tz offset");
+            return;
+        }
+        char info[96], body[128];
+        mn_time_info(info, sizeof(info));
+        snprintf(body, sizeof(body), "+OK %s (pushed to mesh)", info);
+        respond(tag, body);
     }
     else if (!strcmp(verb, "HOOK")) {
         /* HOOK CHAT|CMD <word> | HOOK CLEAR | HOOK LIST */

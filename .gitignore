@@ -12,3 +12,7 @@
 # Python
 __pycache__/
 *.pyc
+
+# Bench run artifacts: soak logs are per-run machine output, archived by
+# Jenkins (see the Hanasu Jenkinsfile), not source.
+**/tools/logs/
