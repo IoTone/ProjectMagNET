@@ -64,7 +64,25 @@ import html from "https://esm.sh/solid-js@1.9.3/html";
 const infoSig = [createSignal({}), createSignal({})];
 const msgsSig = [createSignal([]), createSignal([])];
 const latsSig = [createSignal([]), createSignal([])];   // delivered latencies, ms
-const pending = [new Map(), new Map()];  // text → bridge-clock send ts (per SENDER)
+/* Correlation entries per SENDER node: text → {t0, rxTs}. The POST response
+ * (t0, bridge clock) and the receiver's SSE chat event (rxTs, bridge clock)
+ * race each other — whichever lands second completes the measurement. */
+const pending = [new Map(), new Map()];
+
+function finishLat(sender, text, entry) {
+  const lat = (entry.rxTs - entry.t0) * 1000;
+  pending[sender].delete(text);
+  const [gl, sl] = latsSig[sender];
+  sl([...gl(), lat]);
+  const stamp = (idx, dir) => {
+    const [gm, sm] = msgsSig[idx];
+    let done = false;                      // stamp only the oldest unstamped copy
+    sm(gm().map(m => (!done && m.dir === dir && m.text === text && m.lat == null)
+                      ? (done = true, { ...m, lat }) : m));
+  };
+  stamp(sender, "out");
+  stamp(1 - sender, "in");
+}
 
 function addMsg(i, m) {
   const [get, set] = msgsSig[i];
@@ -86,19 +104,12 @@ es.onmessage = (e) => {
     // multicast chat lands on the node that DIDN'T send it; correlate with
     // the other pane's pending send to compute end-to-end latency
     const other = 1 - i;
-    let lat = null;
-    if (pending[other].has(ev.text)) {
-      lat = (ev.ts - pending[other].get(ev.text)) * 1000;
-      pending[other].delete(ev.text);
-      const [gl, sl] = latsSig[other];
-      sl([...gl(), lat]);
-    }
     addMsg(i, { dir: "in", from: ev.fields[2] !== "-" ? ev.fields[2] : ev.fields[1],
-                text: ev.text, lat });
-    if (lat != null) {   // stamp the latency onto the sender's bubble too
-      const [gm, sm] = msgsSig[other];
-      sm(gm().map(m => (m.dir === "out" && m.text === ev.text && m.lat == null)
-                        ? { ...m, lat } : m));
+                text: ev.text, lat: null });
+    const entry = pending[other].get(ev.text);
+    if (entry) {
+      entry.rxTs = ev.ts;
+      if (entry.t0 != null) finishLat(other, ev.text, entry);
     }
   } else if (ev.name === "dm") {
     addMsg(i, { dir: "in", from: ev.fields[1], text: ev.text, lat: null, dm: true });
@@ -113,12 +124,19 @@ async function send(i, inputEl) {
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = "";
+  const entry = { t0: null, rxTs: null };
+  pending[i].set(text, entry);           // registered BEFORE the fetch: the
+  addMsg(i, { dir: "out", text, lat: null });  // delivery event may beat the response
   const r = await fetch("/send", { method: "POST",
                                    body: JSON.stringify({ node: i, text }) });
   const j = await r.json();
-  if (!j.ok) { addMsg(i, { dir: "sys", warn: true, text: "send failed: " + j.err }); return; }
-  pending[i].set(text, j.ts);
-  addMsg(i, { dir: "out", text, lat: null });
+  if (!j.ok) {
+    pending[i].delete(text);
+    addMsg(i, { dir: "sys", warn: true, text: "send failed: " + j.err });
+    return;
+  }
+  entry.t0 = j.ts;
+  if (entry.rxTs != null) finishLat(i, text, entry);  // event won the race
 }
 
 /* ---- UI ---- */
