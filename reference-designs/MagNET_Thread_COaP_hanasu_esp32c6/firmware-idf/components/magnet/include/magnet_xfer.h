@@ -29,9 +29,9 @@ void mn_xfer_init(void);          /* mutex + tick timer (call before radios)  */
 int  mn_xfer_begin(const char *peer_ipv6, uint32_t total_len,
                    const char *meta, char *info, size_t cap);
 /* Buffered count (1..window) on success; -1 no active transfer, -2 bad
- * base64, -3 window full (host waits for !XFER_NEXT), -4 more data than
- * BEGIN announced, -5 wrong chunk size (must be exactly MN_XFER_CHUNK raw
- * except the final chunk) */
+ * base64, -3 window full (host waits for !XFER_NEXT; also returned for
+ * data past the announced total), -5 wrong chunk size (must be exactly
+ * MN_XFER_CHUNK raw except the final chunk) */
 int  mn_xfer_data_b64(const char *b64);
 int  mn_xfer_abort(void);         /* 0 = something was aborted, -1 = idle     */
 void mn_xfer_status_print(void);  /* '#' lines for both directions           */

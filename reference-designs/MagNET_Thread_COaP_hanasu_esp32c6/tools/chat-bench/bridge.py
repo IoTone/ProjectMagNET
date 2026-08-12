@@ -79,7 +79,8 @@ class XferManager:
             broadcast({"kind": "xfer", "node": self.i, "dir": "in",
                        "phase": "begin", "name": self.inb["name"],
                        "from": self.inb["from"], "total": self.inb["total"]})
-        elif ev.name == "xfer" and self.inb is not None:
+        elif (ev.name == "xfer" and self.inb is not None
+              and ev.fields[1] == self.inb["xid"]):
             idx = int(ev.fields[2].split("/")[0])
             self.inb["chunks"][idx] = base64.b64decode(ev.fields[3])
             pct = 100 * len(self.inb["chunks"]) // self.inb["nchunks"]
@@ -87,9 +88,17 @@ class XferManager:
                 self.inb["pct"] = pct
                 broadcast({"kind": "xfer", "node": self.i, "dir": "in",
                            "phase": "progress", "pct": pct})
-        elif ev.name == "xfer_done" and self.inb is not None:
+        elif (ev.name == "xfer_done" and self.inb is not None
+              and ev.fields[1] == self.inb["xid"]):
+            if len(self.inb["chunks"]) != self.inb["nchunks"]:
+                # a chunk event line was lost on the serial link — fail
+                # loudly instead of KeyError-ing (SDK would swallow it)
+                broadcast({"kind": "xfer", "node": self.i, "dir": "in",
+                           "phase": "fail", "reason": "chunk event lost on serial"})
+                self.inb = None
+                return
             data = b"".join(self.inb["chunks"][k]
-                            for k in range(len(self.inb["chunks"])))
+                            for k in range(self.inb["nchunks"]))
             mime = ("image/png" if self.inb["name"].lower().endswith(".png")
                     else "image/jpeg")
             broadcast({"kind": "photo", "node": self.i, "from": self.inb["from"],

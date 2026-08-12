@@ -26,6 +26,25 @@ aborted (or crashed) can restart immediately even if its abort frame was
 lost. `tools/chat-bench/` integrates photo sending into the browser rig
 (downscale in-page, progress both sides, inline preview on arrival).
 
+**Audit pass (same day, post-battery):** a code audit found and fixed three
+more firmware gaps, each HW-verified. (1) **Sender idle-abort**: a host that
+died at a window boundary (fill=0 — the resend machinery never arms) leaked
+the outbound session forever, bouncing every later BEGIN with `E_BUSY`; the
+sender now aborts after 30 s without host feed or receiver STATUS — proven
+with the receiver parked in its ROM bootloader (radio dead): `!XFER_FAIL
+timeout` at 30 s, next BEGIN accepted. (2) **Receiver-timeout notify**: the
+rx 30 s idle abort now sends a best-effort X_ABORT so the sender fails fast
+instead of grinding its resend ladder. (3) **Dup-INIT geometry check**: a
+restarted transfer that randomly drew the same 16-bit xid as the stale
+session it replaced was treated as a duplicate INIT and resumed the *old*
+bitmap over *new* data — silent corruption (p≈2⁻¹⁶ per restart-after-lost-
+abort); the dup test now also compares total_len/chunks/chunk_len and
+supersedes on mismatch. Also: INIT **meta is sanitized** to printable-ASCII-
+no-space on receive (a hostile channel member could otherwise inject fake
+host-protocol lines via CR/LF in a filename — note the inbound *chat* path
+has the same pre-existing exposure, out of E-H scope). Battery re-run after
+the fixes: **ALL 10 PASS**, bridge e2e byte-identical.
+
 Single-node validation (Waveshare C6, transfer to own ML-EID through the full
 envelope→AEAD→CoAP→OT stack): 1 B / 336 B / 10,752 B (exact window) / 50 KB /
 200 KB all hash-identical, **~6.0 KiB/s** sustained, `tx err=0 rx err=0 dup=0`

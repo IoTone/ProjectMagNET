@@ -68,6 +68,7 @@ static struct {
     uint8_t  init_tries;
     int64_t  last_init_us;
     int64_t  last_status_us;            /* last STATUS heard from receiver    */
+    int64_t  last_activity_us;          /* any progress: host feed or STATUS  */
     uint8_t  meta_len;
     char     meta[X_META_MAX];
     uint8_t  buf[MN_XFER_WINDOW][MN_XFER_CHUNK];
@@ -224,8 +225,9 @@ int mn_xfer_begin(const char *peer_ipv6, uint32_t total_len,
     if (mlen) memcpy(s_tx.meta, meta, mlen);
 
     int rc = send_init();
-    s_tx.init_tries   = 1;
-    s_tx.last_init_us = esp_timer_get_time();
+    s_tx.init_tries       = 1;
+    s_tx.last_init_us     = esp_timer_get_time();
+    s_tx.last_activity_us = s_tx.last_init_us;
     if (rc == -2) { s_tx.active = false; xSemaphoreGive(s_mx); return -3; }
     /* other send errors: the tick retries INIT — don't fail a begin on a
      * transient NO_BUFS */
@@ -253,6 +255,7 @@ int mn_xfer_data_b64(const char *b64) {
     if (rn != want)                 { xSemaphoreGive(s_mx); return -5; }
     memcpy(s_tx.buf[s_tx.fill], raw, rn);
     s_tx.fill++;
+    s_tx.last_activity_us = esp_timer_get_time();
     int filled = s_tx.fill;
     xSemaphoreGive(s_mx);
     return filled;
@@ -340,20 +343,22 @@ static void on_init(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     if (len < (size_t)12 + mlen) return;
 
     if (s_rx.active) {
-        if (s_rx.xid == xid && !memcmp(s_rx.peer_id, sender_id, 4)) {
-            rx_send_status(XC_PROGRESS);         /* dup INIT: our accept lost */
-            return;
-        }
-        if (!memcmp(s_rx.peer_id, sender_id, 4)) {
-            /* Same peer, new xid: it abandoned the old transfer (its abort
-             * may have been lost) — supersede instead of answering busy,
-             * or a lost X_ABORT wedges this pair for the 30 s idle window. */
-            mn_emit_event("!XFER_FAIL %04x superseded", s_rx.xid);
-            rx_close();
-        } else {
+        if (memcmp(s_rx.peer_id, sender_id, 4)) {
             send_status(src, xid, 0, 0, XC_BUSY);
             return;
         }
+        if (s_rx.xid == xid && tlen == s_rx.total_len &&
+            chunks == s_rx.total_chunks && clen == s_rx.chunk_len) {
+            rx_send_status(XC_PROGRESS);         /* dup INIT: our accept lost */
+            return;
+        }
+        /* Same peer, new xid (or same xid with different geometry — a
+         * restarted transfer that drew the same random xid must NOT resume
+         * the stale bitmap over new data): it abandoned the old transfer,
+         * its abort may have been lost — supersede instead of answering
+         * busy, or a lost X_ABORT wedges this pair for the 30 s window. */
+        mn_emit_event("!XFER_FAIL %04x superseded", s_rx.xid);
+        rx_close();
     }
     /* chunk_len bound keeps the !XFER event line inside the 512-char cap */
     if (tlen == 0 || clen == 0 || clen > MN_XFER_CHUNK ||
@@ -376,6 +381,11 @@ static void on_init(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     char meta[X_META_MAX + 1];
     memcpy(meta, pl + 12, mlen);
     meta[mlen] = '\0';
+    /* meta goes into an event line verbatim: a space would shift the field
+     * split, and a CR/LF from a hostile channel member would inject a fake
+     * host-protocol line — allow printable-ASCII-no-space only */
+    for (uint8_t i = 0; i < mlen; i++)
+        if (meta[i] <= 0x20 || meta[i] > 0x7e) meta[i] = '_';
     mn_emit_event("!XFER_BEGIN %02x%02x%02x%02x %04x %lu %u %u %s",
                   sender_id[0], sender_id[1], sender_id[2], sender_id[3],
                   xid, (unsigned long)tlen, chunks, clen,
@@ -427,9 +437,10 @@ static void on_status(const uint8_t *pl, size_t len) {
     for (int i = 0; i < 8; i++) bm |= ((uint64_t)pl[5 + i]) << (8 * i);
     uint8_t code = pl[13];
 
-    s_tx.last_status_us = esp_timer_get_time();
-    s_tx.rounds         = 0;
-    s_tx.accepted       = true;
+    s_tx.last_status_us   = esp_timer_get_time();
+    s_tx.last_activity_us = s_tx.last_status_us;
+    s_tx.rounds           = 0;
+    s_tx.accepted         = true;
 
     if (code == XC_BUSY)    { tx_fail("busy");    return; }
     if (code == XC_REFUSED) { tx_fail("refused"); return; }
@@ -475,6 +486,16 @@ void mn_xfer_tick(void) {
     xSemaphoreTake(s_mx, portMAX_DELAY);
     int64_t now = esp_timer_get_time();
 
+    if (s_tx.active && now - s_tx.last_activity_us >= X_IDLE_ABORT_US) {
+        /* No host feed and no receiver STATUS for the idle window — e.g. the
+         * host died at a window boundary (fill=0, so the resend machinery
+         * below never arms). Without this the session leaks forever and all
+         * later BEGINs bounce E_BUSY. Best-effort abort, single try. */
+        uint8_t pl[4] = { X_ABORT, 0, 0, 1 };
+        put_u16(pl + 1, s_tx.xid);
+        mn_xfer_send_frame(pl, 4, s_tx.peer);
+        tx_fail("timeout");
+    }
     if (s_tx.active) {
         if (!s_tx.accepted) {
             if (now - s_tx.last_init_us >= X_INIT_RETRY_US) {
@@ -526,6 +547,11 @@ void mn_xfer_tick(void) {
 
     if (s_rx.active) {
         if (now - s_rx.last_rx_us >= X_IDLE_ABORT_US) {
+            /* tell the sender (best-effort, one try) so it fails fast
+             * instead of grinding through its full resend ladder */
+            uint8_t pl[4] = { X_ABORT, 0, 0, 1 };
+            put_u16(pl + 1, s_rx.xid);
+            mn_xfer_send_frame(pl, 4, s_rx.src);
             rx_fail("timeout");
         } else if (now - s_rx.last_rx_us >= X_RX_GAP_US &&
                    now - s_rx.last_status_us >= X_RX_GAP_US &&

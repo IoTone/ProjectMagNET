@@ -163,7 +163,11 @@ es.onmessage = (e) => {
     addMsg(i, { dir: "sys", warn: ev.name === "warn", text: ev.raw });
   }
 };
-es.onerror = () => { infoSig[0][1](p => ({ ...p, bridge: "down" })); };
+/* bridge unreachable: red dot + state on BOTH panes until SSE reconnects
+ * and fresh info snapshots overwrite this */
+es.onerror = () => {
+  for (const [, set] of infoSig) set(p => ({ ...p, state: "BRIDGE DOWN" }));
+};
 
 /* ---- sending ---- */
 async function send(i, inputEl) {
