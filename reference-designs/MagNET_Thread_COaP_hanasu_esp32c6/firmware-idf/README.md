@@ -18,8 +18,16 @@ all hash-identical at **~6.0 KiB/s**, `tx err=0 rx err=0 dup=0` across 836
 frames, heap byte-identical before/after. Every chunk is a normal envelope
 frame (fresh nonce counter, channel AEAD) — the §11.1.5 invariant is
 untouched. Static RAM 137.1 KB (41.8%, +12.5 KB for window+bitmap), flash
-823.6 KB (29.9%). **Still open for the 4-node bench:** two-node transfer,
-NACK recovery under real loss, transfer-during-chat-load.
+823.6 KB (29.9%).
+
+**Two-node over-the-air validation (same day, desktop bench = Waveshare C6 +
+Waveshare LCD-1.47):** 50 KB both directions sha256-identical at ~5.4 KiB/s;
+**transfer under saturation** (receiver simultaneously flooding `STRESS 25
+200`) completed byte-identical at 1.41 KiB/s with 132/290 sender chunk-sends
+bounced by OT backpressure and re-paced, receiver `dup=4` (NACK retransmits
+deduped by the bitmap), `rx err=0` both sides, heap flat. The loss-recovery
+path has fired on real hardware. Remaining for a bigger bench: multi-hop
+routing and 3+-node concurrent-transfer behavior.
 
 ---
 

@@ -1220,7 +1220,7 @@ Payload Capacity (15 app-fragments):       ~930 bytes (single-frame)
 7. **UART baud rate**: Should higher baud rates (230400, 460800) be supported for edge routing throughput? Would need NVS-persisted config.
 8. **Multi-channel fleet migration**: When a system command tells peers to switch channels, what happens to peers that miss the message? (Eventual consistency problem — may need retransmit on both old and new channel briefly.)
 9. **Default passphrase security**: Should the well-known default `"magnet"` passphrase trigger a persistent warning LED pattern to remind users to configure a private channel? **[Resolved §11.5 — yes.]**
-10. **Photo/video-sized transfers** (rev 2.2): the 4-bit fragment field caps app-layer transfers at ~17 KB, but upstream (PONY-Cyberdeck-25 #7) wants photo/video sharing. **[RESOLVED — E-H (fw 0.7.0-eh, 2026-08-11): Type 6 extended transfer specified (`docs/EXTENDED-TRANSFER.md`) and implemented; 16-bit chunk index, CON unicast, window/NACK bitmap, ~6 KiB/s measured; single-node loopback hardware-validated, multi-node pass pending the 4-node bench. See §12.10.]**
+10. **Photo/video-sized transfers** (rev 2.2): the 4-bit fragment field caps app-layer transfers at ~17 KB, but upstream (PONY-Cyberdeck-25 #7) wants photo/video sharing. **[RESOLVED — E-H (fw 0.7.0-eh, 2026-08-11): Type 6 extended transfer specified (`docs/EXTENDED-TRANSFER.md`) and implemented; 16-bit chunk index, CON unicast, window/NACK bitmap; two-node over-the-air hardware-validated at ~5.4 KiB/s, loss recovery proven under saturation. See §12.10.]**
 
 ---
 
@@ -1707,7 +1707,7 @@ requirement:
 | Simple discovery by finding a network | ✅ Thread native MLE attach + `/magnet/discover`, `PEERS` |
 | Key from a **seed phrase of 12–24 short words** | ✅ §11.1.2 **Path C** (rev 2.2) — full-entropy, no stretch needed |
 | No network hopping / bridging required | ✅ matches the app-layer-channels choice (§4.2 A); edge routing (§4.7) stays optional |
-| **Photo sharing** | ✅ **E-H (2026-08-11)** — Type 6 extended transfer (`docs/EXTENDED-TRANSFER.md`); ~6 KiB/s ⇒ a 50–100 KB host-side re-encode moves in 8–17 s; single-node HW-validated, multi-node pending bench |
+| **Photo sharing** | ✅ **E-H (2026-08-11)** — Type 6 extended transfer (`docs/EXTENDED-TRANSFER.md`); two-node over-the-air HW-validated at ~5.4 KiB/s ⇒ a 50–100 KB host-side re-encode moves in ~10–20 s; survives saturation (NACK recovery fired, byte-identical) |
 | Video sharing (non-streaming) | ⚠️ same gap, worse (file sizes) |
 | Networking hardware < $15 | ✅ ESP32-C6 modules/devkits are $3–10; XIAO ESP32C6 / M5NanoC6 ≈ $6–10 |
 | Works as add-on to low-cost ARM/RISC-V board | ✅ R9 HCP over UART/USB-CDC/BLE; R10 gives the deck a scriptable REPL on the module itself |
@@ -2035,9 +2035,15 @@ chunk is a normal AEAD envelope frame — nonce discipline untouched. New verbs
 exactly this): 1 B, 336 B, 10,752 B (exact window), 50 KB, 200 KB all
 hash-identical at **~6.0 KiB/s**; `tx err=0 rx err=0 dup=0` over 836 frames;
 heap byte-identical pre/post. Negative paths verified (E_BAD_STATE, E_NO_PEER,
-E_BUSY, INIT-timeout teardown). **Pending the 4-node bench:** two-node
-transfer, NACK recovery under real radio loss, transfer under chat load.
-Forth xfer words deliberately deferred (host-driven use case).
+E_BUSY, INIT-timeout teardown). **Same-day two-node over-the-air validation**
+(desktop bench, second Waveshare C6 LCD-1.47 flashed): 50 KB both directions
+sha256-identical at ~5.4 KiB/s; **transfer under saturation** (receiver
+flooding `STRESS 25 200` mid-transfer) completed byte-identical at 1.41 KiB/s
+— 132/290 sender chunk-sends bounced by OT backpressure and re-paced,
+receiver `dup=4` (NACK retransmits deduped by bitmap), `rx err=0` both sides,
+heap flat: the loss-recovery path has fired on real hardware. Remaining for a
+larger bench: multi-hop routing, 3+-node concurrency. Forth xfer words
+deliberately deferred (host-driven use case).
 
 #### E-Phase A spike scaffold — status (historical)
 

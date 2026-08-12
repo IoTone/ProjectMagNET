@@ -1,8 +1,18 @@
 # Extended transfer (Type 6) — photos over the mesh
 
-**Status: HARDWARE-VALIDATED single-node loopback 2026-08-11 (fw 0.7.0-eh) —
-resolves design proposal Open Q10 / §11.8 (the photo gap). Multi-node pass and
-lossy-link NACK recovery await the 4-node bench.**
+**Status: HARDWARE-VALIDATED, two-node over-the-air, 2026-08-11 (fw 0.7.0-eh) —
+resolves design proposal Open Q10 / §11.8 (the photo gap).**
+
+Two-node bench (desktop: Waveshare C6 `93c6899e` + Waveshare LCD-1.47
+`1e4f466f`, real 802.15.4 link, RSSI −52):
+- 50 KB (153 chunks) A→B: sha256-identical, **5.44 KiB/s**. B→A: 5.38 KiB/s.
+- **Transfer under saturation** (receiver simultaneously running `STRESS 25
+  200` multicast flood): completed byte-identical at 1.41 KiB/s. The sender
+  had 132/290 chunk sends bounced by OT backpressure and re-paced them; the
+  receiver logged `dup=4` — NACK retransmits arriving after the original,
+  dropped by the bitmap — with `rx err=0` on both sides. The recovery
+  machinery demonstrably fired and the payload survived.
+- Heap byte-identical (sender) / clean transient dip (receiver) after all runs.
 
 Single-node validation (Waveshare C6, transfer to own ML-EID through the full
 envelope→AEAD→CoAP→OT stack): 1 B / 336 B / 10,752 B (exact window) / 50 KB /
