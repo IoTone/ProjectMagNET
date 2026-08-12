@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MagNET chat bench</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b23; --panel2: #1c232e; --line: #2a3342;
+    --fg: #d7dee8; --dim: #8b98a9; --accent: #4da3ff; --ok: #3fb96a;
+    --warn: #e0a63c; --err: #e05c5c; --out: #234066; --in: #232d3b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line);
+           display: flex; justify-content: space-between; align-items: baseline; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--dim); font-size: 12px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+         padding: 12px; height: calc(100vh - 46px); }
+  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+          display: flex; flex-direction: column; min-height: 0; }
+  .head { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .head .title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--err); flex: none; }
+  .dot.ready    { background: var(--ok); }
+  .dot.attaching, .dot.degraded { background: var(--warn); }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .badge { font-size: 11px; padding: 1px 8px; border-radius: 20px;
+           border: 1px solid var(--line); background: var(--panel2); color: var(--dim); }
+  .badge.enc  { color: var(--ok);   border-color: #23503a; }
+  .badge.warn { color: var(--warn); border-color: #5c4a1e; }
+  .log { flex: 1; overflow-y: auto; padding: 12px; display: flex;
+         flex-direction: column; gap: 6px; min-height: 0; }
+  .msg { max-width: 82%; padding: 6px 10px; border-radius: 10px; word-break: break-word; }
+  .msg.out { align-self: flex-end; background: var(--out); border-bottom-right-radius: 3px; }
+  .msg.in  { align-self: flex-start; background: var(--in); border-bottom-left-radius: 3px; }
+  .msg .meta { font-size: 10.5px; color: var(--dim); margin-top: 2px; display: flex; gap: 8px; }
+  .msg .lat { color: var(--accent); }
+  .sys { align-self: center; font-size: 11px; color: var(--dim); }
+  .sys.warn { color: var(--warn); }
+  .inbar { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+  .inbar input { flex: 1; background: var(--panel2); color: var(--fg);
+                 border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+                 font: inherit; outline: none; }
+  .inbar input:focus { border-color: var(--accent); }
+  .inbar button { background: var(--accent); color: #08111e; border: 0; border-radius: 8px;
+                  padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  .inbar button:disabled { opacity: .4; cursor: default; }
+  .stats { font-size: 11px; color: var(--dim); padding: 0 12px 8px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { createSignal } from "https://esm.sh/solid-js@1.9.3";
+import { render } from "https://esm.sh/solid-js@1.9.3/web";
+import html from "https://esm.sh/solid-js@1.9.3/html";
+
+/* ---- state: one info signal + one message-list signal per node ---- */
+const infoSig = [createSignal({}), createSignal({})];
+const msgsSig = [createSignal([]), createSignal([])];
+const latsSig = [createSignal([]), createSignal([])];   // delivered latencies, ms
+const pending = [new Map(), new Map()];  // text → bridge-clock send ts (per SENDER)
+
+function addMsg(i, m) {
+  const [get, set] = msgsSig[i];
+  set([...get(), m]);
+  queueMicrotask(() => {
+    const el = document.getElementById("log" + i);
+    if (el) el.scrollTop = el.scrollHeight;
+  });
+}
+
+/* ---- SSE from the bridge (single clock for honest latency) ---- */
+const es = new EventSource("/events");
+es.onmessage = (e) => {
+  const ev = JSON.parse(e.data);
+  if (ev.kind === "info") { infoSig[ev.node][1](ev); return; }
+  if (ev.kind !== "event") return;
+  const i = ev.node;
+  if (ev.name === "chat") {
+    // multicast chat lands on the node that DIDN'T send it; correlate with
+    // the other pane's pending send to compute end-to-end latency
+    const other = 1 - i;
+    let lat = null;
+    if (pending[other].has(ev.text)) {
+      lat = (ev.ts - pending[other].get(ev.text)) * 1000;
+      pending[other].delete(ev.text);
+      const [gl, sl] = latsSig[other];
+      sl([...gl(), lat]);
+    }
+    addMsg(i, { dir: "in", from: ev.fields[2] !== "-" ? ev.fields[2] : ev.fields[1],
+                text: ev.text, lat });
+    if (lat != null) {   // stamp the latency onto the sender's bubble too
+      const [gm, sm] = msgsSig[other];
+      sm(gm().map(m => (m.dir === "out" && m.text === ev.text && m.lat == null)
+                        ? { ...m, lat } : m));
+    }
+  } else if (ev.name === "dm") {
+    addMsg(i, { dir: "in", from: ev.fields[1], text: ev.text, lat: null, dm: true });
+  } else if (["state", "role", "warn", "peer_join", "peer_leave"].includes(ev.name)) {
+    addMsg(i, { dir: "sys", warn: ev.name === "warn", text: ev.raw });
+  }
+};
+es.onerror = () => { infoSig[0][1](p => ({ ...p, bridge: "down" })); };
+
+/* ---- sending ---- */
+async function send(i, inputEl) {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = "";
+  const r = await fetch("/send", { method: "POST",
+                                   body: JSON.stringify({ node: i, text }) });
+  const j = await r.json();
+  if (!j.ok) { addMsg(i, { dir: "sys", warn: true, text: "send failed: " + j.err }); return; }
+  pending[i].set(text, j.ts);
+  addMsg(i, { dir: "out", text, lat: null });
+}
+
+/* ---- UI ---- */
+const fmt = (n) => n == null ? "" : (n < 1000 ? n.toFixed(0) + " ms" : (n / 1000).toFixed(2) + " s");
+const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+
+function Pane(i) {
+  const info = infoSig[i][0], msgs = msgsSig[i][0], lats = latsSig[i][0];
+  const st = () => (info().state || "?").toLowerCase();
+  const encBadge = () => {
+    const ch = info().channel || info().name2 || "";
+    if (!info().selector) return html`<span class="badge">crypto: …</span>`;
+    return html`<span class="badge enc">🔒 AES-128-CCM sel=${() => info().selector}</span>`;
+  };
+  let inputEl;
+  return html`
+    <section class="pane">
+      <div class="head">
+        <div class="title">
+          <span class=${() => "dot " + st()}></span>
+          <span>node ${i} — ${() => info().port || "?"}</span>
+          <span style="color:var(--dim);font-weight:400">
+            ${() => info().id ? "id=" + info().id : ""}
+            ${() => info().name && info().name !== "-" ? " " + info().name : ""}
+          </span>
+        </div>
+        <div class="badges">
+          <span class="badge">state: ${() => info().state || "?"}</span>
+          <span class="badge">role: ${() => info().role || "?"}</span>
+          <span class="badge">channel: ${() => info().channel || "?"}</span>
+          ${encBadge}
+          ${() => info().channel === "magnet"
+              ? html`<span class="badge warn">⚠ default channel (well-known cred)</span>` : ""}
+          <span class="badge">peers: ${() => info().peers ?? "?"}</span>
+          <span class="badge">fw: ${() => info().fw || "?"}</span>
+        </div>
+      </div>
+      <div class="log" id=${"log" + i}>
+        ${() => msgs().map(m =>
+          m.dir === "sys"
+            ? html`<div class=${"sys" + (m.warn ? " warn" : "")}>${m.text}</div>`
+            : html`<div class=${"msg " + m.dir}>
+                     <div>${m.text}</div>
+                     <div class="meta">
+                       ${m.dir === "in" ? html`<span>from ${m.from}${m.dm ? " (DM)" : ""}</span>` : html`<span>sent</span>`}
+                       ${m.lat != null ? html`<span class="lat">⏱ ${fmt(m.lat)}</span>`
+                                       : (m.dir === "out" ? html`<span class="lat">…</span>` : "")}
+                     </div>
+                   </div>`)}
+      </div>
+      <div class="stats">
+        ${() => { const a = avg(lats());
+                  return a == null ? "no delivered messages yet"
+                    : `delivered: ${lats().length} · avg latency ${fmt(a)} · last ${fmt(lats().at(-1))}`; }}
+      </div>
+      <div class="inbar">
+        <input placeholder=${"chat as node " + i + "…"}
+               ref=${(el) => (inputEl = el)}
+               onKeyDown=${(e) => { if (e.key === "Enter") send(i, inputEl); }} />
+        <button onClick=${() => send(i, inputEl)}
+                disabled=${() => st() !== "ready" && st() !== "degraded"}>send</button>
+      </div>
+    </section>`;
+}
+
+render(() => html`
+  <header>
+    <h1>MagNET Hanasu — chat bench</h1>
+    <span class="sub">two nodes, one mesh · latency measured on the bridge clock (serial→radio→serial)</span>
+  </header>
+  <main>${Pane(0)}${Pane(1)}</main>`, document.getElementById("app"));
+</script>
+</body>
+</html>
