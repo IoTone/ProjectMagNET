@@ -1220,7 +1220,7 @@ Payload Capacity (15 app-fragments):       ~930 bytes (single-frame)
 7. **UART baud rate**: Should higher baud rates (230400, 460800) be supported for edge routing throughput? Would need NVS-persisted config.
 8. **Multi-channel fleet migration**: When a system command tells peers to switch channels, what happens to peers that miss the message? (Eventual consistency problem — may need retransmit on both old and new channel briefly.)
 9. **Default passphrase security**: Should the well-known default `"magnet"` passphrase trigger a persistent warning LED pattern to remind users to configure a private channel? **[Resolved §11.5 — yes.]**
-10. **Photo/video-sized transfers** (rev 2.2): the 4-bit fragment field caps app-layer transfers at ~17 KB, but upstream (PONY-Cyberdeck-25 #7) wants photo/video sharing. **[Direction sketched §11.8 — Type 6 extended transfer, 16-bit chunk index, host-side re-encode; to be specified before Phase 4 hardening.]**
+10. **Photo/video-sized transfers** (rev 2.2): the 4-bit fragment field caps app-layer transfers at ~17 KB, but upstream (PONY-Cyberdeck-25 #7) wants photo/video sharing. **[RESOLVED — E-H (fw 0.7.0-eh, 2026-08-11): Type 6 extended transfer specified (`docs/EXTENDED-TRANSFER.md`) and implemented; 16-bit chunk index, CON unicast, window/NACK bitmap, ~6 KiB/s measured; single-node loopback hardware-validated, multi-node pass pending the 4-node bench. See §12.10.]**
 
 ---
 
@@ -1707,7 +1707,7 @@ requirement:
 | Simple discovery by finding a network | ✅ Thread native MLE attach + `/magnet/discover`, `PEERS` |
 | Key from a **seed phrase of 12–24 short words** | ✅ §11.1.2 **Path C** (rev 2.2) — full-entropy, no stretch needed |
 | No network hopping / bridging required | ✅ matches the app-layer-channels choice (§4.2 A); edge routing (§4.7) stays optional |
-| **Photo sharing** | ⚠️ **GAP** — see below |
+| **Photo sharing** | ✅ **E-H (2026-08-11)** — Type 6 extended transfer (`docs/EXTENDED-TRANSFER.md`); ~6 KiB/s ⇒ a 50–100 KB host-side re-encode moves in 8–17 s; single-node HW-validated, multi-node pending bench |
 | Video sharing (non-streaming) | ⚠️ same gap, worse (file sizes) |
 | Networking hardware < $15 | ✅ ESP32-C6 modules/devkits are $3–10; XIAO ESP32C6 / M5NanoC6 ≈ $6–10 |
 | Works as add-on to low-cost ARM/RISC-V board | ✅ R9 HCP over UART/USB-CDC/BLE; R10 gives the deck a scriptable REPL on the module itself |
@@ -2017,6 +2017,27 @@ Ed25519 references in §11.1 as ECDSA-P256 (raw r‖s, 64 B) going forward.
 **E-F landed and validated (2026-08-01→02) — HCP rides BLE.** §11.2.1 BLE-GATT binding on NimBLE: 31-byte advert carries the 128-bit service UUID (filtered scans work screen-off), name in the scan response; bonded-link gating of privileged verbs (`E_NOT_BONDED` until Just-Works bonding); `mn_link_feed_line()` makes the grammar transport-independent as §11.2 requires. Companion variant `esp32c6_ble_resident` (magnet_app SCOPE §1 Option A) keeps BLE up after provisioning as a phone's window into the mesh; provisioning builds still tear down per §12.9 Q3. Host side: the Flutter app (magnet_app) speaks HCP over GATT — scan/bond/verbs/operator-enrolment passed 17/17 on Android hardware. **Field-fatal bug found and fixed:** a full USB-CDC buffer with no serial reader stalled the single TX writer up to 100 ms/char, starving BLE responses — `link_putc` now drops serial output after a 20 ms grace instead of ever blocking the node.
 
 **E-G landed and validated (2026-08-03, fw 0.6.0-eg, 4-node bench) — the phase table's last row.** (1) **SED catch-up** (§11.5): 12-slot ring of raw multicast-chat frames (ciphertext as stored, DMs excluded), served whole by CoAP `GET magnet/recent` as `[2B len][frame]…` oldest-first; new `RECENT <peer-ipv6>` verb replays a peer's ring through the normal RX path — decrypt + §11.1.6 high-water dedup make the replay deliver exactly the missed frames (bench: node held radio-dead through 3 chats booted to `rx msgs=0`, one fetch replayed all 6 stored frames; a second fetch deduped 6/6). (2) **§11.6 suppression/scale**: forwarding-layer suppression is Thread MPL — which *is* Trickle (RFC 7731) — so the app layer adds what MPL can't: sender/counter dedup (tables resized 16→40 for the 32+ target), MESH neighbor list 8→16, and a 200–1700 ms jittered READY-announce so partition heals don't burst-announce in sync. (3) **Full ESP32forth port**: gate said *iff the stub blocks real scripts* — it never did; stub stays, decision recorded. (4) **Scale validation**: leader killed via bootloader-hold → re-election + partition merge in ≤ ~15 s, old leader rejoins as child; saturation STRESS with BLE up on all 4 nodes: OT backpressure holds, `rx err=0`, MPL dupes suppressed; resident-build heap 161.7 KB free (the ~13 KB table cost, no leak). The **32+ node soak needs hardware that doesn't exist on this bench** — the soak plan (staggered boot, 24 h paced chat, hourly leader kills, dedup-eviction watch) is written up in `firmware-idf/README.md` §E-G. **E-A through E-G are closed; the implementation-phase table is done.**
+
+**E-H landed, single-node hardware-validated (2026-08-11, fw 0.7.0-eh) — the
+photo gap (Open Q10 / §11.8) is closed at the protocol level.** Type 6
+extended transfer per the §11.8 sketch, specified in
+`docs/EXTENDED-TRANSFER.md` and implemented in `magnet_xfer.c`: 16-bit chunk
+index in the payload (336 B chunks, ≤4096 chunks ≈ 1.31 MB), **CON unicast
+only** (the E-B measurements' verdict), sender buffers one 32-chunk window,
+receiver keeps only a bitmap and streams chunks to its host as `!XFER` events
+— the host reassembles by index (node-as-modem, §4.7). Recovery: receiver
+STATUS frames carry a per-window NACK bitmap (window-complete, 700 ms gap
+timer); sender rounds capped at 6; INIT retried 6×; 30 s idle abort. Every
+chunk is a normal AEAD envelope frame — nonce discipline untouched. New verbs
+`XFER BEGIN|DATA|ABORT|STATUS` + six `!XFER_*` events; `tools/xfer.py`
+(send/recv/loopback on the Python SDK) is the host reference. Bench
+(single Waveshare C6, loopback to own ML-EID — Type 6 is self-drop-exempt for
+exactly this): 1 B, 336 B, 10,752 B (exact window), 50 KB, 200 KB all
+hash-identical at **~6.0 KiB/s**; `tx err=0 rx err=0 dup=0` over 836 frames;
+heap byte-identical pre/post. Negative paths verified (E_BAD_STATE, E_NO_PEER,
+E_BUSY, INIT-timeout teardown). **Pending the 4-node bench:** two-node
+transfer, NACK recovery under real radio loss, transfer under chat load.
+Forth xfer words deliberately deferred (host-driven use case).
 
 #### E-Phase A spike scaffold — status (historical)
 

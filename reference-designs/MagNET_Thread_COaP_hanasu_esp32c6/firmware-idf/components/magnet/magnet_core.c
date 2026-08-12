@@ -13,6 +13,7 @@
 #include "magnet_envelope.h"
 #include "magnet_crypto.h"
 #include "magnet_bot.h"
+#include "magnet_xfer.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -35,7 +36,7 @@
 #include "forth_core.h"
 #include "sdkconfig.h"
 
-#define MN_FW_VERSION "0.6.0-eg"
+#define MN_FW_VERSION "0.7.0-eh"
 #define MN_NAME_MAX   16
 
 /* E-D: the active channel — everything (selector, mcast, key) derives from
@@ -310,7 +311,8 @@ static int  send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
 
 /* ==================== event pump (§12.4) =================================== */
 typedef enum { MN_EVT_RX, MN_EVT_ROLE, MN_EVT_HEARTBEAT,
-               MN_EVT_ANNOUNCE, MN_EVT_NOTE, MN_EVT_TIMEPUSH } mn_evt_kind_t;
+               MN_EVT_ANNOUNCE, MN_EVT_NOTE, MN_EVT_TIMEPUSH,
+               MN_EVT_XFER_TICK } mn_evt_kind_t;
 
 typedef struct {
     mn_evt_kind_t kind;
@@ -370,6 +372,15 @@ void mn_post_note(const char *fmt, ...) {
     xQueueSend(s_evt_q, &evt, 0);
 }
 
+/* E-H: the xfer tick timer (timer-daemon task) posts here; the pump task
+ * runs mn_xfer_tick(). Kind-only event — safe to share a static. */
+void mn_post_xfer_tick(void) {
+    if (!s_evt_q) return;
+    static mn_evt_t evt;                 /* timer-daemon task is the only poster */
+    evt.kind = MN_EVT_XFER_TICK;
+    xQueueSend(s_evt_q, &evt, 0);
+}
+
 /* ---- traffic counters (STATS / STRESS) ---- */
 static struct {
     uint32_t tx_try, tx_ok, tx_err;
@@ -401,7 +412,10 @@ static void handle_rx(const mn_evt_t *evt) {
         return;                                   /* pings never chat-emit */
     }
 
-    if (!memcmp(env.sender_id, s_device_id, 4)) return;       /* self */
+    /* Self-frames drop — except Type 6, whose CON-unicast frames may
+     * legitimately target our own ML-EID (single-node loopback test). */
+    if (!memcmp(env.sender_id, s_device_id, 4) &&
+        env.type != MN_T_XFER6) return;
     if (env.selector != s_chan.selector) return;              /* not our channel */
 
     /* §11.1.7: ADMIN frames must carry a valid allow-listed signature over
@@ -445,8 +459,10 @@ static void handle_rx(const mn_evt_t *evt) {
     s_stats.rx_msgs++;
     s_stats.rx_bytes += env.payload_len;
     /* catch-up frames arrive FROM the serving node — its address says nothing
-     * about where the original sender lives, so don't teach the peer table */
-    if (!evt->from_recent) peer_seen(env.sender_id, evt->src);
+     * about where the original sender lives, so don't teach the peer table.
+     * Loopback Type 6 frames from ourselves stay out of it too. */
+    if (!evt->from_recent && memcmp(env.sender_id, s_device_id, 4))
+        peer_seen(env.sender_id, evt->src);
 
     /* stress frames: count only, never emit (they'd flood the console) */
     if (env.type == MN_T_CHAT && env.payload_len >= sizeof(MN_STRESS_MARK) &&
@@ -535,6 +551,9 @@ static void handle_rx(const mn_evt_t *evt) {
         }
         break;
     }
+    case MN_T_XFER6:                              /* E-H extended transfer */
+        mn_xfer_on_rx(env.sender_id, env.payload, env.payload_len, evt->src);
+        break;
     default:
         mn_emit_event("# rx type=%u from=%s len=%u (unhandled in E-C)",
                       env.type, idhex, (unsigned)env.payload_len);
@@ -573,6 +592,8 @@ static void pump_task(void *arg) {
             /* Either a jittered answer to a request that nobody else beat us
              * to, or the stratum-0 refresh. Both are just "announce now". */
             if (s_state == MN_READY) mn_time_push();
+        } else if (evt.kind == MN_EVT_XFER_TICK) {
+            mn_xfer_tick();               /* E-H: paced send + timeout FSMs */
         } else if (evt.kind == MN_EVT_NOTE) {
             mn_write_line((const char *)evt.data);
         } else if (evt.kind == MN_EVT_HEARTBEAT) {
@@ -760,6 +781,7 @@ void mn_core_init(void) {
     if (!s_selftest_sem) s_selftest_sem = xSemaphoreCreateBinary();
     if (!s_forth_mutex)  s_forth_mutex  = xSemaphoreCreateMutex();
     if (!s_recent_mutex) s_recent_mutex = xSemaphoreCreateMutex();
+    mn_xfer_init();                      /* E-H transfer mutex + tick timer */
     if (!s_hb_timer) {
         s_hb_timer = xTimerCreate("mn_hb", pdMS_TO_TICKS(30 * 1000), pdTRUE,
                                   NULL, hb_timer_cb);
@@ -941,6 +963,15 @@ static int send_frame(uint8_t type, const uint8_t *payload, size_t len,
                       const char *dst, bool con) {
     return send_frame_ex(type, payload, len, dst, con, false, 0);
 }
+
+/* E-H: Type 6 frames ride the normal envelope/AEAD/counter path — CON
+ * unicast only (docs/EXTENDED-TRANSFER.md), never the multicast group. */
+int mn_xfer_send_frame(const uint8_t *payload, size_t len, const char *dst_ipv6) {
+    if (!dst_ipv6) return -2;
+    return send_frame(MN_T_XFER6, payload, len, dst_ipv6, true);
+}
+
+bool mn_xfer_ec_enabled(void) { return (s_ev_mask & MN_EC_XFER) != 0; }
 
 /* Token bucket for host-initiated multicast (§4.9): burst 8, refill 10/s.
  * STRESS bypasses it (calls send_frame directly — it measures the stack). */

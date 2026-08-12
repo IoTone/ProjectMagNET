@@ -141,6 +141,15 @@ int  mn_script_run(void);                           /* run the saved script now 
 /* Switch the subscribed multicast group at runtime (magnet_ot.c). */
 int  mn_ot_set_mcast(const uint8_t suffix[4]);
 
+/* ---- E-H: Type 6 extended transfer glue (magnet_xfer.c ↔ core) ----
+ * Type 6 frames are CON unicast and exempt from handle_rx's self-drop so a
+ * single-node bench can loopback-test a whole transfer against its own
+ * ML-EID (same trick as the SELFTEST magic PING). */
+int  mn_xfer_send_frame(const uint8_t *payload, size_t len,
+                        const char *dst_ipv6);   /* Type 6, CON unicast */
+void mn_post_xfer_tick(void);      /* timer cb → pump task → mn_xfer_tick() */
+bool mn_xfer_ec_enabled(void);     /* is the `xfer` event class subscribed  */
+
 /* ---- Host-set wall clock ----
  * A Hanasu mesh has no border router, so there is no SNTP and esp_timer only
  * yields uptime. Any host on the HCP link knows the real time and can push it

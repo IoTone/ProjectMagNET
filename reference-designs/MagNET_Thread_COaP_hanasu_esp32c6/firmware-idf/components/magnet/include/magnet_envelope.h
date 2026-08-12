@@ -19,14 +19,15 @@ extern "C" {
 #define MN_ENV_HDR_LEN   16
 #define MN_ENV_MAX_FRAME 512    /* cap accepted/produced envelope size (E-B) */
 
-/* Message types (§4.4, unchanged in v2.1) */
+/* Message types (§4.4; Type 6 added rev 2.2 / E-H — see §11.8) */
 enum {
     MN_T_CHAT     = 0,
     MN_T_M2M_CMD  = 1,
     MN_T_M2M_RESP = 2,
-    MN_T_XFER     = 3,
+    MN_T_XFER     = 3,   /* reserved — superseded by Type 6 before it shipped */
     MN_T_ACK      = 4,
     MN_T_PING     = 5,
+    MN_T_XFER6    = 6,   /* extended transfer: 16-bit chunk index in payload  */
 };
 
 /* Flags (§11.1.4) */
