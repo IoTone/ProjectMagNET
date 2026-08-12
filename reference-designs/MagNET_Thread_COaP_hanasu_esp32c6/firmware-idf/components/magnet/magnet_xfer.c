@@ -152,7 +152,15 @@ static int send_status(const char *dst, uint16_t xid, uint16_t base,
 static int send_abort(const char *dst, uint16_t xid, uint8_t reason) {
     uint8_t pl[4] = { X_ABORT, 0, 0, reason };
     put_u16(pl + 1, xid);
-    return mn_xfer_send_frame(pl, 4, dst);
+    /* An abort right after a chunk burst can hit OT buffer backpressure;
+     * fire-and-forget here left the peer stuck "busy" until its 30 s idle
+     * timeout (found by the E-H photo battery). Retry a few times — once
+     * queued, CoAP CON retransmission takes over. */
+    for (int t = 0; t < 3; t++) {
+        if (mn_xfer_send_frame(pl, 4, dst) == 0) return 0;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return -1;
 }
 
 static void tx_fail(const char *reason) {
@@ -334,10 +342,18 @@ static void on_init(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     if (s_rx.active) {
         if (s_rx.xid == xid && !memcmp(s_rx.peer_id, sender_id, 4)) {
             rx_send_status(XC_PROGRESS);         /* dup INIT: our accept lost */
+            return;
+        }
+        if (!memcmp(s_rx.peer_id, sender_id, 4)) {
+            /* Same peer, new xid: it abandoned the old transfer (its abort
+             * may have been lost) — supersede instead of answering busy,
+             * or a lost X_ABORT wedges this pair for the 30 s idle window. */
+            mn_emit_event("!XFER_FAIL %04x superseded", s_rx.xid);
+            rx_close();
         } else {
             send_status(src, xid, 0, 0, XC_BUSY);
+            return;
         }
-        return;
     }
     /* chunk_len bound keeps the !XFER event line inside the 512-char cap */
     if (tlen == 0 || clen == 0 || clen > MN_XFER_CHUNK ||

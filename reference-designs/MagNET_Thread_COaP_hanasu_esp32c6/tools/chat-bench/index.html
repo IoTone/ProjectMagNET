@@ -38,6 +38,9 @@
   .msg { max-width: 82%; padding: 6px 10px; border-radius: 1px; word-break: break-word; }
   .msg.out { align-self: flex-end; background: var(--out); }
   .msg.in  { align-self: flex-start; background: var(--in); border: 1px solid var(--line); }
+  .msg img { display: block; max-width: 220px; max-height: 220px;
+             border-radius: 1px; margin-bottom: 4px; }
+  .warntext { color: var(--warn); }
   .msg .meta { font-size: 10.5px; color: var(--dim); margin-top: 2px; display: flex; gap: 8px; }
   .msg .lat { color: var(--accent); }
   .sys { align-self: center; font-size: 11px; color: var(--dim); }
@@ -50,6 +53,8 @@
   .inbar button { background: var(--accent); color: #101010; border: 0; border-radius: 1px;
                   padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
   .inbar button:disabled { opacity: .4; cursor: default; }
+  .inbar button.attach { background: var(--panel2); color: var(--fg);
+                         border: 1px solid var(--line); font-weight: 400; }
   .stats { font-size: 11px; color: var(--dim); padding: 0 12px 8px; }
 </style>
 </head>
@@ -93,11 +98,52 @@ function addMsg(i, m) {
   });
 }
 
+/* patch the newest message matching pred; returns false if none matched */
+function patchLast(i, pred, patch) {
+  const [get, set] = msgsSig[i];
+  const arr = get();
+  for (let k = arr.length - 1; k >= 0; k--) {
+    if (pred(arr[k])) {
+      const next = arr.slice();
+      next[k] = { ...arr[k], ...patch };
+      set(next);
+      return true;
+    }
+  }
+  return false;
+}
+const livePhoto = (dir) => (m) => m.kind === "photo" && m.dir === dir && !m.done;
+
 /* ---- SSE from the bridge (single clock for honest latency) ---- */
 const es = new EventSource("/events");
 es.onmessage = (e) => {
   const ev = JSON.parse(e.data);
   if (ev.kind === "info") { infoSig[ev.node][1](ev); return; }
+  if (ev.kind === "xfer") {                   // photo transfer progress
+    const i = ev.node, dir = ev.dir;
+    if (ev.phase === "begin" && dir === "in")
+      addMsg(i, { dir: "in", kind: "photo", name: ev.name, from: ev.from, pct: 0 });
+    else if (ev.phase === "progress")
+      patchLast(i, livePhoto(dir), { pct: ev.pct });
+    else if (ev.phase === "sent")
+      patchLast(i, livePhoto(dir), { pct: 100, secs: ev.secs, done: true });
+    else if (ev.phase === "fail")
+      patchLast(i, livePhoto(dir), { failed: ev.reason, done: true }) ||
+        addMsg(i, { dir: "sys", warn: true, text: "photo failed: " + ev.reason });
+    return;
+  }
+  if (ev.kind === "photo") {                  // reassembled inbound image
+    const i = ev.node;
+    const patch = { img: ev.data, name: ev.name, from: ev.from,
+                    pct: 100, secs: ev.secs, size: ev.size, done: true };
+    if (!patchLast(i, livePhoto("in"), patch))
+      addMsg(i, { dir: "in", kind: "photo", ...patch });
+    queueMicrotask(() => {
+      const el = document.getElementById("log" + i);
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    return;
+  }
   if (ev.kind !== "event") return;
   const i = ev.node;
   if (ev.name === "chat") {
@@ -139,6 +185,51 @@ async function send(i, inputEl) {
   if (entry.rxTs != null) finishLat(i, text, entry);  // event won the race
 }
 
+/* ---- photos: downscale on the host (the mesh carries a re-encode, never
+ * the original — design proposal §11.8), then hand off to the bridge ---- */
+function shrink(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1024;
+      let w = img.width, h = img.height;
+      if (Math.max(w, h) > MAX) {
+        const s = MAX / Math.max(w, h);
+        w = Math.round(w * s); h = Math.round(h * s);
+      }
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      let q = 0.82, dataUrl = c.toDataURL("image/jpeg", q);
+      while (dataUrl.length * 0.75 > 180 * 1024 && q > 0.4) {  // aim ≤ ~180 KB
+        q -= 0.12;
+        dataUrl = c.toDataURL("image/jpeg", q);
+      }
+      URL.revokeObjectURL(img.src);
+      const base = (file.name.replace(/\.[^.]*$/, "") || "photo")
+                     .replace(/\s+/g, "_").slice(0, 40);
+      res({ dataUrl, b64: dataUrl.split(",")[1], name: base + ".jpg" });
+    };
+    img.onerror = rej;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function sendPhoto(i, fileEl) {
+  const file = fileEl.files[0];
+  fileEl.value = "";
+  if (!file) return;
+  let p;
+  try { p = await shrink(file); }
+  catch { addMsg(i, { dir: "sys", warn: true, text: "not an image?" }); return; }
+  addMsg(i, { dir: "out", kind: "photo", img: p.dataUrl, name: p.name, pct: 0 });
+  const r = await fetch("/sendphoto", { method: "POST",
+    body: JSON.stringify({ node: i, name: p.name, data: p.b64 }) });
+  const j = await r.json();
+  if (!j.ok)
+    patchLast(i, livePhoto("out"), { failed: "send refused", done: true });
+}
+
 /* ---- UI ---- */
 const fmt = (n) => n == null ? "" : (n < 1000 ? n.toFixed(0) + " ms" : (n / 1000).toFixed(2) + " s");
 const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
@@ -146,7 +237,7 @@ const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
 function Pane(i) {
   const info = infoSig[i][0], msgs = msgsSig[i][0], lats = latsSig[i][0];
   const st = () => (info().state || "?").toLowerCase();
-  let inputEl;
+  let inputEl, fileEl;
   return html`
     <section class="pane">
       <div class="head">
@@ -176,6 +267,16 @@ function Pane(i) {
         ${() => msgs().map(m =>
           m.dir === "sys"
             ? html`<div class=${"sys" + (m.warn ? " warn" : "")}>${m.text}</div>`
+            : m.kind === "photo"
+            ? html`<div class=${"msg " + m.dir}>
+                     ${m.img ? html`<img src=${m.img} alt=${m.name}>` : ""}
+                     <div class="meta">
+                       <span>${m.dir === "in" ? "photo from " + (m.from ?? "?") : "photo"} · ${m.name}${m.size ? " · " + (m.size / 1024).toFixed(0) + " KB" : ""}</span>
+                       ${m.failed ? html`<span class="warntext">✗ ${m.failed}</span>`
+                         : m.done ? html`<span class="lat">✓${m.secs != null ? " " + m.secs + " s" : ""}</span>`
+                         : html`<span class="lat">${m.pct ?? 0}%</span>`}
+                     </div>
+                   </div>`
             : html`<div class=${"msg " + m.dir}>
                      <div>${m.text}</div>
                      <div class="meta">
@@ -194,6 +295,12 @@ function Pane(i) {
         <input placeholder=${"chat as node " + i + "…"}
                ref=${(el) => (inputEl = el)}
                onKeyDown=${(e) => { if (e.key === "Enter") send(i, inputEl); }} />
+        <input type="file" accept="image/*" style="display:none"
+               ref=${(el) => (fileEl = el)}
+               onChange=${() => sendPhoto(i, fileEl)} />
+        <button class="attach" title="send a photo (downscaled to ≤180 KB)"
+                onClick=${() => fileEl.click()}
+                disabled=${() => st() !== "ready"}>photo</button>
         <button onClick=${() => send(i, inputEl)}
                 disabled=${() => st() !== "ready" && st() !== "degraded"}>send</button>
       </div>

@@ -14,6 +14,18 @@ Two-node bench (desktop: Waveshare C6 `93c6899e` + Waveshare LCD-1.47
   machinery demonstrably fired and the payload survived.
 - Heap byte-identical (sender) / clean transient dip (receiver) after all runs.
 
+**Real-photo battery (same day, 10/10):** actual JPEGs 16 KB / 67 KB / 300 KB
+both directions at ~5.3 KiB/s, back-to-back sessions, photo intact with chat
+flowing both ways mid-transfer, abort signalling, `rx err=0`. The abort tests
+found and fixed two robustness gaps: **X_ABORT is now retried** (3×, 50 ms —
+a fire-and-forget abort right after a chunk burst could bounce off OT
+backpressure, leaving the peer busy for the 30 s idle window), and an **INIT
+from the same peer with a new xid supersedes** a stale inbound session
+(`!XFER_FAIL <xid> superseded`) instead of answering busy — so a sender that
+aborted (or crashed) can restart immediately even if its abort frame was
+lost. `tools/chat-bench/` integrates photo sending into the browser rig
+(downscale in-page, progress both sides, inline preview on arrival).
+
 Single-node validation (Waveshare C6, transfer to own ML-EID through the full
 envelope→AEAD→CoAP→OT stack): 1 B / 336 B / 10,752 B (exact window) / 50 KB /
 200 KB all hash-identical, **~6.0 KiB/s** sustained, `tx err=0 rx err=0 dup=0`
