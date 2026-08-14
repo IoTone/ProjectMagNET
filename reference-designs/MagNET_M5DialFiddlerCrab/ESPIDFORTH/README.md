@@ -1,8 +1,11 @@
 # ESPIDFORTH
 
-ESP32FORTH ported to ESP-IDF via PlatformIO. Phase 2 of the MagNET Hive AI prototype.
+ESP32FORTH ported to ESP-IDF via PlatformIO. Originally developed as Phase 2 of the
+[MagNET](https://github.com/IoTone/ProjectMagNET) Hive AI prototype; extracted into this
+standalone repository (full history preserved) in August 2026 so that all consumers —
+MagNET hive nodes and otherwise — share one versioned core instead of drifting copies.
 
-This is a Forth interpreter running natively on ESP-IDF (not Arduino), targeting ESP32, ESP32-S3, ESP32-C3, and ESP32-C6. Currently uses a stub Forth engine implementing the core ANS Forth word set. The full ESP32forth v7.0.8.0 engine (preserved in `components/forth/ESP32forth.ino`) will replace the stub once Arduino dependencies are fully stripped.
+This is a Forth interpreter running natively on ESP-IDF (not Arduino), targeting ESP32, ESP32-S3, ESP32-C3, and ESP32-C6. Currently uses a stub Forth engine implementing the core ANS Forth word set. The full ESP32forth v7.0.8.0 engine (preserved in `third_party/esp32forth/`) will replace the stub once Arduino dependencies are fully stripped.
 
 ## Supported Targets
 
@@ -251,7 +254,10 @@ ESPIDFORTH/
       forth_core.h            # Public C API
       forth_core.cpp          # Forth interpreter
       forth_version.h         # Version, build info, and feature flags
-      ESP32forth.ino          # Original ESP32forth v7.0.8.0 (reference)
+  third_party/
+    esp32forth/               # Vendored upstream (reference for the port)
+      PROVENANCE.md           # Upstream URL, pinned revision, license terms
+      ESP32forth.ino          # Original ESP32forth v7.0.8.0
       ESP32forth_README.txt   # Upstream readme
       optional/               # Optional ESP32forth modules
 ```
@@ -423,7 +429,19 @@ Other memory inspection words:
 
 ## Next Steps
 
-- Port full ESP32forth v7.0.8.0 engine from `ESP32forth.ino`, replacing the stub
+- Port full ESP32forth v7.0.8.0 engine from `third_party/esp32forth/`, replacing the stub
 - Add ESP-IDF native vocabulary words (WiFi, GPIO, I2C, SPIFFS)
 - PSRAM-aware dictionary allocation for ESP32-S3
 - Expand test suite with ANS Forth compliance tests
+
+## License
+
+Apache License 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+
+The vendored upstream reference (`third_party/esp32forth/`) is ESP32forth v7.0.8.0
+from [flagxor/ueforth](https://github.com/flagxor/ueforth), also Apache-2.0; its
+pinned revision and handling rules are recorded in
+[`third_party/esp32forth/PROVENANCE.md`](third_party/esp32forth/PROVENANCE.md).
+The whole repository is Apache-2.0 by design: the stub engine is slated to become a
+derivative of ESP32forth once the port lands, and a permissively-relicensed core
+would not survive that transition.

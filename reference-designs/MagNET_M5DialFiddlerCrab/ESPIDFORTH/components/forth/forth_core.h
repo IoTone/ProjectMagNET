@@ -12,6 +12,7 @@
 #define FORTH_CORE_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,6 +73,26 @@ void forth_restore(const forth_savepoint_t *sp);
  * rollback exists for.
  */
 int  forth_error_count(void);
+
+/*
+ * VERIFIED-APPLY PRIMITIVE — evaluate text line-at-a-time under a dictionary
+ * savepoint, rolling back on the first failing line. This is the one safe way
+ * to feed remotely-delivered code (role bundles, OTA releases) to the engine:
+ * either the whole text takes effect, or none of it does and the caller
+ * learns which line broke.
+ *
+ * The engine works on its own copy — `text` is untouched, so the caller can
+ * persist it verbatim after a successful apply. Length-aware: `text` need not
+ * be NUL-terminated (this supersedes the forth_eval_n() the RoleBundle spec
+ * originally imagined).
+ *
+ * Returns  0 — every line evaluated cleanly;
+ *          1 — a line failed: dictionary rolled back, failing line copied to
+ *              fail_line (if non-NULL, NUL-terminated, truncated to fail_cap);
+ *         -1 — allocation failure or engine not initialized; nothing evaluated.
+ */
+int forth_eval_rollback(const char *text, size_t len,
+                        char *fail_line, size_t fail_cap);
 
 void forth_deinit(void);
 
