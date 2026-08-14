@@ -238,3 +238,28 @@ rather than defaulting into.
 | `magnet_link.c` | `TIME` verb: `SET`, `SYNC`, `PUSH`, bare query |
 | `magnet_forth.c` | `mn-time!`, `mn-now`, `mn-time-push`, `mn-time-sync` |
 | `tools/hcp.py` | `synctime` — computes host epoch + tz offset and seeds |
+
+## Anchor-role persistence — the ratchet fix (2026-08-14, punch-list H7)
+
+The stratum ratchet's root cause was that an anchor reboot was *silent*: the
+node forgot it had ever been stratum 0, rejoined as a supplicant, and the mesh
+degraded one hop per generation until `MN_TIME_MAX_STRATUM` stopped time
+distribution entirely.
+
+What now persists across reboot is the **role, never the clock** (a persisted
+clock would come back confidently wrong after an unknown off interval):
+
+- `TIME SET` marks the node as the anchor (NVS `t_anchor`).
+- An ex-anchor that reaches READY with no clock emits
+  `!WARN time-anchor-await-seed` alongside its normal `TIME SYNC` request —
+  the app and `hcp.py synctime` re-seed on connect, so the loud ask is
+  usually answered within one session.
+- If the ex-anchor adopts mesh time instead, it emits
+  `!WARN time-anchor-degraded stratum=N` exactly once — running, but the
+  mesh has no stratum 0 until someone re-seeds.
+- Hearing a **different** node announce at stratum 0 releases the persisted
+  role (`# time anchor moved to <id>`): the host moved the seed, and two
+  competing anchors would fight the equal-stratum tie-break forever.
+
+The operational fix (re-seed with `TIME SET`) is unchanged — what changed is
+that the mesh now *asks for it by name* instead of ratcheting in silence.
