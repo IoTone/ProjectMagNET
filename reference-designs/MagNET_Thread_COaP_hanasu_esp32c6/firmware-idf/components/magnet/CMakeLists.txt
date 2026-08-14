@@ -12,6 +12,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES
         forth                # ESPIDFORTH engine (from EXTRA_COMPONENT_DIRS)
+        craw_role_bundle     # H6: signed role bundles over HCP (BUNDLE verb)
         openthread           # esp_openthread_* (only used when MN_ENABLE_OPENTHREAD=1)
         esp_netif
         esp_event

@@ -17,6 +17,7 @@
 #include "magnet_bot.h"
 #include "magnet_xfer.h"
 #include "forth_core.h"
+#include "craw_role_bundle.h"
 
 #include <string.h>
 #include <ctype.h>
@@ -63,6 +64,7 @@ static bool verb_is_privileged(const char *verb, const char *rest) {
     if (!strcmp(verb, "NAME") || !strcmp(verb, "ADMIN") ||
         !strcmp(verb, "ROTATE") || !strcmp(verb, "RAW") ||
         !strcmp(verb, "SCRIPT") || !strcmp(verb, "HOOK") ||
+        !strcmp(verb, "BUNDLE") ||
         !strcmp(verb, "FORTH") || !strcmp(verb, "STRESS") ||
         !strcmp(verb, "FACTORY")) {
         return true;
@@ -93,12 +95,38 @@ static void respond_err(const char *tag, const char *code, const char *msg) {
 static void forth_out(int c) { if (s_putc) s_putc(c); }
 static int  forth_in(void)   { return -1; } /* engine is driven by forth_eval, not pull */
 
+/* ---- BUNDLE: signed role bundles over HCP (punch-list H6) ----
+ * The verified fleet upgrade path — SCRIPT stays a dev convenience, but
+ * fleet-delivered code arrives as RoleBundle v2 envelopes (Ed25519) through
+ * the shared craw_role_bundle engine (savepoint rollback, NVS persistence,
+ * H5 lifecycle ticker). Envelope JSON exceeds MN_LINE_MAX, so it arrives
+ * chunked: BEGIN resets, ADD appends verbatim, COMMIT installs. */
+#define MN_BUNDLE_JSON_MAX 6144
+static char  *s_bundle_acc = NULL;
+static size_t s_bundle_acc_len = 0;
+
+static const char *MN_BUNDLE_CAPS[] = { "thread", "chat", "gpio" };
+#define MN_BUNDLE_CAPS_N 3
+
+const char **mn_bundle_caps(int *n) {
+    if (n) *n = MN_BUNDLE_CAPS_N;
+    return MN_BUNDLE_CAPS;
+}
+
+static int bundle_print_cb(const char *name, const char *version, void *ctx) {
+    (void)ctx;
+    char line[96];
+    snprintf(line, sizeof(line), "# bundle %s v%s", name, version);
+    mn_write_line(line);
+    return 0;
+}
+
 /* ---- HCP command handling ---- */
 static void emit_caps(const char *tag) {
     respond(tag,
         "+OK proto=2.1 fw=0.7.0-eh maxline=512 "
         "transports=usbcdc verbs=STATUS,CAPS,HELP,PING,CHAT,DM,PEERS,RECENT,WHOAMI,NAME,"
-        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH,TIME,XFER"
+        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH,TIME,XFER,BUNDLE"
 #if MN_ENABLE_BOTS
         ",BOTMODE"
 #endif
@@ -114,6 +142,9 @@ static void emit_help(const char *tag) {
     mn_write_line("#            SYSINFO MESH BENCH SELFTEST STATS [RESET] STRESS <secs> <len>");
     mn_write_line("#            HEARTBEAT <secs|0> FORTH PUBKEY ADMIN ADD|LIST ROTATE");
     mn_write_line("#            HOOK CHAT|CMD <word>|LIST|CLEAR  SCRIPT SET|SHOW|RUN|CLEAR");
+    mn_write_line("#            BUNDLE BEGIN | ADD <chunk> | COMMIT | LIST | CLEAR | STOP");
+    mn_write_line("#              (signed role bundle over HCP: chunk the envelope JSON");
+    mn_write_line("#               through ADD, COMMIT verifies Ed25519 + installs + persists)");
     mn_write_line("#            TIME | TIME SET <epoch> [<tz-min>] | TIME SYNC | TIME PUSH");
     mn_write_line("#            XFER BEGIN <peer-ipv6> <len> [<meta>] | DATA <b64> | ABORT | STATUS");
     mn_write_line("#              (Type 6 extended transfer — docs/EXTENDED-TRANSFER.md;");
@@ -294,6 +325,60 @@ static void handle_hcp_line(char *line) {
             else respond(tag, "+OK");
         }
         else respond_err(tag, "E_SYNTAX", "HOOK CHAT|CMD <word> | LIST | CLEAR");
+    }
+    else if (!strcmp(verb, "BUNDLE")) {
+        if (!strncmp(rest, "BEGIN", 5)) {
+            free(s_bundle_acc);
+            s_bundle_acc = malloc(MN_BUNDLE_JSON_MAX);
+            s_bundle_acc_len = 0;
+            if (!s_bundle_acc) { respond_err(tag, "E_INTERNAL", "no memory"); return; }
+            s_bundle_acc[0] = '\0';
+            respond(tag, "+OK send BUNDLE ADD <chunk>* then BUNDLE COMMIT");
+        }
+        else if (!strncmp(rest, "ADD ", 4)) {
+            const char *chunk = rest + 4;
+            size_t n = strlen(chunk);
+            if (!s_bundle_acc) { respond_err(tag, "E_BAD_STATE", "no BUNDLE BEGIN"); return; }
+            if (s_bundle_acc_len + n >= MN_BUNDLE_JSON_MAX) {
+                respond_err(tag, "E_SYNTAX", "bundle too long (max 6144)"); return;
+            }
+            memcpy(s_bundle_acc + s_bundle_acc_len, chunk, n);
+            s_bundle_acc_len += n;
+            s_bundle_acc[s_bundle_acc_len] = '\0';
+            respond(tag, "+OK");
+        }
+        else if (!strncmp(rest, "COMMIT", 6)) {
+            if (!s_bundle_acc || s_bundle_acc_len == 0) {
+                respond_err(tag, "E_BAD_STATE", "nothing accumulated"); return;
+            }
+            craw_role_bundle_install_result_t r = {0};
+            int rc = craw_role_bundle_install_from_json(s_bundle_acc,
+                        MN_BUNDLE_CAPS, MN_BUNDLE_CAPS_N, &r);
+            free(s_bundle_acc); s_bundle_acc = NULL; s_bundle_acc_len = 0;
+            if (rc == BUNDLE_OK) {
+                char ok[96];
+                snprintf(ok, sizeof(ok), "+OK %s v%s installed", r.info.name, r.info.version);
+                respond(tag, ok);
+            } else {
+                char err[160];
+                snprintf(err, sizeof(err), "rc=%d field=%s at=%s", rc, r.err_field, r.err_detail);
+                respond_err(tag, "E_BUNDLE", err);
+            }
+        }
+        else if (!strncmp(rest, "LIST", 4)) {
+            craw_role_bundle_iterate(bundle_print_cb, NULL);
+            respond(tag, "+OK");
+        }
+        else if (!strncmp(rest, "CLEAR", 5)) {
+            craw_role_bundle_role_stop();
+            craw_role_bundle_forget_all();
+            respond(tag, "+OK cleared");
+        }
+        else if (!strncmp(rest, "STOP", 4)) {
+            craw_role_bundle_role_stop();
+            respond(tag, "+OK role stopped");
+        }
+        else respond_err(tag, "E_SYNTAX", "BUNDLE BEGIN|ADD <chunk>|COMMIT|LIST|CLEAR|STOP");
     }
     else if (!strcmp(verb, "SCRIPT")) {
         /* SCRIPT SET <src with ; separators> | SHOW | RUN | CLEAR */

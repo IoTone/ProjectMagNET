@@ -1,6 +1,6 @@
 #ifndef CRAW_ROLE_BUNDLE_H
 #define CRAW_ROLE_BUNDLE_H
-#define CRAW_ROLE_BUNDLE_VERSION "0.4.0"
+#define CRAW_ROLE_BUNDLE_VERSION "0.5.0"
 
 // craw_role_bundle — Phase-4 Milestone-C step 2.
 //
@@ -76,13 +76,9 @@ int craw_role_bundle_install_from_json(const char *json,
 // Returns the number of bundles successfully reapplied.
 int craw_role_bundle_apply_saved(const char **node_caps, int n_caps);
 
-// ---- Hive KV words for bundles (punch-list H8) ----
-// Register hkv-put$ / hkv-get$ / hkv-run — stack-based, non-interactive
-// hive-KV access for role bundles (the per-node kv-get/kv-put REPL words
-// prompt on the console and would hang a role-tick). Call once from the
-// node main after forth_init(); safe before the hive session is up (the
-// underlying calls fail gracefully until JOINED).
-void craw_role_bundle_register_hive_words(void);
+// The hkv-put$ / hkv-get$ / hkv-run Forth words moved to the separate
+// craw_role_hive_words component (H6) so this engine has no craw_hive
+// dependency and ports to non-WiFi transports (Hanasu/Thread).
 
 // ---- Role lifecycle (punch-list H5) ----
 // Bundles may define role-init / role-tick / role-stop / role-status. The

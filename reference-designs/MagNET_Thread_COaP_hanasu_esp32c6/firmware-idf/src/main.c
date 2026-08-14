@@ -18,6 +18,7 @@
 #include "driver/gpio.h"
 
 #include "forth_core.h"
+#include "craw_role_bundle.h"
 #include "magnet.h"
 
 /* C6 has no PSRAM and must also host OpenThread + mbedTLS, so the Forth
@@ -91,6 +92,16 @@ void app_main(void) {
     mn_register_forth_vocab();
     /* E-E: user automation script runs once, after the mn-* words exist and
      * before the radios come up (so hooks are armed when traffic starts). */
+    /* H6: persisted SIGNED bundles re-apply first (verified path), then the
+     * unsigned dev script — so a script can build on bundle-defined words,
+     * and fleet behavior never depends on the unsigned channel. */
+    craw_role_bundle_init();
+    {
+        int ncaps = 0;
+        const char **caps = mn_bundle_caps(&ncaps);
+        int applied = craw_role_bundle_apply_saved(caps, ncaps);
+        if (applied > 0) raw_print("# autorun: persisted role bundle(s) re-applied\r\n");
+    }
     if (mn_script_run() == 0) raw_print("# autorun: boot script executed\r\n");
 
     /* 4. start the dual-mode host link (HCP default). This also wires the

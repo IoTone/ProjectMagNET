@@ -56,6 +56,7 @@
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
 #include "craw_role_bundle.h"
+#include "craw_role_hive_words.h"
 #include "craw_mqtt.h"
 #include "../../include/magnet_gen.h"
 

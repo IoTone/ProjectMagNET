@@ -77,6 +77,33 @@ static uint8_t  s_time_src[4];        /* who we learned it from (self if s0) */
 static int64_t  s_time_learned_us = 0;
 static TimerHandle_t s_time_timer = NULL;  /* jittered reply + periodic refresh */
 
+/* H7: anchor-role persistence (docs/MESH-TIME.md §the stratum ratchet).
+ * The CLOCK is deliberately never persisted — a node powered off for an
+ * unknown interval would announce a confidently wrong time at stratum 0.
+ * What survives reboot is the ROLE: "I was the anchor." An ex-anchor with
+ * no clock says so loudly and keeps asking to be re-seeded instead of
+ * letting the mesh ratchet toward MN_TIME_MAX_STRATUM in silence. */
+static bool s_was_anchor    = false;
+static bool s_anchor_warned = false;
+
+static void anchor_persist(bool on) {
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "t_anchor", on ? 1 : 0);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static void anchor_load(void) {
+    nvs_handle_t h;
+    uint8_t v = 0;
+    if (nvs_open("magnet", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, "t_anchor", &v);
+        nvs_close(h);
+    }
+    s_was_anchor = (v != 0);
+}
+
 static int  time_apply(int64_t epoch_secs, int tz_offset_min, uint8_t stratum,
                        const uint8_t src[4]);
 static void time_reply_schedule(void);
@@ -536,6 +563,23 @@ static void handle_rx(const mn_evt_t *evt) {
                 char info[96];
                 mn_time_info(info, sizeof(info));
                 mn_emit_event("# time adopted from %s (%s)", idhex, info);
+                /* H7: an ex-anchor now following the mesh is a degraded
+                 * state the operator should hear about exactly once. */
+                if (s_was_anchor && mine > 0 && !s_anchor_warned) {
+                    s_anchor_warned = true;
+                    emit_class(MN_EC_WARN,
+                        "!WARN time-anchor-degraded stratum=%u — ex-anchor "
+                        "running on mesh time; re-seed with TIME SET to "
+                        "restore stratum 0", mine);
+                }
+            }
+            /* H7: hearing a DIFFERENT node announce at stratum 0 means the
+             * host moved the seed — release the persisted anchor role. */
+            if (from_stratum == 0 && s_was_anchor &&
+                memcmp(env.sender_id, s_device_id, 4) != 0) {
+                s_was_anchor = false;
+                anchor_persist(false);
+                mn_emit_event("# time anchor moved to %s — persisted anchor role released", idhex);
             }
             /* A stratum-0 node keeps its own refresh cadence running even when
              * it ignores a peer — it is the anchor, not a follower. */
@@ -580,7 +624,16 @@ static void pump_task(void *arg) {
                      * own; ask rather than wait out the stratum-0 refresh.
                      * Nodes that already have one stay quiet, so a partition
                      * heal does not turn into a request storm. */
-                    if (!s_clock_set) mn_time_request();
+                    if (!s_clock_set) {
+                        mn_time_request();
+                        /* H7: an ex-anchor with no clock is the ratchet's
+                         * root cause — say so instead of degrading quietly. */
+                        if (s_was_anchor)
+                            emit_class(MN_EC_WARN,
+                                "!WARN time-anchor-await-seed — this node was "
+                                "the mesh time anchor; re-seed with TIME SET "
+                                "(tools/hcp.py synctime)");
+                    }
                     else if (s_time_stratum == 0) mn_time_push();
                 }
             } else if (!strcmp(evt.role, "detached")) {
@@ -766,6 +819,7 @@ void mn_core_init(void) {
     name_load();                         /* NVS must be up (main inits it first) */
     counter_load();                      /* §11.1.6 block-reserved nonce counter */
     chan_load();                         /* active channel (default: "magnet")  */
+    anchor_load();                       /* H7: were we the time anchor?        */
     if (mn_ident_load_or_gen(s_pub, s_device_id) != 0)
         mn_emit_event("!WARN identity-keygen-failed");
     admins_load();
@@ -1078,6 +1132,11 @@ static int time_apply(int64_t epoch_secs, int tz_offset_min, uint8_t stratum,
 int mn_time_set(int64_t epoch_secs, int tz_offset_min) {
     int rc = time_apply(epoch_secs, tz_offset_min, 0, s_device_id);
     if (rc != 0) return rc;
+    /* H7: a host seed makes this node THE anchor — remember that across
+     * reboot (the role, never the clock). */
+    if (!s_was_anchor) anchor_persist(true);
+    s_was_anchor = true;
+    s_anchor_warned = false;
     mn_time_push();          /* a host seed is news — tell the mesh at once */
     return 0;
 }

@@ -134,6 +134,10 @@ void mn_hooks_print(void);
 void mn_forth_exec(const char *line);
 
 /* Boot script: persisted Forth source, run once after vocab registration. */
+/* H6: node caps advertised to the role-bundle engine (BUNDLE verb and the
+ * boot-time re-apply share one list). Returns the array; *n gets its size. */
+const char **mn_bundle_caps(int *n);
+
 int  mn_script_save(const char *src, size_t len);   /* NVS, ≤1 KB */
 void mn_script_show(void);
 int  mn_script_run(void);                           /* run the saved script now */
