@@ -215,7 +215,37 @@ it already validated:
 *Validate*: Wave's full D4 loop and the Dial's `ROLE_GRANT` install both green through
 the shared engine; power-cycle a Wave board and confirm the bundle auto-resumes.
 
-#### H5 — Role lifecycle vocabulary
+#### H5 — Role lifecycle vocabulary ✅ DONE 2026-08-14
+
+**Completed.** The `role-init` / `role-tick` / `role-stop` / `role-status` + `tick_ms`
+convention is specified and running:
+
+- **ESPIDFORTH 0.5.0**: `forth_word_exists()` (how the host asks "did this bundle
+  define role-tick?" without evaluating), and the engine is now **internally
+  serialized** — a recursive mutex at eval/register entry points, since a REPL task,
+  an install worker, and a tick task all evaluate concurrently (this also fixes a
+  pre-existing REPL-vs-install race). Host builds compile the lock away.
+- **craw_role_bundle 0.3.0**: parses `tick_ms` (default 1000, clamp 100–60000);
+  install now runs role-stop-of-incumbent → eval → `role-init` (failure rolls the
+  *whole* bundle back via an outer savepoint) → persist → start the tick task.
+  The ticker is a sequential task (overruns delay and count, never stack — Hanasu's
+  circuit-breaker lesson), invokes by word name, one active tick role per node.
+  New API: `craw_role_bundle_role_stop()`, `_tick_overruns()`, `_tick_role()`.
+- **All three bundles retrofitted** and re-signed as v0.2.0 **Ed25519**: spawn and
+  scribe-extra moved their install-time behavior into `role-init`; spy-snapper became
+  the first real ticker (`role-tick` = capture, `tick_ms` 5000) — the Spy finally
+  loops, without looping. `sign_bundle.py --tick-ms` added.
+- Spec rewritten: lifecycle contract table, `tick_ms` field row (noting it sits
+  outside the v1 signing input, like caps_req — known limitation).
+
+Validated: host suite now **15/15** (lifecycle words exist as authored; role-init +
+2 ticks = 3 captures through a stubbed `cam-snap`; a failed replacement bundle leaves
+the previous role-tick running). Builds green: Scribe S3, Hive Camera, Wave C6.
+HW gate: grant spy-snapper v0.2.0 to the camera on the bench and watch it tick.
+
+**This unblocks H8** — the remaining roles are now genuinely an authoring exercise.
+
+Original scope:
 
 **Effort: new (spec + small host code).** The `role-init` / `role-tick` / `role-stop` /
 `role-status` + `tick_ms` convention from the review §5 — host firmware owns the timer,
@@ -338,7 +368,6 @@ Unchanged from the review, plus one addition:
 
 ## 4. First move
 
-~~H1~~ ~~H2~~ ~~H3~~ ~~H4~~ all **done 2026-08-14**. Next up: **H5**, the role
-lifecycle vocabulary (`role-init/tick/stop/status` + `tick_ms`) — the item that
-unblocks the 8 unwritten roles. H10 (craw_* drift convergence) can proceed in
-parallel any time.
+~~H1~~ ~~H2~~ ~~H3~~ ~~H4~~ ~~H5~~ all **done 2026-08-14** — P0 and P1 complete.
+Next: **H8** (author the roles — now purely an authoring exercise, Eye first) or
+**H6/H7** (transports & time). H10 (craw_* drift) can proceed in parallel any time.

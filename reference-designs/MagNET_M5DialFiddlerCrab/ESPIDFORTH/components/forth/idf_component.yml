@@ -1,4 +1,4 @@
-version: "0.4.0"
+version: "0.5.0"
 description: "ESPIDFORTH - Forth interpreter for ESP-IDF with FFI to ESP-IDF APIs"
 url: "https://github.com/IoTone/ESPIDFORTH"
 targets:

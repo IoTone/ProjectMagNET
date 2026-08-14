@@ -16,6 +16,9 @@
 
 #include "esp_log.h"
 #include "esp_rom_crc.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "cJSON.h"
@@ -183,6 +186,84 @@ static int nvs_load_version(const char *name, char *out, size_t out_len) {
     return err == ESP_OK ? 0 : -1;
 }
 
+/* ---------- Role lifecycle (punch-list H5) ----------
+ *
+ * Bundles cannot loop — the convention is four optional words and a
+ * host-owned timer:
+ *   role-init    once, at install; failure rolls the whole bundle back
+ *   role-tick    called every tick_ms from a dedicated task; must return
+ *   role-stop    called before this role is replaced (or on demand)
+ *   role-status  on demand (REPL / ruler query) — pure convention, no code
+ *
+ * One active tick role per node (v1). The tick task is sequential, so
+ * overruns cannot stack — a tick that runs past its period just delays the
+ * next one and increments the overrun counter (Hanasu's circuit-breaker
+ * lesson: bound the damage, count the evidence). Words are invoked by NAME
+ * through forth_eval(), so redefinition and rollback are always respected;
+ * the engine's internal lock (ESPIDFORTH >= 0.5.0) serializes us against
+ * the REPL and the install worker. */
+
+#define TICK_MS_DEFAULT   1000
+#define TICK_MS_MIN        100
+#define TICK_MS_MAX      60000
+#define TICK_MIN_IDLE_MS    50   /* always yield this long, even on overrun */
+
+static volatile bool s_tick_stop = false;
+static TaskHandle_t  s_tick_task = NULL;
+static int           s_tick_ms = 0;
+static int           s_tick_overruns = 0;
+static char          s_tick_role[33] = "";
+
+static void role_tick_task(void *arg) {
+    (void)arg;
+    while (!s_tick_stop) {
+        int64_t t0 = esp_timer_get_time();
+        forth_eval("role-tick");
+        int elapsed_ms = (int)((esp_timer_get_time() - t0) / 1000);
+        int delay = s_tick_ms - elapsed_ms;
+        if (delay < TICK_MIN_IDLE_MS) {
+            s_tick_overruns++;
+            delay = TICK_MIN_IDLE_MS;
+        }
+        vTaskDelay(pdMS_TO_TICKS(delay));
+    }
+    s_tick_task = NULL;
+    vTaskDelete(NULL);
+}
+
+void craw_role_bundle_role_stop(void) {
+    if (s_tick_task) {
+        s_tick_stop = true;
+        /* A conforming role-tick returns promptly; give a misbehaving one
+         * two seconds before we give up waiting (the task will still exit
+         * whenever its eval returns). */
+        for (int i = 0; i < 100 && s_tick_task; i++) vTaskDelay(pdMS_TO_TICKS(20));
+        s_tick_stop = false;
+        if (s_tick_task) ESP_LOGW(TAG, "role-tick task did not stop within 2s");
+    }
+    if (forth_word_exists("role-stop")) forth_eval("role-stop");
+    s_tick_role[0] = '\0';
+}
+
+int craw_role_bundle_tick_overruns(void) { return s_tick_overruns; }
+const char *craw_role_bundle_tick_role(void) {
+    return s_tick_role[0] ? s_tick_role : NULL;
+}
+
+static void role_tick_start(const char *name, int tick_ms) {
+    s_tick_ms = tick_ms;
+    s_tick_stop = false;
+    s_tick_overruns = 0;
+    snprintf(s_tick_role, sizeof(s_tick_role), "%s", name);
+    if (xTaskCreate(role_tick_task, "role_tick", 4096, NULL, 3, &s_tick_task) != pdPASS) {
+        s_tick_task = NULL;
+        s_tick_role[0] = '\0';
+        ESP_LOGW(TAG, "role_tick task create failed — '%s' installed without ticker", name);
+    } else {
+        ESP_LOGI(TAG, "role '%s' ticking every %d ms", name, tick_ms);
+    }
+}
+
 /* ---------- Public: install ---------- */
 
 static void set_status(craw_role_bundle_install_result_t *r,
@@ -342,6 +423,25 @@ int craw_role_bundle_install_from_json(const char *json,
         }
     }
 
+    /* tick_ms: host-owned cadence for role-tick. Optional; like caps_req it
+     * sits OUTSIDE the v1 canonical signing input (documented limitation). */
+    int tick_ms = TICK_MS_DEFAULT;
+    const cJSON *j_tick = cJSON_GetObjectItemCaseSensitive(env, "tick_ms");
+    if (cJSON_IsNumber(j_tick)) {
+        tick_ms = (int)j_tick->valuedouble;
+        if (tick_ms < TICK_MS_MIN) tick_ms = TICK_MS_MIN;
+        if (tick_ms > TICK_MS_MAX) tick_ms = TICK_MS_MAX;
+    }
+
+    /* Retire the incumbent role BEFORE the new source lands, so its own
+     * role-stop (about to be shadowed or replaced) does the teardown. */
+    craw_role_bundle_role_stop();
+
+    /* Outer savepoint spans eval + role-init: if role-init fails, the whole
+     * bundle disappears, not just the init call. */
+    forth_savepoint_t sp0;
+    forth_save(&sp0);
+
     /* Install through the engine's verified-apply primitive: savepoint →
      * line-at-a-time eval → rollback on first error, failing line reported.
      * (ESPIDFORTH ≥ 0.4.0; shared with the WaveC6LED OTA path — punch-list
@@ -366,6 +466,23 @@ int craw_role_bundle_install_from_json(const char *json,
         cJSON_Delete(env); return BUNDLE_ERR_EVAL;
     }
 
+    /* role-init: once, at install (H5 lifecycle). A failing init rolls the
+     * WHOLE bundle back — a role that cannot set up must not half-exist. */
+    if (forth_word_exists("role-init")) {
+        int errs_before_init = forth_error_count();
+        forth_eval("role-init");
+        if (forth_error_count() != errs_before_init) {
+            forth_restore(&sp0);
+            ESP_LOGW(TAG, "bundle '%s' role-init FAILED — whole bundle rolled back", name);
+            free(src);
+            set_status(result, BUNDLE_ERR_EVAL, "role-init");
+            if (result) {
+                snprintf(result->err_detail, sizeof(result->err_detail), "role-init failed");
+            }
+            cJSON_Delete(env); return BUNDLE_ERR_EVAL;
+        }
+    }
+
     /* Persist envelope. Even if NVS fails, the install above is already
      * live in the Forth vocabulary — so report partial success. */
     int nrc = nvs_save_pair(name, version, json);
@@ -375,6 +492,10 @@ int craw_role_bundle_install_from_json(const char *json,
         set_status(result, BUNDLE_ERR_NVS, "nvs");
         cJSON_Delete(env); return BUNDLE_ERR_NVS;
     }
+
+    /* Start the ticker last — only for a bundle that fully installed,
+     * persisted, and (if present) initialized. */
+    if (forth_word_exists("role-tick")) role_tick_start(name, tick_ms);
 
     ESP_LOGI(TAG, "bundle '%s' v%s installed (src %u bytes)",
              name, version, (unsigned)src_len);

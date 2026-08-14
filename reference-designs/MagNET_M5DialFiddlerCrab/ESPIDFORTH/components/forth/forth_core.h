@@ -94,6 +94,18 @@ int  forth_error_count(void);
 int forth_eval_rollback(const char *text, size_t len,
                         char *fail_line, size_t fail_cap);
 
+/*
+ * Does a word (primitive or colon-defined) currently exist in the dictionary?
+ * Case-insensitive, most-recent-definition semantics — the same lookup eval
+ * uses. This is how a host asks "did this bundle define role-tick?" without
+ * evaluating anything.
+ *
+ * Since 0.5.0 the engine is internally serialized (recursive mutex around
+ * eval/register on ESP builds): a console REPL, a bundle-install worker, and
+ * a role-tick timer task may all call in concurrently.
+ */
+int forth_word_exists(const char *name);
+
 void forth_deinit(void);
 
 #ifdef __cplusplus

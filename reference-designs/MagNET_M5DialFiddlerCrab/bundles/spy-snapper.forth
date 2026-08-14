@@ -1,10 +1,9 @@
-\ Role: spy-snapper — single-shot "take one picture" word that an external
-\ scheduler can invoke. Real periodic-capture loops should use cooperative
-\ Forth tasks once those land; for v1 we keep it as a one-shot so the
-\ install doesn't tie up the Forth REPL.
+\ Role: spy-snapper — periodic camera capture through the H5 lifecycle.
+\ The host owns the timer: role-tick fires every tick_ms (envelope field);
+\ this bundle never loops or sleeps, which is what makes it hot-swappable.
 \ caps_req: ["camera"]   (M5_Hive_Camera advertises this)
 
-: snap   cam-snap drop ;
-
-\ Confirm install with one capture (drop the size from the stack).
-snap
+: snap        cam-snap drop ;
+: role-init   snap ;          \ one confirmation capture at install
+: role-tick   snap ;          \ periodic capture, host-owned cadence
+: role-status ." spy-snapper ticking" cr ;

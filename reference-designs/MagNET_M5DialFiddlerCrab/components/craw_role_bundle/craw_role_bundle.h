@@ -1,6 +1,6 @@
 #ifndef CRAW_ROLE_BUNDLE_H
 #define CRAW_ROLE_BUNDLE_H
-#define CRAW_ROLE_BUNDLE_VERSION "0.2.0"
+#define CRAW_ROLE_BUNDLE_VERSION "0.3.0"
 
 // craw_role_bundle — Phase-4 Milestone-C step 2.
 //
@@ -75,6 +75,25 @@ int craw_role_bundle_install_from_json(const char *json,
 // so a node auto-resumes its last role without re-fetching from the hive.
 // Returns the number of bundles successfully reapplied.
 int craw_role_bundle_apply_saved(const char **node_caps, int n_caps);
+
+// ---- Role lifecycle (punch-list H5) ----
+// Bundles may define role-init / role-tick / role-stop / role-status. The
+// HOST owns the timer: after a successful install, if role-tick exists it is
+// invoked every tick_ms (envelope field; default 1000, clamped 100..60000)
+// from a dedicated task. role-init runs once at install and a failure rolls
+// the whole bundle back. One active tick role per node.
+
+// Stop the active role: halts the tick task (bounded wait) and calls the
+// bundle's role-stop word if defined. Called automatically before a new
+// bundle installs; callable directly for shutdown paths.
+void craw_role_bundle_role_stop(void);
+
+// Ticks that ran past their period since the current role started (the
+// task is sequential, so overruns delay — they never stack).
+int craw_role_bundle_tick_overruns(void);
+
+// Name of the currently ticking role, or NULL if none.
+const char *craw_role_bundle_tick_role(void);
 
 // Erase a single role's persisted bundle (does NOT undo a running bundle's
 // effects on the live Forth vocabulary — those persist until reboot).

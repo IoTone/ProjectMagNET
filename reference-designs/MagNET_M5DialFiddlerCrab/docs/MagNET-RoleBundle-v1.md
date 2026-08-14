@@ -45,6 +45,7 @@ JSON object. All fields required unless noted.
 | `sig_alg` | string | Signature algorithm: `hmac-sha256` (v1) or `ed25519` (v2, implemented 2026-08-14). |
 | `sig` | hex string | Signature over the canonical signing input (below). Length depends on alg. |
 | `src_b64` | base64 string | Forth source code, base64-encoded. Decoded length ≤ 4096 bytes for v1 (single-frame KV value cap). |
+| `tick_ms` | integer, optional | H5 lifecycle: cadence for the host-driven `role-tick` timer. Default 1000, clamped to 100..60000. Like `caps_req`, sits **outside** the v1 canonical signing input — a known limitation of the fixed six-field signature. |
 
 ### Canonical signing input
 
@@ -171,24 +172,36 @@ The output `spy.json` is ready to either:
 - POST to a Scribe via `KV_PUT key=bundle:spy`, or
 - Embed in a Ruler firmware as a bootstrap fallback (Step 3+).
 
-## Forth role conventions
+## Forth role conventions — the H5 lifecycle (2026-08-14)
 
-A role bundle's Forth source is just regular ESPIDFORTH. Conventional structure:
+Bundles cannot loop, and they don't need to: a bundle defines up to four
+conventional words and the **host firmware owns the timer**.
+
+| Word | Called when | Contract |
+|---|---|---|
+| `role-init` | once, at install (after the source evals) | Set up state. **Failure rolls the whole bundle back** — a role that cannot set up must not half-exist. |
+| `role-tick` | every `tick_ms` from a host task | **Must return promptly.** One unit of work. The task is sequential, so an overrunning tick delays the next one (and increments a counter) — it never stacks. |
+| `role-stop` | before this role is replaced, or on shutdown | Release anything `role-init` claimed. Called while the *old* definitions are still live. |
+| `role-status` | on demand (REPL, ruler query) | Print or push one status line. |
+
+All four are optional — a one-shot bundle simply omits `role-tick`. Words are invoked
+by **name** through `forth_eval()`, so redefinition and rollback are always respected.
+One active tick role per node (v1). Requires ESPIDFORTH ≥ 0.5.0 (`forth_word_exists`
++ internally-serialized engine) and craw_role_bundle ≥ 0.3.0.
 
 ```forth
-\ Role: spy v1.0.0 — periodic camera snapshot loop.
-\ Calls FFI words registered by the host firmware.
-
-: spy-snap-once   cam-snap drop ;
-: spy-loop        begin spy-snap-once 5000 ms again ;
-
-\ The bundle is evaluated once at install time. To run a loop, either:
-\   - schedule it as a forth task (when supported)
-\   - or define the words and let the host firmware invoke them on a timer.
-spy-snap-once   \ one-shot capture as install-time confirmation
+\ Role: spy-snapper — periodic capture through the lifecycle.
+: snap        cam-snap drop ;
+: role-init   snap ;          \ one confirmation capture at install
+: role-tick   snap ;          \ periodic; cadence = envelope tick_ms
+: role-status ." spy-snapper ticking" cr ;
 ```
 
-Bundles SHOULD avoid blocking forever at top level — the install task is shared and a runaway bundle blocks subsequent installs. Either define words and return, or use cooperative yields.
+Note what this contains no trace of: no loop, no sleep, no blocking. That is the
+property that makes a bundle safe to hot-swap.
+
+Top-level execution at install time still works but is discouraged — put install-time
+behavior in `role-init`, where a failure is rolled back and reported.
 
 ## Versioning the format itself
 

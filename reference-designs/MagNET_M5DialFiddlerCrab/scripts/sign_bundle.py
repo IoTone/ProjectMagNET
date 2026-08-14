@@ -127,6 +127,8 @@ def main() -> int:
     ap.add_argument("--caps-req",   default="",    help="Comma-separated caps required, e.g. camera,jpeg")
     ap.add_argument("--deps",       default="",    help="Comma-separated dependency names (unused in v1)")
     ap.add_argument("--min-proto",  type=int, default=1)
+    ap.add_argument("--tick-ms",    type=int, default=None,
+                    help="role-tick cadence in ms (H5 lifecycle); omitted = host default 1000")
     ap.add_argument("--alg",        choices=["hmac-sha256", "ed25519"],
                     default="hmac-sha256", help="Signature algorithm (v1 HMAC or v2 Ed25519)")
     ap.add_argument("--key-file",   default=str(DEFAULT_ED25519_KEY_FILE),
@@ -191,6 +193,8 @@ def main() -> int:
         "sig":       sig,
         "src_b64":   src_b64,
     }
+    if args.tick_ms is not None:
+        envelope["tick_ms"] = args.tick_ms
     out_text = json.dumps(envelope, indent=2)
 
     if args.out == "-":

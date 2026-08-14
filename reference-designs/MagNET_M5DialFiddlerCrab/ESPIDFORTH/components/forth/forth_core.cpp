@@ -42,6 +42,24 @@
 #include "esp_heap_caps.h"
 #include "esp_attr.h"   // EXT_RAM_BSS_ATTR (empty unless BSS-in-PSRAM is on)
 
+/* ----- Engine serialization (0.5.0) -----
+ * The engine has never been reentrant, and its callers stopped being
+ * single-threaded long ago: a console REPL task, a bundle-install worker,
+ * and (with the role lifecycle) a periodic tick task all evaluate. One
+ * recursive mutex at the public entry points serializes them — recursive so
+ * an FFI word that re-enters forth_eval() cannot deadlock its own task.
+ * Host (non-ESP) builds are single-threaded tests; the lock compiles away. */
+#ifdef ESP_PLATFORM
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+static SemaphoreHandle_t s_engine_lock = NULL;
+static void engine_lock(void)   { if (s_engine_lock) xSemaphoreTakeRecursive(s_engine_lock, portMAX_DELAY); }
+static void engine_unlock(void) { if (s_engine_lock) xSemaphoreGiveRecursive(s_engine_lock); }
+#else
+static void engine_lock(void)   {}
+static void engine_unlock(void) {}
+#endif
+
 // ----- Configuration -----
 #define MAX_STACK     256
 #define MAX_RSTACK    256
@@ -1145,6 +1163,9 @@ static void w_test(void) {
 extern "C" {
 
 int forth_init(int heap_size_bytes) {
+#ifdef ESP_PLATFORM
+    if (!s_engine_lock) s_engine_lock = xSemaphoreCreateRecursiveMutex();
+#endif
     heap_mem = (uint8_t *)malloc(heap_size_bytes);
     if (!heap_mem) return -1;
     heap_total = heap_size_bytes;
@@ -1276,7 +1297,9 @@ void forth_repl(int (*get_char)(void), void (*put_char)(int)) {
             put_char('\n');
             line[pos] = '\0';
             if (pos > 0) {
+                engine_lock();
                 interpret_line(line);
+                engine_unlock();
                 put_char('\r');
                 put_char('\n');
             }
@@ -1306,8 +1329,18 @@ void forth_set_io(int (*get_char)(void), void (*put_char)(int)) {
 
 int forth_eval(const char *text) {
     if (!heap_mem) return -1;
+    engine_lock();
     interpret_line(text);
+    engine_unlock();
     return 0;
+}
+
+int forth_word_exists(const char *name) {
+    if (!name || !heap_mem) return 0;
+    engine_lock();
+    int idx = find_word(name);
+    engine_unlock();
+    return idx >= 0;
 }
 
 void forth_save(forth_savepoint_t *sp) {
@@ -1343,6 +1376,7 @@ int forth_eval_rollback(const char *text, size_t len,
     memcpy(copy, text, len);
     copy[len] = '\0';
 
+    engine_lock();
     forth_savepoint_t sp;
     forth_save(&sp);
     int errs_before = error_count;
@@ -1362,6 +1396,7 @@ int forth_eval_rollback(const char *text, size_t len,
     }
     free(copy);
     if (rc != 0) forth_restore(&sp);
+    engine_unlock();
     return rc;
 }
 
@@ -1375,7 +1410,9 @@ int forth_heap_free(void) {
 
 int forth_register_word(const char *name, forth_word_fn fn) {
     if (dict_count >= MAX_WORDS) return -1;
+    engine_lock();
     add_primitive(name, fn);
+    engine_unlock();
     return 0;
 }
 
