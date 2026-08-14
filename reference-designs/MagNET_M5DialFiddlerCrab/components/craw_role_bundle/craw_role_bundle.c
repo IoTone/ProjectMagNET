@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "esp_rom_crc.h"
@@ -22,6 +23,7 @@
 #include "mbedtls/base64.h"
 
 #include "forth_core.h"
+#include "magnet_crypto.h"
 
 static const char *TAG = "craw_role_bundle";
 
@@ -88,9 +90,13 @@ static int semver_cmp(const char *a, const char *b) {
 
 /* ---------- Trust store lookup ---------- */
 
-static const craw_role_bundle_trust_entry_t *lookup_author(const char *author) {
+/* Match on (author, alg): an author may hold one entry per algorithm, which
+ * is what lets a node accept v1-HMAC and v2-Ed25519 bundles side by side
+ * during migration. */
+static const craw_role_bundle_trust_entry_t *lookup_author(const char *author, int alg) {
     for (size_t i = 0; i < CRAW_ROLE_BUNDLE_TRUST_COUNT; i++) {
-        if (strcmp(CRAW_ROLE_BUNDLE_TRUST_STORE[i].author, author) == 0)
+        if (CRAW_ROLE_BUNDLE_TRUST_STORE[i].alg == alg &&
+            strcmp(CRAW_ROLE_BUNDLE_TRUST_STORE[i].author, author) == 0)
             return &CRAW_ROLE_BUNDLE_TRUST_STORE[i];
     }
     return NULL;
@@ -194,7 +200,7 @@ static void set_status(craw_role_bundle_install_result_t *r,
 int craw_role_bundle_install_from_json(const char *json,
                                        const char **node_caps, int n_caps,
                                        craw_role_bundle_install_result_t *result) {
-    if (result) { result->status = BUNDLE_OK; result->err_field[0] = '\0'; }
+    if (result) { result->status = BUNDLE_OK; result->err_field[0] = '\0'; result->err_detail[0] = '\0'; }
     if (!json) { set_status(result, BUNDLE_ERR_PARSE, "json"); return BUNDLE_ERR_PARSE; }
 
     cJSON *env = cJSON_Parse(json);
@@ -234,23 +240,20 @@ int craw_role_bundle_install_from_json(const char *json,
         cJSON_Delete(env); return BUNDLE_ERR_PROTO;
     }
 
-    /* Trust lookup */
-    const craw_role_bundle_trust_entry_t *trust = lookup_author(author);
-    if (!trust) {
-        ESP_LOGW(TAG, "unknown author '%s'", author);
-        set_status(result, BUNDLE_ERR_AUTHOR, "author");
+    /* Algorithm dispatch, then trust lookup on (author, alg). */
+    int want_alg;
+    if      (strcmp(sig_alg, "hmac-sha256") == 0) want_alg = TRUST_ALG_HMAC_SHA256;
+    else if (strcmp(sig_alg, "ed25519")     == 0) want_alg = TRUST_ALG_ED25519;
+    else {
+        ESP_LOGW(TAG, "unsupported sig_alg '%s'", sig_alg);
+        set_status(result, BUNDLE_ERR_AUTHOR, "sig_alg");
         cJSON_Delete(env); return BUNDLE_ERR_AUTHOR;
     }
 
-    /* Algorithm match */
-    if (strcmp(sig_alg, "hmac-sha256") == 0) {
-        if (trust->alg != TRUST_ALG_HMAC_SHA256) {
-            set_status(result, BUNDLE_ERR_AUTHOR, "sig_alg");
-            cJSON_Delete(env); return BUNDLE_ERR_AUTHOR;
-        }
-    } else {
-        ESP_LOGW(TAG, "unsupported sig_alg '%s'", sig_alg);
-        set_status(result, BUNDLE_ERR_AUTHOR, "sig_alg");
+    const craw_role_bundle_trust_entry_t *trust = lookup_author(author, want_alg);
+    if (!trust) {
+        ESP_LOGW(TAG, "no trust entry for author '%s' with alg '%s'", author, sig_alg);
+        set_status(result, BUNDLE_ERR_AUTHOR, "author");
         cJSON_Delete(env); return BUNDLE_ERR_AUTHOR;
     }
 
@@ -264,9 +267,21 @@ int craw_role_bundle_install_from_json(const char *json,
         cJSON_Delete(env); return BUNDLE_ERR_INTERNAL;
     }
 
-    /* Signature check */
-    if (verify_hmac_sha256(trust->key, trust->key_len, to_sign, sig_hex) != 0) {
-        ESP_LOGW(TAG, "bundle '%s' signature mismatch", name);
+    /* Signature check. Both algs sign the same canonical pipe-string; only
+     * the primitive differs. HMAC proves hive membership; Ed25519 proves the
+     * author (private key held offline) — the R10 upgrade. */
+    bool sig_ok;
+    if (want_alg == TRUST_ALG_ED25519) {
+        uint8_t sig[64];
+        sig_ok = strlen(sig_hex) == 128 &&
+                 hex2bin(sig_hex, sig, sizeof(sig)) == 0 &&
+                 magnet_ed25519_verify(trust->key, sig,
+                                       (const uint8_t *)to_sign, strlen(to_sign));
+    } else {
+        sig_ok = verify_hmac_sha256(trust->key, trust->key_len, to_sign, sig_hex) == 0;
+    }
+    if (!sig_ok) {
+        ESP_LOGW(TAG, "bundle '%s' signature mismatch (%s)", name, sig_alg);
         set_status(result, BUNDLE_ERR_SIG, "sig");
         cJSON_Delete(env); return BUNDLE_ERR_SIG;
     }
@@ -327,12 +342,27 @@ int craw_role_bundle_install_from_json(const char *json,
         }
     }
 
-    /* Install: forth_eval against the decoded source. */
-    int frc = forth_eval((const char *)src);
+    /* Install through the engine's verified-apply primitive: savepoint →
+     * line-at-a-time eval → rollback on first error, failing line reported.
+     * (ESPIDFORTH ≥ 0.4.0; shared with the WaveC6LED OTA path — punch-list
+     * H4. The engine works on its own copy, so src stays pristine.) */
+    char fail_line[80] = "";
+    int frc = forth_eval_rollback((const char *)src, src_len,
+                                  fail_line, sizeof(fail_line));
+    if (frc < 0) {
+        ESP_LOGW(TAG, "bundle '%s' eval alloc failure", name);
+        free(src);
+        set_status(result, BUNDLE_ERR_INTERNAL, "eval_alloc");
+        cJSON_Delete(env); return BUNDLE_ERR_INTERNAL;
+    }
     if (frc != 0) {
-        ESP_LOGW(TAG, "forth_eval failed rc=%d for bundle '%s'", frc, name);
+        ESP_LOGW(TAG, "bundle '%s' install FAILED, rolled back — failed at: %s",
+                 name, fail_line);
         free(src);
         set_status(result, BUNDLE_ERR_EVAL, "src");
+        if (result) {
+            snprintf(result->err_detail, sizeof(result->err_detail), "%s", fail_line);
+        }
         cJSON_Delete(env); return BUNDLE_ERR_EVAL;
     }
 
@@ -457,6 +487,37 @@ int craw_role_bundle_iterate(craw_role_bundle_iter_cb_t cb, void *ctx) {
     }
     if (it) nvs_release_iterator(it);
     return n;
+}
+
+int craw_role_bundle_format_applied_json(const craw_role_bundle_install_result_t *r,
+                                         const char *role_fallback,
+                                         char *buf, size_t buf_len) {
+    if (!r || !buf || buf_len == 0) return -1;
+    long long ts = (long long)time(NULL);
+    int n;
+    if (r->status == BUNDLE_OK) {
+        n = snprintf(buf, buf_len,
+                     "{\"name\":\"%s\",\"version\":\"%s\",\"ok\":true,\"ts\":%lld}",
+                     r->info.name, r->info.version, ts);
+    } else {
+        /* Sanitize the failing line the same way the Wave OTA reporter does:
+         * strip quotes/backslashes/control chars so a Forth diagnostic can
+         * never break the JSON — the failure report is the one message we
+         * most want to survive. */
+        char at[sizeof(r->err_detail)];
+        size_t j = 0;
+        for (size_t i = 0; r->err_detail[i] && j < sizeof(at) - 1; i++) {
+            char c = r->err_detail[i];
+            if (c == '"' || c == '\\' || (unsigned char)c < 0x20) c = ' ';
+            at[j++] = c;
+        }
+        at[j] = '\0';
+        n = snprintf(buf, buf_len,
+                     "{\"name\":\"%s\",\"ok\":false,\"err\":%d,\"field\":\"%s\",\"at\":\"%s\",\"ts\":%lld}",
+                     role_fallback ? role_fallback : "?",
+                     (int)r->status, r->err_field, at, ts);
+    }
+    return (n < 0 || (size_t)n >= buf_len) ? -1 : 0;
 }
 
 void craw_role_bundle_init(void) {

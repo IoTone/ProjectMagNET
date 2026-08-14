@@ -2,15 +2,28 @@
 """
 sign_bundle.py — author + sign a MagNET role bundle.
 
-Reads a Forth source file, computes CRC-32, base64-encodes, signs with
-HMAC-SHA256 (must match the firmware's keys.h dev key for v1), and writes
-a JSON envelope to stdout (or --out).
+Reads a Forth source file, computes CRC-32, base64-encodes, signs, and writes
+a JSON envelope to stdout (or --out). Two signature algorithms:
+
+  hmac-sha256 (v1, default) — shared hive secret; proves hive membership only.
+  ed25519 (v2)              — per-author private key; proves the author.
+                              The dev seed lives in dev_ed25519.key next to
+                              this script; its public half is baked into the
+                              firmware's keys.h.
 
 Usage:
     python sign_bundle.py spy.forth \\
         --name spy --version 1.0.0 --author iotone-dev \\
         --caps-req camera,jpeg \\
         > spy.json
+
+    # v2 — Ed25519 (dev key picked up automatically):
+    python sign_bundle.py spy.forth --alg ed25519 \\
+        --name spy --version 1.0.0 --author iotone-dev > spy.json
+
+Ed25519 uses the 'cryptography' package when importable (the ESP-IDF python
+env has it) and otherwise falls back to a bundled pure-Python RFC 8032
+implementation — slower (tens of ms) but dependency-free.
 
     # send to a Scribe via the laptop fake-ruler's KV table (or via a real Scribe):
     # (out of band — the bundle JSON is just KV data once signed)
@@ -40,6 +53,70 @@ DEFAULT_SECRET_HEX = (
     "DDEEFF112233445566778899AABBCCDD"
 )
 
+# Dev Ed25519 seed (public half baked into keys.h as
+# CRAW_ROLE_BUNDLE_DEV_ED25519_PUB). Production authors pass --key-file.
+DEFAULT_ED25519_KEY_FILE = Path(__file__).parent / "dev_ed25519.key"
+
+
+def _ed25519_sign_pure(seed: bytes, msg: bytes) -> bytes:
+    """RFC 8032 Ed25519, reference-style. Fallback when 'cryptography' is
+    unavailable. Slow (tens of ms) but exact."""
+    q = 2**255 - 19
+    l = 2**252 + 27742317777372353535851937790883648493
+
+    def H(m): return hashlib.sha512(m).digest()
+    def inv(x): return pow(x, q - 2, q)
+    d = -121665 * inv(121666) % q
+    I = pow(2, (q - 1) // 4, q)
+
+    def xrecover(y):
+        xx = (y * y - 1) * inv(d * y * y + 1)
+        x = pow(xx, (q + 3) // 8, q)
+        if (x * x - xx) % q != 0:
+            x = (x * I) % q
+        if x % 2 != 0:
+            x = q - x
+        return x
+
+    By = 4 * inv(5) % q
+    B = (xrecover(By), By)
+
+    def edwards(P, Q):
+        x1, y1 = P
+        x2, y2 = Q
+        x3 = (x1 * y2 + x2 * y1) * inv(1 + d * x1 * x2 * y1 * y2)
+        y3 = (y1 * y2 + x1 * x2) * inv(1 - d * x1 * x2 * y1 * y2)
+        return (x3 % q, y3 % q)
+
+    def scalarmult(P, e):
+        Q = (0, 1)
+        while e:
+            if e & 1:
+                Q = edwards(Q, P)
+            P = edwards(P, P)
+            e >>= 1
+        return Q
+
+    def encodepoint(P):
+        x, y = P
+        return int.to_bytes(y | ((x & 1) << 255), 32, "little")
+
+    h = H(seed)
+    a = (2**254 | int.from_bytes(h[:32], "little") & ~(2**255 | 2**254 | 7))
+    A = encodepoint(scalarmult(B, a))
+    r = int.from_bytes(H(h[32:] + msg), "little") % l
+    R = encodepoint(scalarmult(B, r))
+    S = (r + int.from_bytes(H(R + A + msg), "little") * a) % l
+    return R + int.to_bytes(S, 32, "little")
+
+
+def ed25519_sign(seed: bytes, msg: bytes) -> bytes:
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        return Ed25519PrivateKey.from_private_bytes(seed).sign(msg)
+    except ImportError:
+        return _ed25519_sign_pure(seed, msg)
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Sign a MagNET role bundle.")
@@ -50,6 +127,10 @@ def main() -> int:
     ap.add_argument("--caps-req",   default="",    help="Comma-separated caps required, e.g. camera,jpeg")
     ap.add_argument("--deps",       default="",    help="Comma-separated dependency names (unused in v1)")
     ap.add_argument("--min-proto",  type=int, default=1)
+    ap.add_argument("--alg",        choices=["hmac-sha256", "ed25519"],
+                    default="hmac-sha256", help="Signature algorithm (v1 HMAC or v2 Ed25519)")
+    ap.add_argument("--key-file",   default=str(DEFAULT_ED25519_KEY_FILE),
+                    help="ed25519 only: file holding the 32-byte private seed as hex")
     ap.add_argument("--secret-hex", default=DEFAULT_SECRET_HEX)
     ap.add_argument("--out",        default="-",   help="Output JSON path (default stdout)")
     ap.add_argument("--verbose",    action="store_true",
@@ -79,7 +160,15 @@ def main() -> int:
     # Canonical signing input — order MUST match craw_role_bundle_signing_input()
     signing_input = f"{args.name}|{args.version}|{args.min_proto}|{args.author}|{crc_hex}|{src_b64}"
 
-    sig = hmac.new(secret, signing_input.encode("utf-8"), hashlib.sha256).hexdigest()
+    if args.alg == "ed25519":
+        key_text = Path(args.key_file).read_text().strip()
+        seed = bytes.fromhex(key_text)
+        if len(seed) != 32:
+            print(f"--key-file must hold a 32-byte hex seed (got {len(seed)})", file=sys.stderr)
+            return 2
+        sig = ed25519_sign(seed, signing_input.encode("utf-8")).hex()
+    else:
+        sig = hmac.new(secret, signing_input.encode("utf-8"), hashlib.sha256).hexdigest()
 
     if args.verbose:
         print(f"[sign] crc32={crc_hex}", file=sys.stderr)
@@ -98,7 +187,7 @@ def main() -> int:
         "caps_req":  caps,
         "deps":      deps,
         "crc32":     crc_hex,
-        "sig_alg":   "hmac-sha256",
+        "sig_alg":   args.alg,
         "sig":       sig,
         "src_b64":   src_b64,
     }

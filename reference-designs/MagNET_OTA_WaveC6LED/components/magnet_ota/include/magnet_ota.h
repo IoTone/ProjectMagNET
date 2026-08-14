@@ -71,6 +71,14 @@ const uint8_t *ota_bundle(size_t *len);
 /* D4: evaluate a VERIFIED bundle, roll back on failure, report the outcome. */
 bool         ota_apply(struct magnet_transport *tx, const ota_release_t *rel);
 const char  *ota_apply_status(void);
+
+/* Re-evaluate the bundle persisted by the last successful apply (H4: the
+ * dictionary is RAM — without this a power cycle silently reverts behaviour
+ * while the device still reports itself up to date). Call once at boot,
+ * after forth_init() + word registration, before the check-in loop.
+ * Returns 1 re-applied, 0 nothing persisted, -1 persisted bundle failed
+ * (rolled back; next check-in converges on a fresh release). */
+int          ota_apply_saved(void);
 /* Fetch, verify, apply and report whatever the last check-in flagged. */
 bool         ota_apply_pending(void);
 

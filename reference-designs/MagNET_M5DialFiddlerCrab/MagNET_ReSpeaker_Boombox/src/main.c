@@ -242,6 +242,15 @@ static void bundle_install_worker(void *arg) {
                     irc, result.err_field);
             craw_audio_play_error();
         }
+        /* H4: report the outcome into the hive KV so the ruler can tell a
+         * node RUNNING a role from one that failed to install it. */
+        {
+            char akey[CRAW_HIVE_KV_KEY_MAX + 1], aval[192];
+            snprintf(akey, sizeof(akey), "applied:%.24s", node_id);
+            if (craw_role_bundle_format_applied_json(&result, job->role,
+                                                     aval, sizeof(aval)) == 0)
+                craw_hive_node_kv_put(akey, aval);
+        }
     } else {
         uprintf("[bundle] kv-get '%s' failed rc=%d\r\n", job->bundle_key, rc);
     }

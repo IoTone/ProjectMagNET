@@ -26,7 +26,7 @@
 #include "magnet_cfg.h"
 #include "cJSON.h"
 #include "mbedtls/sha256.h"
-#include "tweetnacl.h"
+#include "magnet_crypto.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 
@@ -139,16 +139,10 @@ bool ota_fetch_and_verify(magnet_transport_t *tx, const ota_release_t *rel) {
         return false;
     }
 
-    /* TweetNaCl verifies a COMBINED sig||message buffer. The message is the
-     * 64-char hex TEXT, not the 32 raw digest bytes — see the header comment. */
-    unsigned char sm[64 + 64];
-    memcpy(sm, sig, 64);
-    memcpy(sm + 64, digest_hex, 64);
-
-    unsigned char m[64 + 64];
-    unsigned long long mlen = 0;
-    int rc = crypto_sign_open(m, &mlen, sm, sizeof sm, pub);
-    if (rc != 0) {
+    /* The signed message is the 64-char hex TEXT of the digest, not the 32
+     * raw digest bytes — see the header comment. Verification now goes
+     * through the shared magnet_crypto component (punch-list H3). */
+    if (!magnet_ed25519_verify(pub, sig, (const uint8_t *)digest_hex, 64)) {
         snprintf(s_verify_status, sizeof s_verify_status, "SIGNATURE BAD");
         ESP_LOGE(TAG, "Ed25519 verify FAILED for release %ld", rel->release_id);
         free(s_bundle); s_bundle = NULL; s_bundle_len = 0;

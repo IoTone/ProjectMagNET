@@ -408,6 +408,15 @@ void app_main(void) {
 
     ota_init();
     ota_register_forth_words();
+
+    /* H4: bring back whatever the last successful apply installed — the
+     * dictionary is RAM, and a reboot must not silently revert the device
+     * while CFG_APPLIED_ID keeps telling the server it's up to date. */
+    {
+        int saved = ota_apply_saved();
+        if (saved > 0)       usb_print("ota: persisted bundle re-applied\r\n");
+        else if (saved < 0)  usb_print("ota: persisted bundle FAILED at boot (rolled back)\r\n");
+    }
     usb_printf("heap after ota init: %lu bytes\r\n",
                (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
