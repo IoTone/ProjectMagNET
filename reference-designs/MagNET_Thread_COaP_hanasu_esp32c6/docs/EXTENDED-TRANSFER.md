@@ -14,6 +14,11 @@ Two-node bench (desktop: Waveshare C6 `93c6899e` + Waveshare LCD-1.47
   machinery demonstrably fired and the payload survived.
 - Heap byte-identical (sender) / clean transient dip (receiver) after all runs.
 
+Throughput tracks RF conditions and channel occupancy rather than the protocol.
+Repeat runs of the same 50 KB transfer on the same two boards have ranged
+4.7–5.4 KiB/s, and the saturation case 1.1–1.4 KiB/s. Correctness did not vary:
+every run reassembled sha256-identical.
+
 **Real-photo battery (same day, 10/10):** actual JPEGs 16 KB / 67 KB / 300 KB
 both directions at ~5.3 KiB/s, back-to-back sessions, photo intact with chat
 flowing both ways mid-transfer, abort signalling, `rx err=0`.
