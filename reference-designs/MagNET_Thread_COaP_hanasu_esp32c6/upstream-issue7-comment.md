@@ -4,10 +4,13 @@
 
 Status update from the ProjectMagNET side, and it's a good one: the design
 (MagNET Hanasu v2, rev 2.2) is no longer a proposal with a prototype behind it —
-**the full firmware phase table (E-A through E-G) is implemented and validated on
-a 4-node ESP32-C6 bench** (fw 0.6.0-eg, ESP-IDF 5.3.1). Encrypted mesh chat,
+**the full firmware phase table (E-A through E-H) is implemented and validated on
+ESP32-C6 hardware** (fw 0.7.0-eh, ESP-IDF 5.3.1). Encrypted mesh chat,
 seed-phrase credentials, signed admin ops, BLE phone access, on-device Forth
-automation, and offline catch-up all work on real hardware today.
+automation, and offline catch-up all work on real hardware today, and so does
+photo sharing — the one requirement below that was still an honest ⚠️ until
+E-H. Everything through E-G was validated on a 4-node bench; the photo transfer
+was validated two-node over the air.
 
 **Shape of the add-on (unchanged):** any ESP32-C6 board ($3–10 — XIAO ESP32C6,
 M5NanoC6, bare devkit) wired to the deck's Arduino-compatible GPIO port (UART) or
@@ -30,10 +33,19 @@ not promised:**
   ≥12 space-separated words, HKDF, no on-device stretch; same phrase ⇒ same
   network on independent nodes, verified). The phone app generates 13-word EFF
   phrases (~134-bit) and QR credentials.
-- photo sharing: ⚠️ honest gap unchanged — envelope caps app-layer transfers at
-  ~17 KB and measured bulk goodput is ~4 KB/s per receiver; direction specified
-  (extended-transfer type + host-side re-encode). Video: same mechanism, minutes
-  of airtime.
+- photo sharing: ✅ **implemented and hardware-validated** (E-H, fw 0.7.0-eh).
+  The v2.1 envelope's 4-bit fragment field did cap app-layer transfers at
+  ~17 KB; **Type 6 extended transfer** lifts that with a 16-bit chunk index in
+  the payload, unicast CON only, and window/NACK-bitmap recovery. Two-node
+  over-the-air: 50 KB both directions sha256-identical at **~5.4 KiB/s**, so a
+  50–100 KB host-side re-encode moves in ~10–20 s; a real-photo battery (16 /
+  67 / 300 KB JPEGs, both directions, chat flowing mid-transfer, abort paths)
+  passed 10/10. A transfer run *while the receiver floods the channel* still
+  completed byte-identical — the loss-recovery path has fired on real radio,
+  not just in theory. The node stays a modem: it never holds the file, the deck
+  does. Spec: `docs/EXTENDED-TRANSFER.md`.
+  Video: same mechanism, but minutes of airtime per clip — still a gap in
+  practice, and the honest answer is that this link is sized for photos.
 - < $15 networking hardware: ✅
 - no bridging required: ✅ (edge routing stays an optional UART-bridge pattern)
 
@@ -67,7 +79,9 @@ the bench scripts, in your hand.
 
 **Where the code is:**
 - Design proposal (rev 2.2, all phase logs): `reference-designs/MagNET_Thread_COaP_hanasu_esp32c6/MAGNet_Protocol_DESIGN_PROPOSAL.md`
-- ESP-IDF firmware (fw 0.6.0-eg, full validation scorecards): `reference-designs/MagNET_Thread_COaP_hanasu_esp32c6/firmware-idf/`
+- ESP-IDF firmware (fw 0.7.0-eh, full validation scorecards): `reference-designs/MagNET_Thread_COaP_hanasu_esp32c6/firmware-idf/`
+- Photo transfer spec + scorecard: `…/docs/EXTENDED-TRANSFER.md`; host reference
+  `…/tools/xfer.py`; two-pane browser demo rig `…/tools/chat-bench/`
 - Host SDK + Flutter app: `…/host-sdk/`, `magnet_app/`
 - Footprint on a no-PSRAM C6: flash ~39% of a 2.6 MB partition with BLE +
   crypto + Forth; ~160 KB heap free at runtime with everything on.
@@ -77,4 +91,6 @@ earlier drafts said) — IDF 5.3.1's mbedTLS has no EdDSA, and P-256 is
 hardware-accelerated on the C6.
 
 Remaining open items are scale (32+ node soak needs hardware; everything is
-sized and planned for it) and the extended-transfer type for photos.
+sized and planned for it), multi-hop and 3+-node concurrency for the new photo
+transfer (the bench is two nodes on one link), and video — which is a bandwidth
+fact, not a missing feature.

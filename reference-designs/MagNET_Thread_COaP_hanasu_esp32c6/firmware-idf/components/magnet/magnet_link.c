@@ -15,6 +15,7 @@
  */
 #include "magnet.h"
 #include "magnet_bot.h"
+#include "magnet_xfer.h"
 #include "forth_core.h"
 
 #include <string.h>
@@ -95,14 +96,15 @@ static int  forth_in(void)   { return -1; } /* engine is driven by forth_eval, n
 /* ---- HCP command handling ---- */
 static void emit_caps(const char *tag) {
     respond(tag,
-        "+OK proto=2.1 fw=0.6.0-eg maxline=512 "
+        "+OK proto=2.1 fw=0.7.0-eh maxline=512 "
         "transports=usbcdc verbs=STATUS,CAPS,HELP,PING,CHAT,DM,PEERS,RECENT,WHOAMI,NAME,"
-        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH,TIME"
+        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH,TIME,XFER"
 #if MN_ENABLE_BOTS
         ",BOTMODE"
 #endif
         " "
-        "events=ready,state,chat,dm,cmd,peer,role,heartbeat,warn queue=4 mode=HCP");
+        "events=ready,state,chat,dm,cmd,peer,role,heartbeat,warn,xfer queue=4 "
+        "xfer_chunk=336 xfer_window=32 xfer_max_chunks=4096 mode=HCP");
 }
 
 static void emit_help(const char *tag) {
@@ -113,6 +115,9 @@ static void emit_help(const char *tag) {
     mn_write_line("#            HEARTBEAT <secs|0> FORTH PUBKEY ADMIN ADD|LIST ROTATE");
     mn_write_line("#            HOOK CHAT|CMD <word>|LIST|CLEAR  SCRIPT SET|SHOW|RUN|CLEAR");
     mn_write_line("#            TIME | TIME SET <epoch> [<tz-min>] | TIME SYNC | TIME PUSH");
+    mn_write_line("#            XFER BEGIN <peer-ipv6> <len> [<meta>] | DATA <b64> | ABORT | STATUS");
+    mn_write_line("#              (Type 6 extended transfer — docs/EXTENDED-TRANSFER.md;");
+    mn_write_line("#               feed 336-byte chunks as b64, wait for !XFER_NEXT per window)");
     mn_write_line("#              (no NTP on a Thread-only mesh: SET seeds this node and");
     mn_write_line("#               pushes to the channel; SYNC pulls from whoever has one)");
 #if MN_ENABLE_BOTS
@@ -453,6 +458,59 @@ static void handle_hcp_line(char *line) {
         if (rc == -2)      respond_err(tag, "E_NO_PEER", "bad ipv6 address");
         else if (rc != 0)  respond_err(tag, "E_INTERNAL", "send failed");
         else               respond(tag, "+OK");
+    }
+    else if (!strcmp(verb, "XFER")) {
+        /* Type 6 extended transfer (E-H, docs/EXTENDED-TRANSFER.md) */
+        if (!strncmp(rest, "STATUS", 6)) { mn_xfer_status_print(); respond(tag, "+OK"); }
+        else if (!strncmp(rest, "ABORT", 5)) {
+            if (mn_xfer_abort() != 0) respond_err(tag, "E_BAD_STATE", "no transfer active");
+            else respond(tag, "+OK aborted");
+        }
+        else if (!strncmp(rest, "DATA ", 5)) {
+            const char *b64 = rest + 5;
+            while (*b64 == ' ') b64++;
+            int rc = mn_xfer_data_b64(b64);
+            if (rc == -1)      respond_err(tag, "E_BAD_STATE", "no transfer — XFER BEGIN first");
+            else if (rc == -2) respond_err(tag, "E_SYNTAX", "bad base64");
+            else if (rc == -3) respond_err(tag, "E_BUSY", "window full — wait for !XFER_NEXT");
+            else if (rc == -5) respond_err(tag, "E_SYNTAX", "chunk must be 336 B raw (final: remainder)");
+            else if (rc < 0)   respond_err(tag, "E_INTERNAL", "");
+            else {
+                char b[32];
+                snprintf(b, sizeof(b), "+OK %d/%d", rc, MN_XFER_WINDOW);
+                respond(tag, b);
+            }
+        }
+        else if (!strncmp(rest, "BEGIN ", 6)) {
+            if (mn_get_state() != MN_READY) {
+                respond_err(tag, "E_BAD_STATE", mn_state_name(mn_get_state())); return;
+            }
+            char *p2 = rest + 6;
+            while (*p2 == ' ') p2++;
+            char *peer = p2;
+            while (*p2 && *p2 != ' ') p2++;
+            if (!*p2) { respond_err(tag, "E_SYNTAX", "XFER BEGIN <peer> <len> [<meta>]"); return; }
+            *p2++ = '\0';
+            while (*p2 == ' ') p2++;
+            char *end = NULL;
+            unsigned long tlen = strtoul(p2, &end, 10);
+            if (end == p2 || tlen == 0) { respond_err(tag, "E_SYNTAX", "need total_len"); return; }
+            const char *meta = end;
+            while (*meta == ' ') meta++;
+            char info[96];
+            int rc = mn_xfer_begin(peer, (uint32_t)tlen, *meta ? meta : NULL,
+                                   info, sizeof(info));
+            if (rc == -1)      respond_err(tag, "E_BUSY", "transfer already active");
+            else if (rc == -2) respond_err(tag, "E_SYNTAX", "bad args (max 4096 chunks)");
+            else if (rc == -3) respond_err(tag, "E_NO_PEER", "bad ipv6 address");
+            else {
+                char b[128];
+                snprintf(b, sizeof(b), "+OK %s", info);
+                respond(tag, b);
+            }
+        }
+        else respond_err(tag, "E_SYNTAX",
+                         "XFER BEGIN <peer> <len> [<meta>] | DATA <b64> | ABORT | STATUS");
     }
     else if (!strcmp(verb, "FORTH")) {
         s_mode = LINK_FORTH;

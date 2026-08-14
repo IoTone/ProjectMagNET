@@ -5,6 +5,7 @@ idf_component_register(
         "magnet_crypto.c"
         "magnet_link.c"
         "magnet_forth.c"
+        "magnet_xfer.c"
         "magnet_bot.c"
         "magnet_ot.c"
         "magnet_ble.c"

@@ -1,4 +1,31 @@
-# MagNET Hanasu — ESP-IDF firmware (E-Phase C: full HCP host surface)
+# MagNET Hanasu — ESP-IDF firmware (E-Phase H: Type 6 extended transfer)
+
+**E-H (fw 0.7.0-eh, two-node over-the-air hardware validation 2026-08-11)** adds
+the §11.8 extended transfer, closing the photo gap (Open Q10) and the last
+unimplemented Must requirement (R7). Type 6 frames carry a 16-bit chunk index in
+the payload, ride **CON unicast only** (the E-B tables ruled multicast out for
+bulk), and recover through window/NACK bitmaps. The node stays a modem:
+outbound it buffers one 32-chunk window (10.5 KiB), inbound it keeps a 512 B
+bitmap and streams every chunk up the host link as a `!XFER` event, so **the
+host holds the file**. Every chunk is an ordinary envelope frame with a fresh
+nonce counter, which leaves the §11.1.5 invariant untouched.
+
+New HCP surface: `XFER BEGIN|DATA|ABORT|STATUS`, events `!XFER_BEGIN` `!XFER`
+`!XFER_DONE` `!XFER_NEXT` `!XFER_SENT` `!XFER_FAIL`. Host reference is
+`tools/xfer.py` (send / recv / loopback) on the Python SDK; `tools/chat-bench/`
+is the two-pane browser demo rig.
+
+Headline result: 50 KB both directions sha256-identical at ~5.4 KiB/s, and a
+transfer run while the receiver floods the channel still completes
+byte-identical. Static RAM 137.1 KB (41.8%, +12.5 KB for the window and
+bitmap), flash 824.1 KB (29.9%). Wire format, failure handling, receive-side
+validation, the full bench scorecard and the deliberate limits are in
+**`../docs/EXTENDED-TRANSFER.md`**, which is normative. Remaining for a bigger
+bench: multi-hop routing and 3+-node concurrent transfers.
+
+---
+
+## E-Phase C — full HCP host surface
 
 **E-C (fw 0.3.0-ec, validated 16/16 on the 4-node bench 2026-07-30)** adds on
 top of E-B: `NAME` with on-mesh announce (names in `!CHAT`/`PEERS`, NVS-persisted),

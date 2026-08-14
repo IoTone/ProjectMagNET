@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MagNET chat bench</title>
+<style>
+  :root {
+    --bg: #101010; --panel: #181818; --panel2: #202020; --line: #2e2e2e;
+    --fg: #dcdcdc; --dim: #909090; --accent: #b4b4b4; --ok: #3fb96a;
+    --warn: #e0a63c; --err: #e05c5c; --out: #303030; --in: #222222;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line);
+           display: flex; justify-content: space-between; align-items: baseline; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--dim); font-size: 12px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 64px;
+         padding: 48px 64px; height: calc(100vh - 46px);
+         max-width: 1240px; margin: 0 auto; }
+  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 1px;
+          display: flex; flex-direction: column; min-height: 0; }
+  .head { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .head .title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--err); flex: none; }
+  .dot.ready    { background: var(--ok); }
+  .dot.attaching, .dot.degraded { background: var(--warn); }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 1px 12px;
+        margin-top: 8px; font-size: 12px; }
+  .kv dt { color: var(--dim); margin: 0; }
+  .kv dd { margin: 0; }
+  .kv .warntext { color: var(--warn); }
+  .kv .oktext   { color: var(--ok); }
+  .log { flex: 1; overflow-y: auto; padding: 12px; display: flex;
+         flex-direction: column; gap: 6px; min-height: 0; }
+  .msg { max-width: 82%; padding: 6px 10px; border-radius: 1px; word-break: break-word; }
+  .msg.out { align-self: flex-end; background: var(--out); }
+  .msg.in  { align-self: flex-start; background: var(--in); border: 1px solid var(--line); }
+  .msg img { display: block; max-width: 220px; max-height: 220px;
+             border-radius: 1px; margin-bottom: 4px; }
+  .warntext { color: var(--warn); }
+  .msg .meta { font-size: 10.5px; color: var(--dim); margin-top: 2px; display: flex; gap: 8px; }
+  .msg .lat { color: var(--accent); }
+  .sys { align-self: center; font-size: 11px; color: var(--dim); }
+  .sys.warn { color: var(--warn); }
+  .inbar { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+  .inbar input { flex: 1; background: var(--panel2); color: var(--fg);
+                 border: 1px solid var(--line); border-radius: 1px; padding: 8px 10px;
+                 font: inherit; outline: none; }
+  .inbar input:focus { border-color: var(--accent); }
+  .inbar button { background: var(--accent); color: #101010; border: 0; border-radius: 1px;
+                  padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  .inbar button:disabled { opacity: .4; cursor: default; }
+  .inbar button.attach { background: var(--panel2); color: var(--fg);
+                         border: 1px solid var(--line); font-weight: 400; }
+  .stats { font-size: 11px; color: var(--dim); padding: 0 12px 8px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { createSignal } from "https://esm.sh/solid-js@1.9.3";
+import { render } from "https://esm.sh/solid-js@1.9.3/web";
+import html from "https://esm.sh/solid-js@1.9.3/html";
+
+/* ---- state: one info signal + one message-list signal per node ---- */
+const infoSig = [createSignal({}), createSignal({})];
+const msgsSig = [createSignal([]), createSignal([])];
+const latsSig = [createSignal([]), createSignal([])];   // delivered latencies, ms
+/* Correlation entries per SENDER node: text → {t0, rxTs}. The POST response
+ * (t0, bridge clock) and the receiver's SSE chat event (rxTs, bridge clock)
+ * race each other — whichever lands second completes the measurement. */
+const pending = [new Map(), new Map()];
+
+function finishLat(sender, text, entry) {
+  const lat = (entry.rxTs - entry.t0) * 1000;
+  pending[sender].delete(text);
+  const [gl, sl] = latsSig[sender];
+  sl([...gl(), lat]);
+  const stamp = (idx, dir) => {
+    const [gm, sm] = msgsSig[idx];
+    let done = false;                      // stamp only the oldest unstamped copy
+    sm(gm().map(m => (!done && m.dir === dir && m.text === text && m.lat == null)
+                      ? (done = true, { ...m, lat }) : m));
+  };
+  stamp(sender, "out");
+  stamp(1 - sender, "in");
+}
+
+function addMsg(i, m) {
+  const [get, set] = msgsSig[i];
+  set([...get(), m]);
+  queueMicrotask(() => {
+    const el = document.getElementById("log" + i);
+    if (el) el.scrollTop = el.scrollHeight;
+  });
+}
+
+/* patch the newest message matching pred; returns false if none matched */
+function patchLast(i, pred, patch) {
+  const [get, set] = msgsSig[i];
+  const arr = get();
+  for (let k = arr.length - 1; k >= 0; k--) {
+    if (pred(arr[k])) {
+      const next = arr.slice();
+      next[k] = { ...arr[k], ...patch };
+      set(next);
+      return true;
+    }
+  }
+  return false;
+}
+const livePhoto = (dir) => (m) => m.kind === "photo" && m.dir === dir && !m.done;
+
+/* ---- SSE from the bridge (single clock for honest latency) ---- */
+const es = new EventSource("/events");
+es.onmessage = (e) => {
+  const ev = JSON.parse(e.data);
+  if (ev.kind === "info") { infoSig[ev.node][1](ev); return; }
+  if (ev.kind === "xfer") {                   // photo transfer progress
+    const i = ev.node, dir = ev.dir;
+    if (ev.phase === "begin" && dir === "in")
+      addMsg(i, { dir: "in", kind: "photo", name: ev.name, from: ev.from, pct: 0 });
+    else if (ev.phase === "progress")
+      patchLast(i, livePhoto(dir), { pct: ev.pct });
+    else if (ev.phase === "sent")
+      patchLast(i, livePhoto(dir), { pct: 100, secs: ev.secs, done: true });
+    else if (ev.phase === "fail")
+      patchLast(i, livePhoto(dir), { failed: ev.reason, done: true }) ||
+        addMsg(i, { dir: "sys", warn: true, text: "photo failed: " + ev.reason });
+    return;
+  }
+  if (ev.kind === "photo") {                  // reassembled inbound image
+    const i = ev.node;
+    const patch = { img: ev.data, name: ev.name, from: ev.from,
+                    pct: 100, secs: ev.secs, size: ev.size, done: true };
+    if (!patchLast(i, livePhoto("in"), patch))
+      addMsg(i, { dir: "in", kind: "photo", ...patch });
+    queueMicrotask(() => {
+      const el = document.getElementById("log" + i);
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    return;
+  }
+  if (ev.kind !== "event") return;
+  const i = ev.node;
+  if (ev.name === "chat") {
+    // multicast chat lands on the node that DIDN'T send it; correlate with
+    // the other pane's pending send to compute end-to-end latency
+    const other = 1 - i;
+    addMsg(i, { dir: "in", from: ev.fields[2] !== "-" ? ev.fields[2] : ev.fields[1],
+                text: ev.text, lat: null });
+    const entry = pending[other].get(ev.text);
+    if (entry) {
+      entry.rxTs = ev.ts;
+      if (entry.t0 != null) finishLat(other, ev.text, entry);
+    }
+  } else if (ev.name === "dm") {
+    addMsg(i, { dir: "in", from: ev.fields[1], text: ev.text, lat: null, dm: true });
+  } else if (["state", "role", "warn", "peer_join", "peer_leave"].includes(ev.name)) {
+    addMsg(i, { dir: "sys", warn: ev.name === "warn", text: ev.raw });
+  }
+};
+/* bridge unreachable: red dot + state on BOTH panes until SSE reconnects
+ * and fresh info snapshots overwrite this */
+es.onerror = () => {
+  for (const [, set] of infoSig) set(p => ({ ...p, state: "BRIDGE DOWN" }));
+};
+
+/* ---- sending ---- */
+async function send(i, inputEl) {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = "";
+  const entry = { t0: null, rxTs: null };
+  pending[i].set(text, entry);           // registered BEFORE the fetch: the
+  addMsg(i, { dir: "out", text, lat: null });  // delivery event may beat the response
+  const r = await fetch("/send", { method: "POST",
+                                   body: JSON.stringify({ node: i, text }) });
+  const j = await r.json();
+  if (!j.ok) {
+    pending[i].delete(text);
+    addMsg(i, { dir: "sys", warn: true, text: "send failed: " + j.err });
+    return;
+  }
+  entry.t0 = j.ts;
+  if (entry.rxTs != null) finishLat(i, text, entry);  // event won the race
+}
+
+/* ---- photos: downscale on the host (the mesh carries a re-encode, never
+ * the original — design proposal §11.8), then hand off to the bridge ---- */
+function shrink(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1024;
+      let w = img.width, h = img.height;
+      if (Math.max(w, h) > MAX) {
+        const s = MAX / Math.max(w, h);
+        w = Math.round(w * s); h = Math.round(h * s);
+      }
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      let q = 0.82, dataUrl = c.toDataURL("image/jpeg", q);
+      while (dataUrl.length * 0.75 > 180 * 1024 && q > 0.4) {  // aim ≤ ~180 KB
+        q -= 0.12;
+        dataUrl = c.toDataURL("image/jpeg", q);
+      }
+      URL.revokeObjectURL(img.src);
+      const base = (file.name.replace(/\.[^.]*$/, "") || "photo")
+                     .replace(/\s+/g, "_").slice(0, 40);
+      res({ dataUrl, b64: dataUrl.split(",")[1], name: base + ".jpg" });
+    };
+    img.onerror = rej;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function sendPhoto(i, fileEl) {
+  const file = fileEl.files[0];
+  fileEl.value = "";
+  if (!file) return;
+  let p;
+  try { p = await shrink(file); }
+  catch { addMsg(i, { dir: "sys", warn: true, text: "not an image?" }); return; }
+  addMsg(i, { dir: "out", kind: "photo", img: p.dataUrl, name: p.name, pct: 0 });
+  const r = await fetch("/sendphoto", { method: "POST",
+    body: JSON.stringify({ node: i, name: p.name, data: p.b64 }) });
+  const j = await r.json();
+  if (!j.ok)
+    patchLast(i, livePhoto("out"), { failed: "send refused", done: true });
+}
+
+/* ---- UI ---- */
+const fmt = (n) => n == null ? "" : (n < 1000 ? n.toFixed(0) + " ms" : (n / 1000).toFixed(2) + " s");
+const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+
+function Pane(i) {
+  const info = infoSig[i][0], msgs = msgsSig[i][0], lats = latsSig[i][0];
+  const st = () => (info().state || "?").toLowerCase();
+  let inputEl, fileEl;
+  return html`
+    <section class="pane">
+      <div class="head">
+        <div class="title">
+          <span class=${() => "dot " + st()}></span>
+          <span>node ${i} — ${() => info().port || "?"}</span>
+          <span style="color:var(--dim);font-weight:400">
+            ${() => info().id ? "id=" + info().id : ""}
+            ${() => info().name && info().name !== "-" ? " " + info().name : ""}
+          </span>
+        </div>
+        <dl class="kv">
+          <dt>state</dt><dd>${() => info().state || "?"}</dd>
+          <dt>role</dt><dd>${() => info().role || "?"}</dd>
+          <dt>channel</dt>
+          <dd>${() => info().channel || "?"}${() => info().channel === "magnet"
+              ? html`<span class="warntext"> — default (well-known cred)</span>` : ""}</dd>
+          <dt>encryption</dt>
+          <dd>${() => info().selector
+              ? html`<span class="oktext">AES-128-CCM</span> selector=${info().selector}`
+              : "…"}</dd>
+          <dt>peers</dt><dd>${() => info().peers ?? "?"}</dd>
+          <dt>fw</dt><dd>${() => info().fw || "?"}</dd>
+        </dl>
+      </div>
+      <div class="log" id=${"log" + i}>
+        ${() => msgs().map(m =>
+          m.dir === "sys"
+            ? html`<div class=${"sys" + (m.warn ? " warn" : "")}>${m.text}</div>`
+            : m.kind === "photo"
+            ? html`<div class=${"msg " + m.dir}>
+                     ${m.img ? html`<img src=${m.img} alt=${m.name}>` : ""}
+                     <div class="meta">
+                       <span>${m.dir === "in" ? "photo from " + (m.from ?? "?") : "photo"} · ${m.name}${m.size ? " · " + (m.size / 1024).toFixed(0) + " KB" : ""}</span>
+                       ${m.failed ? html`<span class="warntext">✗ ${m.failed}</span>`
+                         : m.done ? html`<span class="lat">✓${m.secs != null ? " " + m.secs + " s" : ""}</span>`
+                         : html`<span class="lat">${m.pct ?? 0}%</span>`}
+                     </div>
+                   </div>`
+            : html`<div class=${"msg " + m.dir}>
+                     <div>${m.text}</div>
+                     <div class="meta">
+                       ${m.dir === "in" ? html`<span>from ${m.from}${m.dm ? " (DM)" : ""}</span>` : html`<span>sent</span>`}
+                       ${m.lat != null ? html`<span class="lat">⏱ ${fmt(m.lat)}</span>`
+                                       : (m.dir === "out" ? html`<span class="lat">…</span>` : "")}
+                     </div>
+                   </div>`)}
+      </div>
+      <div class="stats">
+        ${() => { const a = avg(lats());
+                  return a == null ? ""
+                    : `avg latency ${fmt(a)} · last ${fmt(lats().at(-1))}`; }}
+      </div>
+      <div class="inbar">
+        <input placeholder=${"chat as node " + i + "…"}
+               ref=${(el) => (inputEl = el)}
+               onKeyDown=${(e) => { if (e.key === "Enter") send(i, inputEl); }} />
+        <input type="file" accept="image/*" style="display:none"
+               ref=${(el) => (fileEl = el)}
+               onChange=${() => sendPhoto(i, fileEl)} />
+        <button class="attach" title="send a photo (downscaled to ≤180 KB)"
+                onClick=${() => fileEl.click()}
+                disabled=${() => st() !== "ready"}>photo</button>
+        <button onClick=${() => send(i, inputEl)}
+                disabled=${() => st() !== "ready" && st() !== "degraded"}>send</button>
+      </div>
+    </section>`;
+}
+
+render(() => html`
+  <header>
+    <h1>MagNET Hanasu — chat bench</h1>
+  </header>
+  <main>${Pane(0)}${Pane(1)}</main>`, document.getElementById("app"));
+</script>
+</body>
+</html>

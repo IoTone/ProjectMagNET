@@ -57,6 +57,14 @@ discover_nodes()                               # every attached node that PINGs
 `HCPError.code` is the machine-readable token: `E_RATE_LIMITED`,
 `E_UNKNOWN_VERB`, `E_BAD_STATE`, `E_NOT_ADMIN`, … (§11.3.4).
 
+**Type 6 extended transfer has no typed helper, deliberately.** Every other
+verb is request/response and fits `command()`; a transfer is a stateful flow —
+feed a window of `XFER DATA`, wait for `!XFER_NEXT`, repeat — so it belongs in
+a driver, not a one-line method. `../tools/xfer.py` is that driver and the
+reference implementation (send / recv / single-node loopback), built on
+`command()` + `on()` exactly as a third-party host would. Spec:
+`../docs/EXTENDED-TRANSFER.md`.
+
 ### CLI
 
 ```bash
