@@ -423,7 +423,27 @@ Original table:
 
 ---
 
-#### H10 — Converge the drifted `craw_*` component copies (added 2026-08-14)
+#### H10 — Converge the drifted `craw_*` component copies ✅ DONE 2026-08-14
+
+**Completed — and the re-audit (post-E-H rebase, with missing-root cases separated)
+showed the drift was smaller than the first count.** Real state: **9 identical
+copies**, **5 genuinely-drifted copies of just two components** (`craw_wifi` ×3,
+`craw_ble_provision` ×2 — all project copies identical to each other and strict
+ancestors of a newer root: no copy-only API, every symbol the three mains call
+present in root), and **10 project-only components with no root counterpart**, of
+which only `craw_imu` and `craw_redis` were duplicated (XR ≡ Redis, byte-identical).
+
+Actions: all 14 copies converged to root symlinks; `craw_imu` and `craw_redis`
+promoted to the root component tree (single source, two symlink consumers). The six
+**singleton** project-only components (`craw_imu_mpu6886`, `craw_mic`, `craw_audio`,
+`craw_bh1750`, `craw_mr60bha2`, `craw_status_led`) deliberately stay in-project —
+with one copy, drift is impossible; promote each when a second consumer appears.
+
+Validated: full rebuilds green on Scribe_XR, Scribe_Redis, Boombox — the first time
+XR/Redis ever compiled against root's newer `craw_wifi`/`craw_ble_provision`.
+**Zero private `craw_*` copies remain anywhere in the tree.**
+
+Original scope:
 
 **Effort: audit + merge.** H4 tripped over the forth-core disease one layer up: node
 projects hold private copies of shared `craw_*` components. Audit (2026-08-14):
@@ -477,8 +497,9 @@ Unchanged from the review, plus one addition:
 
 ## 4. First move
 
-~~H1~~ ~~H2~~ ~~H3~~ ~~H4~~ ~~H5~~ ~~H6~~ ~~H7~~ ~~H8~~ all **done 2026-08-14**.
-**Milestone C complete; signed code delivery now spans WiFi-hive, HTTP-OTA, and
-Hanasu's HCP/BLE — one apply engine under all three.** Remaining: **H9** (small
-fixes), **H10** (craw_* drift), the deferred Thread-multicast broadcast, and the
-bench-hardware gates accumulated along the way.
+**H1–H10: the entire punch list is closed (2026-08-14)**, with the C6 bench + Android
+retest done and two hardware-only bugs fixed along the way. Milestone C is complete;
+signed code delivery spans WiFi-hive, HTTP-OTA, and Hanasu's HCP/BLE through one apply
+engine; every shared component has exactly one source. Still open beyond this list:
+the deferred items in §3, the Thread-multicast bundle broadcast, and the WiFi-bench
+gates (grant eye→camera, Wave reboot-persistence, D4 re-run).
