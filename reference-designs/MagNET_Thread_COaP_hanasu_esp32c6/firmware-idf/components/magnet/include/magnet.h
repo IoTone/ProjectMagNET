@@ -134,6 +134,11 @@ void mn_hooks_print(void);
 void mn_forth_exec(const char *line);
 
 /* Boot script: persisted Forth source, run once after vocab registration. */
+/* THE firmware version — the single source every banner must use (H9: the
+ * READY banner and CAPS once disagreed by two releases, so any inventory
+ * keyed on the banner read the wrong version). Bump it here and only here. */
+#define MN_FW_VERSION "0.7.0-eh"
+
 /* H6: node caps advertised to the role-bundle engine (BUNDLE verb and the
  * boot-time re-apply share one list). Returns the array; *n gets its size. */
 const char **mn_bundle_caps(int *n);

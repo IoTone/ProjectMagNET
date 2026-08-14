@@ -36,7 +36,7 @@
 #include "forth_core.h"
 #include "sdkconfig.h"
 
-#define MN_FW_VERSION "0.7.0-eh"
+/* MN_FW_VERSION lives in magnet.h (H9: single-source the version) */
 #define MN_NAME_MAX   16
 
 /* E-D: the active channel — everything (selector, mcast, key) derives from

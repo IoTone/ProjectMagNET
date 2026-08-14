@@ -620,23 +620,22 @@ firmware-idf/
     magnet_ot.c                Thread bringup + CoAP /magnet (gated by MN_ENABLE_OPENTHREAD)
 ```
 
-## Known caveats (E-B level)
+## Known caveats (current — refreshed 2026-08-14, punch-list H9)
 
-- **On-hardware validation pending** — the E-B exit test (3-node failover +
-  multicast chat) and the runtime heap go/no-go have not run yet; the
-  `esp_openthread_*` init sequence follows the canonical example shape for
-  IDF 5.3.1 and may need minor field tweaks on first flash.
-- **Plaintext only** — `Flags.ENCRYPTED` frames are dropped on RX; crypto,
-  passphrase channels, and identity land in E-Phase D. The channel selector is a
-  fixed constant (`0x6d61`) until derived from `root_secret`.
-- **Dedup is a 32-entry recent-cache**, not the §11.1.6 monotonic table — the
-  per-sender counter starts at a per-boot random value (no NVS persistence yet).
-- **`mn-chat` from the REPL** uses `s"` (added to the engine), e.g.
-  `s" hello team" mn-chat`. `mn-hello` (no args) remains a zero-dependency smoke
-  test. `s"` interpret-mode strings live in a 4-deep rotating transient buffer
+The E-B-era caveats that used to live here (plaintext-only, 32-entry dedup,
+on-hardware validation pending) were all retired by E-D through E-H — see the
+phase scorecards above for what actually shipped. What genuinely remains:
+
+- **Stratum ratchet is mitigated, not magic** — an ex-anchor now persists its
+  ROLE and asks loudly for a re-seed (`!WARN time-anchor-await-seed`); the
+  clock itself is deliberately never persisted. Someone still has to run
+  `TIME SET` / `hcp.py synctime`. See docs/MESH-TIME.md.
+- **`s"` interpret-mode strings** live in a 4-deep rotating transient buffer
   (fine for same-line use); compiled `s"` strings are permanent.
-- No echo in FORTH mode (raw USB-JTAG). Fine for scripted/LLM use; add local
-  echo if a human finds it awkward.
-- If CMakeLists source-list edits seem ignored (undefined references to freshly
-  added files), delete `.pio/build/<env>` — the cached CMake configure does not
-  always re-run.
+- **No echo in FORTH mode** (raw USB-JTAG). Fine for scripted/LLM use; add
+  local echo if a human finds it awkward.
+- **32+ node soak is unbuilt** — 4 nodes is the bench ceiling (plan in §E-G).
+- **BUNDLE is the signed upgrade path; SCRIPT is unsigned** — dev convenience
+  only. Persisted signed bundles re-apply at boot before the script autorun.
+- **Thread-multicast bundle broadcast** (one COMMIT fanning out mesh-wide) is
+  future work; today's BUNDLE verb is point-to-point per node over HCP.
