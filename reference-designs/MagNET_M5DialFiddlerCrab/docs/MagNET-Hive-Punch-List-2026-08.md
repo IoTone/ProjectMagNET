@@ -400,7 +400,18 @@ the worked example in the review §5, and the sidecar's gating facts are already
 *Validate*: each bundle installs via `ROLE_GRANT`, reports applied, survives reboot,
 and `role-status` answers.
 
-#### H9 — Small fixes (batchable, any time)
+#### H9 — Small fixes ✅ DONE 2026-08-14
+
+All five rows closed. The fw-version mismatch got the proper fix — upstream E-H had
+even defined `MN_FW_VERSION` but in `magnet_core.c` where no banner could see it;
+it now lives in `magnet.h` as the single source, and both the READY banner (which
+still said `0.5.0-ee`, two releases stale) and CAPS use it. The "Known caveats"
+section was rewritten to current state (E-B claims retired; what genuinely remains:
+ratchet-mitigation-needs-a-human, 32-node soak, BUNDLE-vs-SCRIPT, multicast
+broadcast). The `forth_eval_n` drift and vestigial log were fixed in H4; the
+`report()` sanitization convention is now shared with the hive applied-report.
+
+Original table:
 
 | Fix | Where |
 |---|---|
@@ -424,6 +435,29 @@ Boombox: `craw_audio`, `craw_wifi`; Vitals_E4TH: `craw_bh1750`, `craw_mr60bha2`,
 ones need per-component diff review — some divergence is real feature work (e.g.
 Voice_XR's M5GFX lgfx::i2c reuse) that should merge *into* the root component, H1-style.
 The `craw_role_bundle` ×3 case is already done (H4).
+
+## 2b. Bench retest — 2026-08-14 (4× ESP32-C6 + Android)
+
+Upstream E-H (Type-6 transfer, PR #96) rebased in first; all four bench nodes
+reflashed to fw **0.7.0-eh** (xray1+probe bots build, sdk-b+xray2 plain; SELFTEST 4/4).
+**Two bugs only real hardware could find**, both fixed and re-verified:
+
+1. **Stack-protection fault on `BUNDLE COMMIT`** — craw_role_bundle's 6 KB signing-input
+   buffer lived on the caller's stack; fine in the WiFi nodes' worker task, fatal in
+   Hanasu's 4 KB link dispatcher. Now heap-allocated; `mn_link` runs at 8 KB.
+2. **CRC-32 double inversion, latent since Phase 4** — `~esp_rom_crc32_le(0xffffffff,…)`
+   ≠ standard CRC-32 (`esp_rom_crc32_le(0,…)` is). The Ed25519 sig passing while "CRC
+   mismatched" was the tell; the wrong value reproduced exactly by modeling.
+
+Then the sweep, all green: **hanasu-hello v0.1.0** — the first Ed25519 bundle ever
+installed on hardware — committed over chunked HCP, persisted, re-applied on every
+reboot, its `role-init` chat visible in peer rings *and* on the Android app's live
+feed via BLE catch-up; tampered sig rejected (`rc=-4`) with the good bundle untouched;
+the full **H7 anchor cycle** (await-seed warn → degraded-once → role release → warn-free
+reboot); chat delivery 3/3; the app's `_seedClock` re-anchored its companion on connect;
+and two deliberate anchors coexisted under the tie-break — a previously-unverified
+scenario. Still open on hardware: grant eye→camera on the WiFi bench, Wave
+reboot-persistence, D4 re-run.
 
 ## 3. Deferred — deliberately
 
