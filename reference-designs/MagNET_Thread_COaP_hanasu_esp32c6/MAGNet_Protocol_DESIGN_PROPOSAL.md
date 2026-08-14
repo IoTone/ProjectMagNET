@@ -2029,46 +2029,37 @@ Ed25519 references in §11.1 as ECDSA-P256 (raw r‖s, 64 B) going forward.
 **E-G landed and validated (2026-08-03, fw 0.6.0-eg, 4-node bench) — the phase table's last row.** (1) **SED catch-up** (§11.5): 12-slot ring of raw multicast-chat frames (ciphertext as stored, DMs excluded), served whole by CoAP `GET magnet/recent` as `[2B len][frame]…` oldest-first; new `RECENT <peer-ipv6>` verb replays a peer's ring through the normal RX path — decrypt + §11.1.6 high-water dedup make the replay deliver exactly the missed frames (bench: node held radio-dead through 3 chats booted to `rx msgs=0`, one fetch replayed all 6 stored frames; a second fetch deduped 6/6). (2) **§11.6 suppression/scale**: forwarding-layer suppression is Thread MPL — which *is* Trickle (RFC 7731) — so the app layer adds what MPL can't: sender/counter dedup (tables resized 16→40 for the 32+ target), MESH neighbor list 8→16, and a 200–1700 ms jittered READY-announce so partition heals don't burst-announce in sync. (3) **Full ESP32forth port**: gate said *iff the stub blocks real scripts* — it never did; stub stays, decision recorded. (4) **Scale validation**: leader killed via bootloader-hold → re-election + partition merge in ≤ ~15 s, old leader rejoins as child; saturation STRESS with BLE up on all 4 nodes: OT backpressure holds, `rx err=0`, MPL dupes suppressed; resident-build heap 161.7 KB free (the ~13 KB table cost, no leak). The **32+ node soak needs hardware that doesn't exist on this bench** — the soak plan (staggered boot, 24 h paced chat, hourly leader kills, dedup-eviction watch) is written up in `firmware-idf/README.md` §E-G. **E-A through E-G are closed; the implementation-phase table is done.**
 
 **E-H landed, two-node over-the-air hardware-validated (2026-08-11, fw
-0.7.0-eh) — the photo gap (Open Q10 / §11.8) is closed at the protocol
-level.** Type 6
-extended transfer per the §11.8 sketch, specified in
-`docs/EXTENDED-TRANSFER.md` and implemented in `magnet_xfer.c`: 16-bit chunk
-index in the payload (336 B chunks, ≤4096 chunks ≈ 1.31 MB), **CON unicast
-only** (the E-B measurements' verdict), sender buffers one 32-chunk window,
-receiver keeps only a bitmap and streams chunks to its host as `!XFER` events
-— the host reassembles by index (node-as-modem, §4.7). Recovery: receiver
-STATUS frames carry a per-window NACK bitmap (window-complete, 700 ms gap
-timer); sender rounds capped at 6; INIT retried 6×; 30 s idle abort. Every
-chunk is a normal AEAD envelope frame — nonce discipline untouched. New verbs
-`XFER BEGIN|DATA|ABORT|STATUS` + six `!XFER_*` events; `tools/xfer.py`
-(send/recv/loopback on the Python SDK) is the host reference. Bench
-(single Waveshare C6, loopback to own ML-EID — Type 6 is self-drop-exempt for
-exactly this): 1 B, 336 B, 10,752 B (exact window), 50 KB, 200 KB all
-hash-identical at **~6.0 KiB/s**; `tx err=0 rx err=0 dup=0` over 836 frames;
-heap byte-identical pre/post. Negative paths verified (E_BAD_STATE, E_NO_PEER,
-E_BUSY, INIT-timeout teardown). **Same-day two-node over-the-air validation**
-(desktop bench, second Waveshare C6 LCD-1.47 flashed): 50 KB both directions
-sha256-identical at ~5.4 KiB/s; **transfer under saturation** (receiver
-flooding `STRESS 25 200` mid-transfer) completed byte-identical at 1.41 KiB/s
-— 132/290 sender chunk-sends bounced by OT backpressure and re-paced,
-receiver `dup=4` (NACK retransmits deduped by bitmap), `rx err=0` both sides,
-heap flat: the loss-recovery path has fired on real hardware. Remaining for a
-larger bench: multi-hop routing, 3+-node concurrency. Forth xfer words
-deliberately deferred (host-driven use case).
+0.7.0-eh) — the photo gap (Open Q10 / §11.8) is closed at the protocol level.**
+Type 6 extended transfer, specified in `docs/EXTENDED-TRANSFER.md` and
+implemented in `magnet_xfer.c`: a 16-bit chunk index in the payload (336 B
+chunks, ≤4096 chunks ≈ 1.31 MB), **CON unicast only** (the E-B measurements'
+verdict), sender buffers one 32-chunk window, receiver keeps only a bitmap and
+streams chunks to its host as `!XFER` events so the host reassembles by index
+(node-as-modem, §4.7). Recovery is a per-window NACK bitmap carried in the
+receiver's STATUS frames, with a 700 ms gap timer, sender rounds capped at 6,
+INIT retried 6×, and a 30 s idle abort on either side. Every chunk is an
+ordinary AEAD envelope frame, so nonce discipline is untouched. New verbs `XFER
+BEGIN|DATA|ABORT|STATUS` plus six `!XFER_*` events; `tools/xfer.py` is the host
+reference (send/recv/loopback on the Python SDK) and `tools/chat-bench/` the
+browser demo rig.
 
-**E-H second audit pass (2026-08-14, compile-clean, bench re-run pending)** —
-three defects a fresh read of `magnet_xfer.c` turned up, all on the *receive*
-side where the peer's bytes are trusted: (1) the INIT parser copied a
-peer-supplied `meta_len` of up to 255 into a 65-byte stack buffer (remote stack
-smash on the pump task — now bounded, frame dropped); (2) `X_STATUS` and
-`X_ABORT` were matched on `xfer_id` alone, so any channel member could forge a
-COMPLETE (host believes an undelivered photo landed) or an ABORT — both are now
-bound to the session's authenticated device id, learned from INIT inbound and
-pinned from the first accepted STATUS outbound; (3) the `!XFER_*` lifecycle
-events bypassed the §11.3 event mask that every other class honours. Detail in
-`docs/EXTENDED-TRANSFER.md`. Nothing on the wire changed — these are receiver
-validation and host-link filtering only, so a patched node interoperates with
-an unpatched one.
+Type 6 acts on bytes chosen by a peer, so the receive path validates before it
+commits: the INIT `meta_len` is bounded against the receiver's buffer, `meta` is
+reduced to printable ASCII without spaces before it reaches an event line, the
+announced geometry is checked for self-consistency, and `X_STATUS`/`X_ABORT` are
+matched on the session's peer device id as well as on `xfer_id`, since a 16-bit
+xid visible to the whole channel would otherwise let one member forge a COMPLETE
+into another member's transfer or force an abort. Channel membership remains the
+trust boundary, as it is for chat. `!XFER_*` events honour the §11.3 event mask
+like every other class. None of this appears on the wire, so nodes with and
+without these checks interoperate.
+
+Results: 50 KB both directions sha256-identical at ~5.4 KiB/s, and a transfer
+run while the receiver floods the channel completes byte-identical, so the
+loss-recovery path has fired on real hardware. The full scorecard, wire format
+and failure handling live in `docs/EXTENDED-TRANSFER.md`, which is normative.
+Remaining for a larger bench: multi-hop routing and 3+-node concurrency. Forth
+xfer words are deliberately deferred, the use case being host-driven.
 
 #### E-Phase A spike scaffold — status (historical)
 

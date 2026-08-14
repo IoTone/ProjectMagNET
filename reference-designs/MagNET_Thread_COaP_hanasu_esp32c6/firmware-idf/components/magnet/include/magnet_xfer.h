@@ -25,7 +25,9 @@ void mn_xfer_init(void);          /* mutex + tick timer (call before radios)  */
 
 /* ---- host (sender) side — called from the HCP dispatcher ---- */
 /* 0 ok (info = "xid=… chunks=… chunk=… window=…"), -1 busy (transfer active),
- * -2 bad args, -3 send failed */
+ * -2 bad args (null peer, zero length, over MN_XFER_MAX_CHUNKS),
+ * -3 peer_ipv6 is not a parseable address. A transient send failure is not an
+ * error here: the tick retries INIT. */
 int  mn_xfer_begin(const char *peer_ipv6, uint32_t total_len,
                    const char *meta, char *info, size_t cap);
 /* Buffered count (1..window) on success; -1 no active transfer, -2 bad

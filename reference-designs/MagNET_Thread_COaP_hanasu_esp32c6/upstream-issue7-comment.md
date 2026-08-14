@@ -4,14 +4,13 @@
 
 Status update from the ProjectMagNET side, and it's a good one: the design
 (MagNET Hanasu v2, rev 2.2) is no longer a proposal with a prototype behind it —
-**the full firmware phase table (E-A through E-G) is implemented and validated on
-a 4-node ESP32-C6 bench** (fw 0.6.0-eg, ESP-IDF 5.3.1). Encrypted mesh chat,
+**the full firmware phase table (E-A through E-H) is implemented and validated on
+ESP32-C6 hardware** (fw 0.7.0-eh, ESP-IDF 5.3.1). Encrypted mesh chat,
 seed-phrase credentials, signed admin ops, BLE phone access, on-device Forth
-automation, and offline catch-up all work on real hardware today.
-
-**Update (2026-08-11, fw 0.7.0-eh): the photo gap is closed too.** The one
-requirement below that was still an honest ⚠️ — photo sharing — now has a
-protocol and hardware numbers behind it. See the photo-sharing bullet.
+automation, and offline catch-up all work on real hardware today, and so does
+photo sharing — the one requirement below that was still an honest ⚠️ until
+E-H. Everything through E-G was validated on a 4-node bench; the photo transfer
+was validated two-node over the air.
 
 **Shape of the add-on (unchanged):** any ESP32-C6 board ($3–10 — XIAO ESP32C6,
 M5NanoC6, bare devkit) wired to the deck's Arduino-compatible GPIO port (UART) or

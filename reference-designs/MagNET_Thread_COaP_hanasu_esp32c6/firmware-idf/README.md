@@ -1,39 +1,31 @@
 # MagNET Hanasu — ESP-IDF firmware (E-Phase H: Type 6 extended transfer)
 
-**E-H (fw 0.7.0-eh, two-node over-the-air hardware validation 2026-08-11)** adds the
-§11.8 extended transfer — the photo-gap fix (Open Q10) and the last
-unimplemented Must requirement (R7). Type 6 frames carry a 16-bit chunk index
-in the payload, ride **CON unicast only** (the E-B tables killed multicast for
-bulk), and recover via window/NACK bitmaps. The node stays a modem: outbound
-it buffers one 32-chunk window (10.5 KiB), inbound it keeps a 512 B bitmap and
-streams every chunk up the host link as a `!XFER` event — **the host holds the
-file**. New HCP surface: `XFER BEGIN|DATA|ABORT|STATUS`, events `!XFER_BEGIN`
-`!XFER` `!XFER_DONE` `!XFER_NEXT` `!XFER_SENT` `!XFER_FAIL`. Host reference:
-`tools/xfer.py` (send / recv / loopback) on the Python SDK. Spec + validation
-scorecard: `docs/EXTENDED-TRANSFER.md`.
+**E-H (fw 0.7.0-eh, two-node over-the-air hardware validation 2026-08-11)** adds
+the §11.8 extended transfer, closing the photo gap (Open Q10) and the last
+unimplemented Must requirement (R7). Type 6 frames carry a 16-bit chunk index in
+the payload, ride **CON unicast only** (the E-B tables ruled multicast out for
+bulk), and recover through window/NACK bitmaps. The node stays a modem:
+outbound it buffers one 32-chunk window (10.5 KiB), inbound it keeps a 512 B
+bitmap and streams every chunk up the host link as a `!XFER` event, so **the
+host holds the file**. Every chunk is an ordinary envelope frame with a fresh
+nonce counter, which leaves the §11.1.5 invariant untouched.
 
-Bench result (Waveshare C6, loopback to own ML-EID — Type 6 is exempt from the
-RX self-drop exactly so a one-board bench can do this): 1 B → 200 KB transfers
-all hash-identical at **~6.0 KiB/s**, `tx err=0 rx err=0 dup=0` across 836
-frames, heap byte-identical before/after. Every chunk is a normal envelope
-frame (fresh nonce counter, channel AEAD) — the §11.1.5 invariant is
-untouched. Static RAM 137.1 KB (41.8%, +12.5 KB for window+bitmap), flash
-823.6 KB (29.9%).
+New HCP surface: `XFER BEGIN|DATA|ABORT|STATUS`, events `!XFER_BEGIN` `!XFER`
+`!XFER_DONE` `!XFER_NEXT` `!XFER_SENT` `!XFER_FAIL`. Host reference is
+`tools/xfer.py` (send / recv / loopback) on the Python SDK; `tools/chat-bench/`
+is the two-pane browser demo rig.
 
-**Two-node over-the-air validation (same day, desktop bench = Waveshare C6 +
-Waveshare LCD-1.47):** 50 KB both directions sha256-identical at ~5.4 KiB/s;
-**transfer under saturation** (receiver simultaneously flooding `STRESS 25
-200`) completed byte-identical at 1.41 KiB/s with 132/290 sender chunk-sends
-bounced by OT backpressure and re-paced, receiver `dup=4` (NACK retransmits
-deduped by the bitmap), `rx err=0` both sides, heap flat. The loss-recovery
-path has fired on real hardware. Remaining for a bigger bench: multi-hop
-routing and 3+-node concurrent-transfer behavior.
+Headline result: 50 KB both directions sha256-identical at ~5.4 KiB/s, and a
+transfer run while the receiver floods the channel still completes
+byte-identical. Static RAM 137.1 KB (41.8%, +12.5 KB for the window and
+bitmap), flash 824.1 KB (29.9%). Wire format, failure handling, receive-side
+validation, the full bench scorecard and the deliberate limits are in
+**`../docs/EXTENDED-TRANSFER.md`**, which is normative. Remaining for a bigger
+bench: multi-hop routing and 3+-node concurrent transfers.
 
 ---
 
-Previous phase head follows.
-
-# (E-Phase C notes: full HCP host surface)
+## E-Phase C — full HCP host surface
 
 **E-C (fw 0.3.0-ec, validated 16/16 on the 4-node bench 2026-07-30)** adds on
 top of E-B: `NAME` with on-mesh announce (names in `!CHAT`/`PEERS`, NVS-persisted),

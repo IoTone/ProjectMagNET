@@ -16,53 +16,9 @@ Two-node bench (desktop: Waveshare C6 `93c6899e` + Waveshare LCD-1.47
 
 **Real-photo battery (same day, 10/10):** actual JPEGs 16 KB / 67 KB / 300 KB
 both directions at ~5.3 KiB/s, back-to-back sessions, photo intact with chat
-flowing both ways mid-transfer, abort signalling, `rx err=0`. The abort tests
-found and fixed two robustness gaps: **X_ABORT is now retried** (3×, 50 ms —
-a fire-and-forget abort right after a chunk burst could bounce off OT
-backpressure, leaving the peer busy for the 30 s idle window), and an **INIT
-from the same peer with a new xid supersedes** a stale inbound session
-(`!XFER_FAIL <xid> superseded`) instead of answering busy — so a sender that
-aborted (or crashed) can restart immediately even if its abort frame was
-lost. `tools/chat-bench/` integrates photo sending into the browser rig
-(downscale in-page, progress both sides, inline preview on arrival).
-
-**Audit pass (same day, post-battery):** a code audit found and fixed three
-more firmware gaps, each HW-verified. (1) **Sender idle-abort**: a host that
-died at a window boundary (fill=0 — the resend machinery never arms) leaked
-the outbound session forever, bouncing every later BEGIN with `E_BUSY`; the
-sender now aborts after 30 s without host feed or receiver STATUS — proven
-with the receiver parked in its ROM bootloader (radio dead): `!XFER_FAIL
-timeout` at 30 s, next BEGIN accepted. (2) **Receiver-timeout notify**: the
-rx 30 s idle abort now sends a best-effort X_ABORT so the sender fails fast
-instead of grinding its resend ladder. (3) **Dup-INIT geometry check**: a
-restarted transfer that randomly drew the same 16-bit xid as the stale
-session it replaced was treated as a duplicate INIT and resumed the *old*
-bitmap over *new* data — silent corruption (p≈2⁻¹⁶ per restart-after-lost-
-abort); the dup test now also compares total_len/chunks/chunk_len and
-supersedes on mismatch. Also: INIT **meta is sanitized** to printable-ASCII-
-no-space on receive (a hostile channel member could otherwise inject fake
-host-protocol lines via CR/LF in a filename — note the inbound *chat* path
-has the same pre-existing exposure, out of E-H scope). Battery re-run after
-the fixes: **ALL 10 PASS**, bridge e2e byte-identical.
-
-**Second audit pass (2026-08-14) — three hardening fixes, compile-clean, not
-yet re-run on the bench.** (1) **`meta_len` is now bounded on receive.** The
-INIT parser trusted the peer-supplied length byte (0–255) while copying into a
-65-byte stack buffer — a malformed or hostile INIT smashed the pump task's
-stack by up to 190 bytes. Our own sender clamps to 64; the receiver now drops
-the frame like any other malformed one. (2) **STATUS and ABORT are bound to
-the session's peer.** Both were matched on `xfer_id` alone; the xid is a
-16-bit value visible to every channel member, so any member could forge a
-`code 1` (sender reports `!XFER_SENT` for a photo that never landed) or a
-`REFUSED`/`ABORT` (denial). The outbound session now pins the peer's device id
-from the first STATUS it accepts and ignores later STATUS/ABORT from anyone
-else; the inbound session checks against the id it already learned from INIT.
-Channel membership is still the trust boundary — this only stops one member
-from stepping on another's transfer. (3) **`!XFER_*` lifecycle events honour
-`SUB`/`UNSUB xfer`.** Only the per-chunk `!XFER` lines were gated by the event
-mask; `!XFER_BEGIN`/`_DONE`/`_NEXT`/`_SENT`/`_FAIL` went out unconditionally,
-which no other event class does. The `#` lines from `XFER STATUS` are command
-output and stay outside the gate (`MODE TERSE` governs those).
+flowing both ways mid-transfer, abort signalling, `rx err=0`.
+`tools/chat-bench/` integrates photo sending into the browser rig (downscale
+in-page, progress both sides, inline preview on arrival).
 
 Single-node validation (Waveshare C6, transfer to own ML-EID through the full
 envelope→AEAD→CoAP→OT stack): 1 B / 336 B / 10,752 B (exact window) / 50 KB /
@@ -188,6 +144,57 @@ by index** (it has the RAM; the node keeps only the bitmap).
 a file, and a single-node loopback self-test against the node's own ML-EID —
 the same trick SELFTEST uses, which is why Type 6 frames are exempt from the
 self-drop in `handle_rx`).
+
+## Failure handling
+
+Every session ends in exactly one terminal event, and both ends are built so
+that a single lost frame cannot wedge a node until it reboots.
+
+- **Lost DATA.** The receiver's 700 ms gap timer sends a STATUS whose bitmap
+  NACKs exactly the holes, and the sender's next tick resends only those.
+- **Lost STATUS.** The sender's 2.5 s timeout resends everything unacked, up to
+  6 rounds. Duplicate chunks drop on the receiver's bitmap.
+- **Lost ABORT.** `X_ABORT` is retried 3 times at 50 ms, because an abort
+  issued right after a chunk burst can bounce off OT backpressure. If it is
+  lost anyway, an INIT from the same peer with a new `xfer_id` supersedes the
+  stale inbound session (`!XFER_FAIL <xid> superseded`) rather than answering
+  busy, so a sender that aborted or crashed can restart at once.
+- **Host stops feeding.** A sender whose host dies exactly at a window
+  boundary has `fill=0`, so the resend machinery never arms. A 30 s idle timer
+  covers that case: it aborts, tells the peer, and frees the session. Without
+  it the session leaks and every later `XFER BEGIN` returns `E_BUSY`.
+- **Peer disappears.** The receiver's own 30 s idle abort sends a best-effort
+  `X_ABORT` so the sender fails immediately instead of grinding through its
+  full resend ladder.
+- **`xfer_id` collision.** A restarted transfer can draw the same random 16-bit
+  id as the session it replaces. A repeat INIT counts as a duplicate only if
+  `total_len`, `total_chunks` and `chunk_len` all match; otherwise it
+  supersedes. Without that check the new data would be recorded against the old
+  bitmap.
+
+### Receive-side validation
+
+Type 6 parses bytes chosen by a peer, so the receive path checks them before it
+acts on them.
+
+- `meta_len` in INIT is bounded against the receiver's buffer, and an oversized
+  value drops the frame.
+- `meta` is reduced to printable ASCII without spaces before it reaches an
+  event line, so a filename cannot shift the field split or inject a line that
+  looks like host protocol.
+- Chunk index and length are checked against the announced geometry, and the
+  geometry is checked for self-consistency before a session opens.
+- `X_STATUS` and `X_ABORT` are matched on the session's peer device id as well
+  as on `xfer_id`. The xid is a 16-bit value that every channel member can see,
+  so on its own it would let one member forge a COMPLETE into another member's
+  transfer, making the host report a photo delivered that never arrived, or
+  force an abort. The inbound session takes the id from INIT and the outbound
+  one pins it from the first STATUS it accepts.
+
+Channel membership stays the trust boundary, as it is for chat. These checks
+keep one member from stepping on another member's transfer. They are not
+visible on the wire, so a node that performs them interoperates with one that
+does not.
 
 ## Deliberate limits (E-H)
 
