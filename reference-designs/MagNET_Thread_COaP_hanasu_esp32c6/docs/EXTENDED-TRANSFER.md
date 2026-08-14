@@ -45,6 +45,25 @@ host-protocol lines via CR/LF in a filename — note the inbound *chat* path
 has the same pre-existing exposure, out of E-H scope). Battery re-run after
 the fixes: **ALL 10 PASS**, bridge e2e byte-identical.
 
+**Second audit pass (2026-08-14) — three hardening fixes, compile-clean, not
+yet re-run on the bench.** (1) **`meta_len` is now bounded on receive.** The
+INIT parser trusted the peer-supplied length byte (0–255) while copying into a
+65-byte stack buffer — a malformed or hostile INIT smashed the pump task's
+stack by up to 190 bytes. Our own sender clamps to 64; the receiver now drops
+the frame like any other malformed one. (2) **STATUS and ABORT are bound to
+the session's peer.** Both were matched on `xfer_id` alone; the xid is a
+16-bit value visible to every channel member, so any member could forge a
+`code 1` (sender reports `!XFER_SENT` for a photo that never landed) or a
+`REFUSED`/`ABORT` (denial). The outbound session now pins the peer's device id
+from the first STATUS it accepts and ignores later STATUS/ABORT from anyone
+else; the inbound session checks against the id it already learned from INIT.
+Channel membership is still the trust boundary — this only stops one member
+from stepping on another's transfer. (3) **`!XFER_*` lifecycle events honour
+`SUB`/`UNSUB xfer`.** Only the per-chunk `!XFER` lines were gated by the event
+mask; `!XFER_BEGIN`/`_DONE`/`_NEXT`/`_SENT`/`_FAIL` went out unconditionally,
+which no other event class does. The `#` lines from `XFER STATUS` are command
+output and stay outside the gate (`MODE TERSE` governs those).
+
 Single-node validation (Waveshare C6, transfer to own ML-EID through the full
 envelope→AEAD→CoAP→OT stack): 1 B / 336 B / 10,752 B (exact window) / 50 KB /
 200 KB all hash-identical, **~6.0 KiB/s** sustained, `tx err=0 rx err=0 dup=0`
@@ -64,7 +83,7 @@ the multicast group.
 
 The node stays a modem (§4.7 Option B): **the host holds the file**. The
 receiving node forwards each chunk up its host link as an event and keeps only
-a bitmap; the sending node buffers one window (32 chunks ≈ 10.5 KB) so it can
+a bitmap; the sending node buffers one window (32 chunks = 10.5 KiB) so it can
 retransmit without re-asking the host. Host-side re-encode is still the rule
 (§11.8): send a ~30–100 KB re-encode, not a camera original.
 
@@ -73,7 +92,7 @@ retransmit without re-asking the host. Host-side re-encode is still the rule
 | Parameter | Value | Why |
 |---|---|---|
 | Chunk payload | **336 B** | base64(336) = 448 chars → both the host `XFER DATA` line and the `!XFER` event stay under the 512-byte HCP line cap |
-| Window | **32 chunks** (10.75 KB) | sender-side RAM; the STATUS bitmap field is 8 B (64 bits), so the wire format already allows widening |
+| Window | **32 chunks** (10.5 KiB) | sender-side RAM; the STATUS bitmap field is 8 B (64 bits), so the wire format already allows widening |
 | Max chunks | **4096** (≈ 1.31 MB) | receiver bitmap = 512 B static; photos re-encoded per §11.8 are 30–100 KB ≈ 90–300 chunks |
 | Pacing | 8 chunks / 250 ms tick (≈ 10.7 KB/s offered) | sits under the measured ~13 msg/s (large-payload) OT acceptance ceiling per node |
 | Frame on the wire | 16 hdr + 5 + 336 + 8 MIC = **365 B** | ~4 802.15.4 fragments, CON ⇒ MAC-ACK per fragment + CoAP retry per chunk |
@@ -89,7 +108,7 @@ bitmap, not by envelope counter.
 ```
 0x01 INIT   (sender → receiver, CON, retried ~1 s until STATUS or 6 tries)
   [0]=0x01 [1..2]=xfer_id [3..6]=total_len u32 [7..8]=total_chunks u16
-  [9..10]=chunk_len u16 [11]=meta_len [12..]=meta (≤64 B, e.g. filename)
+  [9..10]=chunk_len u16 [11]=meta_len (0..64; larger ⇒ frame dropped) [12..]=meta (e.g. filename)
 
 0x02 DATA
   [0]=0x02 [1..2]=xfer_id [3..4]=chunk_idx u16 [5..]=chunk bytes

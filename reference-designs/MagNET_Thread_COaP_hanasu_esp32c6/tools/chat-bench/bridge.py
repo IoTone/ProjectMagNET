@@ -299,12 +299,25 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    ports = args if len(args) == 2 else DEFAULT_PORTS
-    http_port = 8642
-    for a in sys.argv[1:]:
+    # `--http N` consumes its value, so it can't be mistaken for a port name
+    # (the old split dropped explicit ports whenever --http was also given).
+    argv, ports, http_port = sys.argv[1:], [], 8642
+    i = 0
+    while i < len(argv):
+        a = argv[i]
         if a.startswith("--http"):
-            http_port = int(a.split("=")[1] if "=" in a else sys.argv[sys.argv.index(a) + 1])
+            if "=" in a:
+                http_port = int(a.split("=", 1)[1])
+            else:
+                i += 1
+                http_port = int(argv[i])
+        else:
+            ports.append(a)
+        i += 1
+    if ports and len(ports) != 2:
+        print(f"need exactly two serial ports (got {len(ports)}): {' '.join(ports)}")
+        return 1
+    ports = ports or DEFAULT_PORTS
 
     print(f"attaching {ports[0]} + {ports[1]} (boards reset on open, ~30 s to READY)")
     for i, p in enumerate(ports):
@@ -315,7 +328,8 @@ def main():
     srv = ThreadingHTTPServer(("127.0.0.1", http_port), Handler)
     print(f"chat bench: http://127.0.0.1:{http_port}/")
     srv.serve_forever()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

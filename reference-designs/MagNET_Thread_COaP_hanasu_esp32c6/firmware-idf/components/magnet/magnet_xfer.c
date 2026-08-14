@@ -21,6 +21,7 @@
 #include "magnet_xfer.h"
 #include "magnet_envelope.h"
 
+#include <stdarg.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -56,6 +57,8 @@
 static struct {
     bool     active;
     bool     accepted;                  /* any STATUS heard for this xid      */
+    bool     peer_bound;                /* peer_id learned from first STATUS  */
+    uint8_t  peer_id[4];                /* authenticated sender of that STATUS*/
     uint16_t xid;
     char     peer[46];
     uint32_t total_len;
@@ -95,8 +98,11 @@ static TimerHandle_t     s_tick = NULL;
 static void tick_cb(TimerHandle_t t) { (void)t; mn_post_xfer_tick(); }
 
 void mn_xfer_init(void) {
-    s_mx = xSemaphoreCreateMutex();
-    s_tick = xTimerCreate("mn_xfer", pdMS_TO_TICKS(X_TICK_MS), pdTRUE, NULL, tick_cb);
+    /* guarded like every other handle in mn_core_init(): a second call must
+     * not orphan a live mutex/timer */
+    if (!s_mx)   s_mx = xSemaphoreCreateMutex();
+    if (!s_tick) s_tick = xTimerCreate("mn_xfer", pdMS_TO_TICKS(X_TICK_MS),
+                                       pdTRUE, NULL, tick_cb);
 }
 
 static void tick_ensure_running(void) {
@@ -104,6 +110,22 @@ static void tick_ensure_running(void) {
 }
 
 /* ---- small helpers (mutex held unless noted) ---- */
+
+/* !XFER_* are class-`xfer` events like every other !EVENT, so `UNSUB xfer`
+ * must silence the whole class — chunk lines AND lifecycle lines. (Before
+ * this, only rx_emit_chunk honoured the mask and the lifecycle events went
+ * out unconditionally via mn_emit_event, which no other class does.) The `#`
+ * lines from `XFER STATUS` are command output, not events, and stay outside
+ * the gate — MODE TERSE governs those. Mirrors magnet_core.c emit_class(). */
+static void xfer_event(const char *fmt, ...) {
+    if (!mn_xfer_ec_enabled()) return;
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    mn_write_line(buf);
+}
 
 static uint16_t tx_chunk_len(uint16_t idx) {
     return (idx == s_tx.total_chunks - 1)
@@ -165,14 +187,14 @@ static int send_abort(const char *dst, uint16_t xid, uint8_t reason) {
 }
 
 static void tx_fail(const char *reason) {
-    mn_emit_event("!XFER_FAIL %04x %s", s_tx.xid, reason);
+    xfer_event("!XFER_FAIL %04x %s", s_tx.xid, reason);
     s_tx.active = false;
 }
 
 static void rx_close(void) { s_rx.active = false; }
 
 static void rx_fail(const char *reason) {
-    mn_emit_event("!XFER_FAIL %04x %s", s_rx.xid, reason);
+    xfer_event("!XFER_FAIL %04x %s", s_rx.xid, reason);
     rx_close();
 }
 
@@ -266,12 +288,12 @@ int mn_xfer_abort(void) {
     int rc = -1;
     if (s_tx.active) {
         send_abort(s_tx.peer, s_tx.xid, 0);
-        mn_emit_event("!XFER_FAIL %04x aborted", s_tx.xid);
+        xfer_event("!XFER_FAIL %04x aborted", s_tx.xid);
         s_tx.active = false;
         rc = 0;
     } else if (s_rx.active) {
         send_abort(s_rx.src, s_rx.xid, 0);
-        mn_emit_event("!XFER_FAIL %04x aborted", s_rx.xid);
+        xfer_event("!XFER_FAIL %04x aborted", s_rx.xid);
         rx_close();
         rc = 0;
     }
@@ -303,8 +325,8 @@ void mn_xfer_status_print(void) {
 static void tx_advance(void) {
     uint16_t n = tx_window_n();
     if ((uint32_t)s_tx.base + n >= s_tx.total_chunks) {
-        mn_emit_event("!XFER_SENT %04x len=%lu", s_tx.xid,
-                      (unsigned long)s_tx.total_len);
+        xfer_event("!XFER_SENT %04x len=%lu", s_tx.xid,
+                   (unsigned long)s_tx.total_len);
         s_tx.active = false;
         return;
     }
@@ -313,7 +335,7 @@ static void tx_advance(void) {
     s_tx.acked = 0;
     s_tx.sent  = 0;
     s_tx.rounds = 0;
-    mn_emit_event("!XFER_NEXT %04x %u", s_tx.xid, s_tx.base);
+    xfer_event("!XFER_NEXT %04x %u", s_tx.xid, s_tx.base);
 }
 
 /* ---- mesh side (pump task) ---- */
@@ -340,6 +362,10 @@ static void on_init(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     uint16_t chunks = get_u16(pl + 7);
     uint16_t clen   = get_u16(pl + 9);
     uint8_t  mlen   = pl[11];
+    /* meta_len is a peer-supplied byte (0..255) but `meta` below is a 65-byte
+     * stack buffer — our own sender clamps to X_META_MAX, a hostile or buggy
+     * channel member need not. Drop the frame like any other malformed one. */
+    if (mlen > X_META_MAX) return;
     if (len < (size_t)12 + mlen) return;
 
     if (s_rx.active) {
@@ -357,7 +383,7 @@ static void on_init(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
          * the stale bitmap over new data): it abandoned the old transfer,
          * its abort may have been lost — supersede instead of answering
          * busy, or a lost X_ABORT wedges this pair for the 30 s window. */
-        mn_emit_event("!XFER_FAIL %04x superseded", s_rx.xid);
+        xfer_event("!XFER_FAIL %04x superseded", s_rx.xid);
         rx_close();
     }
     /* chunk_len bound keeps the !XFER event line inside the 512-char cap */
@@ -386,10 +412,10 @@ static void on_init(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
      * host-protocol line — allow printable-ASCII-no-space only */
     for (uint8_t i = 0; i < mlen; i++)
         if (meta[i] <= 0x20 || meta[i] > 0x7e) meta[i] = '_';
-    mn_emit_event("!XFER_BEGIN %02x%02x%02x%02x %04x %lu %u %u %s",
-                  sender_id[0], sender_id[1], sender_id[2], sender_id[3],
-                  xid, (unsigned long)tlen, chunks, clen,
-                  mlen ? meta : "-");
+    xfer_event("!XFER_BEGIN %02x%02x%02x%02x %04x %lu %u %u %s",
+               sender_id[0], sender_id[1], sender_id[2], sender_id[3],
+               xid, (unsigned long)tlen, chunks, clen,
+               mlen ? meta : "-");
     rx_send_status(XC_PROGRESS);                 /* the accept */
     tick_ensure_running();
 }
@@ -416,9 +442,9 @@ static void on_data(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     rx_emit_chunk(idx, pl + 5, want);
 
     if (s_rx.got == s_rx.total_chunks) {
-        mn_emit_event("!XFER_DONE %02x%02x%02x%02x %04x len=%lu",
-                      s_rx.peer_id[0], s_rx.peer_id[1], s_rx.peer_id[2],
-                      s_rx.peer_id[3], s_rx.xid, (unsigned long)s_rx.total_len);
+        xfer_event("!XFER_DONE %02x%02x%02x%02x %04x len=%lu",
+                   s_rx.peer_id[0], s_rx.peer_id[1], s_rx.peer_id[2],
+                   s_rx.peer_id[3], s_rx.xid, (unsigned long)s_rx.total_len);
         send_status(s_rx.src, s_rx.xid, s_rx.total_chunks, 0, XC_COMPLETE);
         rx_close();
         return;
@@ -429,9 +455,20 @@ static void on_data(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     if (base != s_rx.report_base) rx_send_status(XC_PROGRESS);
 }
 
-static void on_status(const uint8_t *pl, size_t len) {
+static void on_status(const uint8_t sender_id[4], const uint8_t *pl, size_t len) {
     if (len < 14 || !s_tx.active) return;
     if (get_u16(pl + 1) != s_tx.xid) return;
+    /* The xid is a 16-bit random and travels in cleartext inside the channel
+     * AEAD, so any channel member that sees one could otherwise forge a
+     * COMPLETE (host believes a photo landed that never did) or a
+     * REFUSED/BUSY (denial). Bind the outbound session to whoever answers
+     * first and ignore every later STATUS from anyone else. */
+    if (!s_tx.peer_bound) {
+        memcpy(s_tx.peer_id, sender_id, 4);
+        s_tx.peer_bound = true;
+    } else if (memcmp(s_tx.peer_id, sender_id, 4)) {
+        return;
+    }
     uint16_t base = get_u16(pl + 3);
     uint64_t bm   = 0;
     for (int i = 0; i < 8; i++) bm |= ((uint64_t)pl[5 + i]) << (8 * i);
@@ -445,8 +482,8 @@ static void on_status(const uint8_t *pl, size_t len) {
     if (code == XC_BUSY)    { tx_fail("busy");    return; }
     if (code == XC_REFUSED) { tx_fail("refused"); return; }
     if (code == XC_COMPLETE) {
-        mn_emit_event("!XFER_SENT %04x len=%lu", s_tx.xid,
-                      (unsigned long)s_tx.total_len);
+        xfer_event("!XFER_SENT %04x len=%lu", s_tx.xid,
+                   (unsigned long)s_tx.total_len);
         s_tx.active = false;
         return;
     }
@@ -460,11 +497,19 @@ static void on_status(const uint8_t *pl, size_t len) {
     if (s_tx.fill == n && (s_tx.acked & all) == all) tx_advance();
 }
 
-static void on_abort(const uint8_t *pl, size_t len) {
+static void on_abort(const uint8_t sender_id[4], const uint8_t *pl, size_t len) {
     if (len < 3) return;
     uint16_t xid = get_u16(pl + 1);
-    if (s_tx.active && xid == s_tx.xid) tx_fail("peer-abort");
-    if (s_rx.active && xid == s_rx.xid) rx_fail("peer-abort");
+    /* same reasoning as on_status: only the session's own peer may tear it
+     * down. The inbound peer is known from INIT; the outbound one from the
+     * first STATUS (an abort before any STATUS is indistinguishable from the
+     * INIT-retry timeout that already covers it). */
+    if (s_tx.active && xid == s_tx.xid &&
+        s_tx.peer_bound && !memcmp(s_tx.peer_id, sender_id, 4))
+        tx_fail("peer-abort");
+    if (s_rx.active && xid == s_rx.xid &&
+        !memcmp(s_rx.peer_id, sender_id, 4))
+        rx_fail("peer-abort");
 }
 
 void mn_xfer_on_rx(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
@@ -474,8 +519,8 @@ void mn_xfer_on_rx(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     switch (pl[0]) {
     case X_INIT:   on_init(sender_id, pl, len, src_ipv6); break;
     case X_DATA:   on_data(sender_id, pl, len, src_ipv6); break;
-    case X_STATUS: on_status(pl, len);                    break;
-    case X_ABORT:  on_abort(pl, len);                     break;
+    case X_STATUS: on_status(sender_id, pl, len);         break;
+    case X_ABORT:  on_abort(sender_id, pl, len);          break;
     default: break;
     }
     xSemaphoreGive(s_mx);

@@ -1,11 +1,11 @@
 # MagNET Hanasu — ESP-IDF firmware (E-Phase H: Type 6 extended transfer)
 
-**E-H (fw 0.7.0-eh, single-node hardware validation 2026-08-11)** adds the
+**E-H (fw 0.7.0-eh, two-node over-the-air hardware validation 2026-08-11)** adds the
 §11.8 extended transfer — the photo-gap fix (Open Q10) and the last
 unimplemented Must requirement (R7). Type 6 frames carry a 16-bit chunk index
 in the payload, ride **CON unicast only** (the E-B tables killed multicast for
 bulk), and recover via window/NACK bitmaps. The node stays a modem: outbound
-it buffers one 32-chunk window (10.75 KB), inbound it keeps a 512 B bitmap and
+it buffers one 32-chunk window (10.5 KiB), inbound it keeps a 512 B bitmap and
 streams every chunk up the host link as a `!XFER` event — **the host holds the
 file**. New HCP surface: `XFER BEGIN|DATA|ABORT|STATUS`, events `!XFER_BEGIN`
 `!XFER` `!XFER_DONE` `!XFER_NEXT` `!XFER_SENT` `!XFER_FAIL`. Host reference:

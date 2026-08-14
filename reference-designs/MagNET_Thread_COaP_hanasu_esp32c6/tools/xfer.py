@@ -55,6 +55,7 @@ class Receiver:
 
     def __init__(self, node):
         self.chunks = {}
+        self.expect = None               # total chunks, from !XFER_BEGIN
         self.done = queue.Queue()
         node.on("xfer_begin", self._begin)
         node.on("xfer", self._chunk)
@@ -62,6 +63,8 @@ class Receiver:
         node.on("xfer_fail", self.done.put)
 
     def _begin(self, ev):
+        self.chunks = {}                 # a new transfer supersedes any partial
+        self.expect = int(ev.fields[3])
         print(f"recv: from={ev.fields[0]} xid={ev.fields[1]} "
               f"len={ev.fields[2]} chunks={ev.fields[3]} meta={ev.fields[5]}")
 
@@ -73,7 +76,16 @@ class Receiver:
         ev = self.done.get(timeout=timeout)
         if ev.name == "xfer_fail":
             raise RuntimeError(f"transfer failed: {ev.raw}")
-        data = b"".join(self.chunks[i] for i in range(len(self.chunks)))
+        # The node completed, so every chunk reached it — but a `!XFER` line
+        # can still be lost on the HOST link (serial overrun, dropped read).
+        # Check against the announced count: joining range(len(chunks)) would
+        # silently write a truncated file if the missing chunk is the last.
+        if self.expect is None or len(self.chunks) != self.expect:
+            raise RuntimeError(
+                f"chunk event lost on the host link: got {len(self.chunks)} "
+                f"of {self.expect} chunks (missing "
+                f"{sorted(set(range(self.expect or 0)) - set(self.chunks))[:8]})")
+        data = b"".join(self.chunks[i] for i in range(self.expect))
         print(f"recv: DONE {len(data)} B in {len(self.chunks)} chunks")
         return data
 

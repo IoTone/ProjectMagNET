@@ -18,7 +18,7 @@ extern "C" {
 #endif
 
 #define MN_XFER_CHUNK       336   /* b64(336)=448 chars keeps lines under 512 */
-#define MN_XFER_WINDOW      32    /* sender-side buffer, 10.75 KB             */
+#define MN_XFER_WINDOW      32    /* sender-side buffer, 10.5 KiB             */
 #define MN_XFER_MAX_CHUNKS  4096  /* rx bitmap 512 B; ≈1.31 MB max transfer   */
 
 void mn_xfer_init(void);          /* mutex + tick timer (call before radios)  */
