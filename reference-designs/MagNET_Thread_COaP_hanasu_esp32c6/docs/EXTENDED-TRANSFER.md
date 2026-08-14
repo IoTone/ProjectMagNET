@@ -155,7 +155,7 @@ sender's 2.5 s timeout (resend unacked → duplicate chunks drop on the bitmap).
 |---|---|---|
 | `XFER BEGIN <peer-ipv6> <total_len> [<meta>]` | `+OK xid=<hex> chunks=<n> chunk=336 window=32` | READY only; one outbound at a time |
 | `XFER DATA <b64>` | `+OK <buffered>/<window>` | exactly chunk-sized (except final); `-ERR E_BUSY` = window full, wait for `!XFER_NEXT` |
-| `XFER ABORT` | `+OK` | aborts the active outbound (or inbound if none) and tells the peer |
+| `XFER ABORT` | `+OK aborted` | aborts the active outbound (or inbound if none) and tells the peer; `-ERR E_BAD_STATE` if nothing is active |
 | `XFER STATUS` | `# xfer …` lines + `+OK` | both directions' live state |
 
 Events (class `xfer`, SUB/UNSUB as usual):
@@ -166,8 +166,17 @@ Events (class `xfer`, SUB/UNSUB as usual):
 !XFER_DONE <from_id> <xid> len=<n>                       (receiver, complete)
 !XFER_NEXT <xid> <base>                                  (sender: feed next window)
 !XFER_SENT <xid> len=<n>                                 (sender, fully acked)
-!XFER_FAIL <xid> <reason>       reason: timeout|busy|peer-abort|aborted|refused
+!XFER_FAIL <xid> <reason>       (either direction — see the reason table below)
 ```
+
+| `!XFER_FAIL` reason | Side | Meaning |
+|---|---|---|
+| `timeout` | both | sender: 6 INIT tries, or 6 resend rounds, or 30 s idle. receiver: 30 s without a chunk |
+| `busy` | sender | the peer already has an inbound transfer (STATUS code 3) |
+| `refused` | sender | the peer rejected the INIT geometry (STATUS code 2) |
+| `peer-abort` | both | the peer sent X_ABORT for this session |
+| `aborted` | both | this node's own host issued `XFER ABORT` |
+| `superseded` | receiver | the same peer opened a new transfer over this one — its abort was lost, or it restarted |
 
 The receiver auto-accepts (channel membership is the trust boundary, same as
 chat); if a transfer is already inbound it answers STATUS code 3 and the

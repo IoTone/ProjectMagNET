@@ -12,6 +12,10 @@
 # Python
 __pycache__/
 *.pyc
+# The host tools (tools/*.py, tools/chat-bench/, host-sdk/python/) are run from
+# a venv at the repo root — see the chat-bench README. Some venv tools drop a
+# self-ignoring .gitignore inside and some don't; don't rely on that.
+.venv/
 
 # Bench run artifacts: soak logs are per-run machine output, archived by
 # Jenkins (see the Hanasu Jenkinsfile), not source.
