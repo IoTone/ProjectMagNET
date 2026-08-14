@@ -271,7 +271,34 @@ timer callbacks; `role-status` reachable from both REPL and ruler query.
 
 ### P2 — Transports & time
 
-#### H6 — Transport plumbing: one engine, three transports
+#### H6 — Transport plumbing: one engine, three transports ✅ DONE 2026-08-14 (reframed)
+
+**Completed, with the framing corrected by what H2–H5 actually built.** The original
+"three impls behind Wave's `magnet_transport_t` vtable" idea is superseded: the shared
+engine turned out to be the **apply core** (`forth_eval_rollback` + craw_role_bundle's
+verify/persist/lifecycle), and transports simply feed it — Wave's HTTP check-in ✓,
+the hive's ROLE_GRANT→KV fetch ✓, and now **Hanasu**:
+
+- `craw_role_bundle` **0.5.0** sheds its `craw_hive` dependency — the hkv words moved
+  to a new `craw_role_hive_words` component only WiFi-hive nodes carry — making the
+  bundle engine portable to non-WiFi transports.
+- Hanasu gains the full verified pipeline (symlinked `craw_role_bundle` +
+  `magnet_crypto`) and a privileged **`BUNDLE` HCP verb**: `BEGIN | ADD <chunk> |
+  COMMIT | LIST | CLEAR | STOP` (chunked because envelope JSON exceeds
+  `MN_LINE_MAX=512`). COMMIT verifies Ed25519, installs with rollback, persists to
+  NVS; boot re-applies persisted bundles **before** the dev script autorun, so fleet
+  behavior never depends on the unsigned channel. `SCRIPT` stays as the dev
+  convenience it is; **the fleet upgrade path is signed** — Hanasu's Open Question #4
+  is closed for point-to-point delivery (HCP over USB-serial and BLE companion).
+- Deferred, deliberately: Thread-**multicast** bundle broadcast (one COMMIT fanning
+  out mesh-wide) — needs the Type-3 XFER fragmentation path; point-to-point via the
+  companion covers the 4-node bench.
+
+Validated: Hanasu `esp32c6_ble_resident` full build green with install/verify/tick
+symbols in the ELF; Scribe + Camera full rebuilds green on the split components.
+HW gate: `BUNDLE BEGIN/ADD/COMMIT` a signed bundle over hcp.py on the bench.
+
+Original scope:
 
 **Effort: new (two vtable impls).** WaveC6LED's `magnet_transport_t` vtable
 (`include/magnet_transport.h:28-44`, sole impl `transport_ip.c`) was designed for exactly
@@ -296,7 +323,22 @@ is still plaintext with a bearer token in the clear (R1 = HTTPS).
 *Validate*: same signed Eye bundle delivered three ways (HTTP, KV, CoAP) installs
 identically; tampered bundle rejected on all three.
 
-#### H7 — Mesh time ⇄ hive time
+#### H7 — Mesh time ⇄ hive time ✅ DONE 2026-08-14 (ratchet fixed; plumbing deferred with H6's mesh half)
+
+**The stratum ratchet is fixed** per MESH-TIME.md's own design call: persist the
+anchor **role**, never the clock. `TIME SET` marks the node (NVS `t_anchor`); an
+ex-anchor reaching READY with no clock emits `!WARN time-anchor-await-seed` alongside
+its sync request (the app/hcp re-seed on connect, so the loud ask gets answered); if
+it adopts mesh time instead it warns `time-anchor-degraded` exactly once; and hearing
+a *different* stratum-0 announce releases the persisted role (the seed moved — two
+anchors would fight the tie-break forever). MESH-TIME.md updated. The mesh now asks
+for its fix by name instead of ratcheting to MAX_STRATUM in silence.
+
+"Stratum time as a pluggable hive time source" rides with the deferred hive-over-
+Thread work: WiFi hive nodes have SNTP; the need arrives when hive protocol runs on
+Thread segments. HW gate: anchor-reboot cycle on the 4-node bench.
+
+Original scope:
 
 **Effort: move + fix.** The hive's HMAC accepts ±30 s skew and currently leans on SNTP;
 Hanasu's stratum mesh time (`docs/MESH-TIME.md`) delivers ~±1 s with **no NTP at all** —
@@ -401,7 +443,8 @@ Unchanged from the review, plus one addition:
 
 ## 4. First move
 
-~~H1~~ ~~H2~~ ~~H3~~ ~~H4~~ ~~H5~~ ~~H8~~ all **done 2026-08-14** — **Milestone C's
-authoring is complete: all 12 design-section roles exist as firmware or signed
-bundles.** Remaining: **H6/H7** (P2 transports & time), **H9** (small fixes),
-**H10** (craw_* drift), and the bench-hardware gates accumulated along the way.
+~~H1~~ ~~H2~~ ~~H3~~ ~~H4~~ ~~H5~~ ~~H6~~ ~~H7~~ ~~H8~~ all **done 2026-08-14**.
+**Milestone C complete; signed code delivery now spans WiFi-hive, HTTP-OTA, and
+Hanasu's HCP/BLE — one apply engine under all three.** Remaining: **H9** (small
+fixes), **H10** (craw_* drift), the deferred Thread-multicast broadcast, and the
+bench-hardware gates accumulated along the way.
