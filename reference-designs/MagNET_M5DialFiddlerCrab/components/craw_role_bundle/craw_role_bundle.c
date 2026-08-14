@@ -338,12 +338,22 @@ int craw_role_bundle_install_from_json(const char *json,
         cJSON_Delete(env); return BUNDLE_ERR_AUTHOR;
     }
 
-    /* Canonical signing input */
-    char to_sign[6 * 1024];
+    /* Canonical signing input — HEAP, not stack: it runs to 6 KB, and the
+     * install may be called from a modest-stack task (Hanasu's mn_link
+     * dispatcher hit a stack-protection fault here on the first hardware
+     * BUNDLE COMMIT, 2026-08-14). Freed right after the signature check —
+     * nothing later needs it. */
+    const size_t to_sign_cap = 6 * 1024;
+    char *to_sign = malloc(to_sign_cap);
+    if (!to_sign) {
+        set_status(result, BUNDLE_ERR_INTERNAL, "alloc");
+        cJSON_Delete(env); return BUNDLE_ERR_INTERNAL;
+    }
     int n = craw_role_bundle_signing_input(name, version, min_proto, author,
                                            crc32_hex, src_b64,
-                                           to_sign, sizeof(to_sign));
+                                           to_sign, to_sign_cap);
     if (n < 0) {
+        free(to_sign);
         set_status(result, BUNDLE_ERR_INTERNAL, "signing_input");
         cJSON_Delete(env); return BUNDLE_ERR_INTERNAL;
     }
@@ -361,6 +371,7 @@ int craw_role_bundle_install_from_json(const char *json,
     } else {
         sig_ok = verify_hmac_sha256(trust->key, trust->key_len, to_sign, sig_hex) == 0;
     }
+    free(to_sign);
     if (!sig_ok) {
         ESP_LOGW(TAG, "bundle '%s' signature mismatch (%s)", name, sig_alg);
         set_status(result, BUNDLE_ERR_SIG, "sig");
@@ -393,8 +404,13 @@ int craw_role_bundle_install_from_json(const char *json,
         set_status(result, BUNDLE_ERR_PARSE, "crc32");
         cJSON_Delete(env); return BUNDLE_ERR_PARSE;
     }
-    /* esp_rom_crc32_le: standard CRC-32 (poly 0xEDB88320 reflected). Init UINT32_MAX, XOR-out UINT32_MAX. */
-    uint32_t actual_crc = ~esp_rom_crc32_le(0xffffffff, src, src_len);
+    /* esp_rom_crc32_le(seed=0, ...) IS standard CRC-32 (zlib.crc32): the ROM
+     * routine does the ~seed pre-condition and final inversion internally.
+     * The old ~esp_rom_crc32_le(0xffffffff, ...) double-inverted — caught by
+     * the first real on-device install (BUNDLE COMMIT, 2026-08-14): sig
+     * valid, CRC "mismatch" ad964baa vs zlib's 6701582f, reproduced exactly
+     * by modeling the double inversion. */
+    uint32_t actual_crc = esp_rom_crc32_le(0, src, src_len);
     if (actual_crc != want_crc) {
         ESP_LOGW(TAG, "crc32 mismatch: want 0x%08" PRIx32 " got 0x%08" PRIx32,
                  want_crc, actual_crc);

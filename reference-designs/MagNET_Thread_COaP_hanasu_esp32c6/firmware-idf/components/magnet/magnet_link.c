@@ -124,7 +124,7 @@ static int bundle_print_cb(const char *name, const char *version, void *ctx) {
 /* ---- HCP command handling ---- */
 static void emit_caps(const char *tag) {
     respond(tag,
-        "+OK proto=2.1 fw=0.7.0-eh maxline=512 "
+        "+OK proto=2.1 fw=" MN_FW_VERSION " maxline=512 "
         "transports=usbcdc verbs=STATUS,CAPS,HELP,PING,CHAT,DM,PEERS,RECENT,WHOAMI,NAME,"
         "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH,TIME,XFER,BUNDLE"
 #if MN_ENABLE_BOTS
@@ -658,5 +658,5 @@ void mn_link_start(mn_getc_fn g, mn_putc_fn p) {
     s_putc = p;
     mn_core_set_putc(p);             /* serialized writer uses the same putc */
     forth_set_io(forth_in, forth_out);
-    xTaskCreate(dispatcher_task, "mn_link", 4096, NULL, 5, NULL);
+    xTaskCreate(dispatcher_task, "mn_link", 8192, NULL, 5, NULL);   /* 8K: BUNDLE COMMIT runs cJSON + Ed25519 + forth eval here (H6) */
 }
