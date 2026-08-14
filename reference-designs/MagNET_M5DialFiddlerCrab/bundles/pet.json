@@ -1,0 +1,15 @@
+{
+  "name": "pet",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [
+    "kv-store"
+  ],
+  "deps": [],
+  "crc32": "74277b7c",
+  "sig_alg": "ed25519",
+  "sig": "ec0019b5cab7538d9df8601084996ecbf51d72c03dbeb5a730b4630f79f0a2c44b2a0b5c35f9bc326083bc4c4a442d00e6b57daac7f57a5ff868573144068d0d",
+  "src_b64": "XCBSb2xlIDg6IFBldCDigJQgdGhlIHJ1bGVyJ3MgY3V0ZSBhbmltYWwuIEJhcmtzIG9uIGNvbW1hbmQ7IGJhcmtpbmcgYXQKXCBzdHJhbmdlcnMgYXJyaXZlcyB3aXRoIGhpdmUgcGVlci1ldmVudCBGRkkgKGZ1dHVyZSkuClwgSG9zdDogYW55IENhcHN1bGUgU2NyaWJlIChidXp6ICsgaGl2ZSB3b3JkcykuClwgY2Fwc19yZXE6IFsia3Ytc3RvcmUiXSAgdGlja19tczogMTUwMAo6IGJhcmsgICAgICAgIDcwMCA5MCBidXp6ICA1MDAgMTIwIGJ1enogOwo6IHJvbGUtaW5pdCAgIGJhcmsgIHMiIHRhbWUiIHMiIHBldDpzdGF0ZSIgaGt2LXB1dCQgOwo6IHJvbGUtdGljayAgIHMiIHBldDpjbWQiIGhrdi1ydW4gOwo6IHJvbGUtc3RhdHVzIC4iIHBldDogd29vZiAocGV0OmNtZCkiIGNyIDsK",
+  "tick_ms": 1500
+}

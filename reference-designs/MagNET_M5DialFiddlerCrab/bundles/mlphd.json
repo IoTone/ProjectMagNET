@@ -1,0 +1,12 @@
+{
+  "name": "mlphd",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [],
+  "deps": [],
+  "crc32": "976620ca",
+  "sig_alg": "ed25519",
+  "sig": "08d2263ed1376b1f678b09ceb73cc53fae1698f0fe4562c9c0b5d57aa36bda579ea2daa4b71256bb055850fc8adb2f860385e8d0e4709939a943891bf487ed06",
+  "src_b64": "XCBSb2xlIDk6IE1MIFBoRCDigJQgZGVzaWducyByb2xlIG1vZGlmaWNhdGlvbnMgZm9yIHJ1bGVyL3NjcmliZSByZXZpZXcuClwgVGhlIGRlc2lnbiB3b3JrIGhhcHBlbnMgb2ZmLW5vZGUgKHNpZ25fYnVuZGxlLnB5IGlzIGl0cyBsYWIgYmVuY2gpOwpcIG9uLW5vZGUgaXQgb2JzZXJ2ZXMgYW5kIHJlcG9ydHMuIE5vIHJvbGUtdGljazogbm90aGluZyBwZXJpb2RpYyB5ZXQuClwgY2Fwc19yZXE6IFtdCjogcm9sZS1pbml0ICAgcyIgb2JzZXJ2aW5nIiBzIiBtbHBoZDpzdGF0ZSIgaGt2LXB1dCQgOwo6IHJvbGUtc3RhdHVzIC4iIG1scGhkIG9ic2VydmluZyB0aGUgaGl2ZSIgY3IgOwo="
+}

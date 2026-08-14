@@ -1,0 +1,15 @@
+{
+  "name": "beeper",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [
+    "kv-store"
+  ],
+  "deps": [],
+  "crc32": "e592d542",
+  "sig_alg": "ed25519",
+  "sig": "146f1210602899c56462217fbe5671123293f9117e7a46bd310312f00ca86d5a61292f48b93782f7c7f9633612b0fd50ab17ae8320f36fccfd6baf59c7683303",
+  "src_b64": "XCBSb2xlIDU6IEJlZXBlciDigJQgbGlnaHRzIHVwIG9yIG1ha2VzIGEgbm9pc2Ugd2hlbiBhc2tlZC4KXCBDb21tYW5kcyBhcmUgRm9ydGggcGhyYXNlcyBpbiBiZWVwZXI6Y21kLCBlLmcuICIxMjAwIDEwMCBidXp6Ii4KXCBIb3N0OiBhbnkgQ2Fwc3VsZSBTY3JpYmUgKGJ1enogKyBoaXZlIHdvcmRzKS4KXCBjYXBzX3JlcTogWyJrdi1zdG9yZSJdICB0aWNrX21zOiAxMDAwCjogY2hpcnAgICAgICAgMTUwMCA0MCBidXp6ICAyMjAwIDYwIGJ1enogOwo6IHJvbGUtaW5pdCAgIGNoaXJwIDsKOiByb2xlLXRpY2sgICBzIiBiZWVwZXI6Y21kIiBoa3YtcnVuIDsKOiByb2xlLXN0YXR1cyAuIiBiZWVwZXIgYXJtZWQgb24gYmVlcGVyOmNtZCIgY3IgOwo=",
+  "tick_ms": 1000
+}

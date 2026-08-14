@@ -315,7 +315,40 @@ exactly what Thread-only or AP-less hive segments need. Two work items:
 
 ### P3 — Authoring & hygiene
 
-#### H8 — Author the 8 role bundles
+#### H8 — Author the 8 role bundles ✅ DONE 2026-08-14 (Milestone C authoring complete)
+
+**Completed — all 12 roles now have running code or a signed bundle.** Eight new
+bundles authored in the H5 lifecycle, Ed25519-signed v0.1.0: **eye** (camera host,
+tick 5000 — capture + publish `eye:last`), **worker** (`worker:task` via `hkv-run`),
+**parrot** (`parrot:say` → `parrot:echo`), **beeper** (Scribe host, `buzz` +
+`beeper:cmd`), **pet** (barks on `pet:cmd`), **warrior** (`warrior:order`, publishes
+`warrior:state`), **mlphd** (observes; no tick), **boombox** (composed `sos` from
+`tone`/`sleep`, `boombox:forth` channel). Two enablers surfaced during authoring:
+
+1. **The nodes' `kv-get`/`kv-put` Forth words are interactive** — they prompt on the
+   console, so no tick could ever poll KV. Fixed once in craw_role_bundle 0.4.0:
+   stack-based `hkv-put$` / `hkv-get$` / `hkv-run` (clear-then-eval = at-most-once
+   Forth-phrase commands — the generalized boombox:cmd pattern), registered by all
+   five bundle-capable mains.
+2. **The Camera had no bundle pipeline at all** — the Eye's host couldn't install
+   bundles. Ported the Scribe's grant→fetch→install→report worker to it (plus
+   `craw_role_bundle` and `magnet_crypto` symlinks, `apply_saved` at boot).
+
+Traps: stub core has `!`/`@` but **no `+!`** (host-eval caught it; linter core-list
+fixed); the hkv value buffer is capped at 256 B because the full 3 KB static
+overflowed the classic-ESP32 camera's DRAM by 2.2 KB. Validation: Pop-11 bundle
+linter (`bl_check`) — 11/11 bundles' external words verified against their hosts'
+actual FFI registrations; host-eval harness — 11/11 bundles install and run
+`role-init`/`role-tick`/`role-status` through the real engine with fleet stubs; all
+11 envelope signatures C-verified VALID against the firmware pubkey; builds green on
+Camera (classic ESP32), Scribe S3, Boombox S3. Known v0.1 thinness (documented in
+each bundle): parrot re-echoes until the ruler clears `parrot:say` (no string-compare
+word yet); pet/warrior autonomous behavior awaits peer-event FFI.
+
+HW gate: grant eye → camera and worker → any node on the bench; watch
+`applied:<id>` land and ticks flow.
+
+Original scope:
 
 **Effort: new — and now genuinely just authoring**, once H5 lands. Order: **Eye first**
 (Role 11) — it feeds the Milk-V Duo / M5Stamp C3U sidecar work, its `role-tick` shape is
@@ -368,6 +401,7 @@ Unchanged from the review, plus one addition:
 
 ## 4. First move
 
-~~H1~~ ~~H2~~ ~~H3~~ ~~H4~~ ~~H5~~ all **done 2026-08-14** — P0 and P1 complete.
-Next: **H8** (author the roles — now purely an authoring exercise, Eye first) or
-**H6/H7** (transports & time). H10 (craw_* drift) can proceed in parallel any time.
+~~H1~~ ~~H2~~ ~~H3~~ ~~H4~~ ~~H5~~ ~~H8~~ all **done 2026-08-14** — **Milestone C's
+authoring is complete: all 12 design-section roles exist as firmware or signed
+bundles.** Remaining: **H6/H7** (P2 transports & time), **H9** (small fixes),
+**H10** (craw_* drift), and the bench-hardware gates accumulated along the way.

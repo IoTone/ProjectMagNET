@@ -203,6 +203,22 @@ property that makes a bundle safe to hot-swap.
 Top-level execution at install time still works but is discouraged — put install-time
 behavior in `role-init`, where a failure is rolled back and reported.
 
+### Hive KV words for bundles (H8)
+
+The per-node `kv-get` / `kv-put` REPL words are interactive (they prompt on the
+console) and would hang a `role-tick`. Bundles use the stack-based trio instead,
+registered by `craw_role_bundle_register_hive_words()` on every bundle-capable node:
+
+| Word | Stack effect | Semantics |
+|---|---|---|
+| `hkv-put$` | `( v-addr v-len k-addr k-len -- )` | Fire-and-forget KV_PUT |
+| `hkv-get$` | `( k-addr k-len -- v-addr v-len -1 \| 0 )` | Value into a static buffer (≤ 256 bytes — DRAM-tight hosts; longer values truncate) |
+| `hkv-run` | `( k-addr k-len -- )` | Fetch; if non-empty: **clear the key, then evaluate the value as Forth** — at-most-once command execution. The generalized `boombox:cmd` pattern: hive commands are Forth phrases. |
+
+`hkv-run` is what makes Worker/Beeper/Pet/Warrior one-liners: the Ruler leaves a
+Forth phrase in the role's command key (`s" 1200 100 buzz" s" beeper:cmd" hkv-put$`
+from any node, or `kv-set` on the ruler), and the role's next tick executes it.
+
 ## Versioning the format itself
 
 The bundle format is versioned by `min_proto` (currently 1). Format-breaking changes (new required fields, alg changes that drop old support) bump this number; old nodes refuse new bundles cleanly with `BUNDLE_ERR_PROTO`.

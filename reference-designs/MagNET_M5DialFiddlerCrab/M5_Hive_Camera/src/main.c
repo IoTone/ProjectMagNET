@@ -45,6 +45,7 @@
 #include "craw_wifi.h"
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
+#include "craw_role_bundle.h"
 #include "craw_camera.h"
 #include "../../include/magnet_gen.h"
 
@@ -329,6 +330,68 @@ static void derive_ids(void) {
     snprintf(node_id,  sizeof(node_id),  "MagNET-biologic-%02x%02x", mac[4], mac[5]);
 }
 
+/* -------- Role-bundle install pipeline (H8: the Eye lands here) --------
+ * Same worker pattern as the Scribes: the grant callback runs on the hive
+ * receive loop and must not block, so fetching + installing happens on a
+ * short-lived task. */
+typedef struct {
+    char bundle_key[CRAW_HIVE_KV_KEY_MAX + 1];
+    char role[CRAW_HIVE_ROLE_MAX + 1];
+} bundle_install_job_t;
+
+#define N_NODE_CAPS 2   /* CAPS = {"camera","jpeg",NULL} */
+
+static void bundle_install_worker(void *arg) {
+    bundle_install_job_t *job = (bundle_install_job_t *)arg;
+    char *json_buf = malloc(CRAW_HIVE_KV_VALUE_MAX + 1);
+    if (!json_buf) {
+        uprint("\r\n[bundle] worker malloc failed\r\n");
+        free(job); vTaskDelete(NULL); return;
+    }
+    uprintf("\r\n[bundle] fetching %s for role=%s...\r\n", job->bundle_key, job->role);
+    int rc = craw_hive_node_kv_get(job->bundle_key, json_buf,
+                                   CRAW_HIVE_KV_VALUE_MAX + 1, 5000);
+    if (rc == 0) {
+        craw_role_bundle_install_result_t result = {0};
+        int irc = craw_role_bundle_install_from_json(json_buf, CAPS, N_NODE_CAPS,
+                                                     &result);
+        if (irc == BUNDLE_OK) {
+            uprintf("[bundle] '%s' v%s installed (%u bytes src)\r\n",
+                    result.info.name, result.info.version,
+                    (unsigned)result.info.src_len);
+        } else {
+            uprintf("[bundle] install failed rc=%d field='%s'\r\n",
+                    irc, result.err_field);
+        }
+        /* H4: report the outcome into the hive KV so the ruler can tell a
+         * node RUNNING a role from one that failed to install it. */
+        {
+            char akey[CRAW_HIVE_KV_KEY_MAX + 1], aval[192];
+            snprintf(akey, sizeof(akey), "applied:%.24s", node_id);
+            if (craw_role_bundle_format_applied_json(&result, job->role,
+                                                     aval, sizeof(aval)) == 0)
+                craw_hive_node_kv_put(akey, aval);
+        }
+    } else {
+        uprintf("[bundle] kv-get '%s' failed rc=%d\r\n", job->bundle_key, rc);
+    }
+    free(json_buf); free(job); vTaskDelete(NULL);
+}
+
+static void on_role_grant(const char *role, const char *bundle_key,
+                          const char *scribe, void *ctx) {
+    (void)ctx; (void)scribe;
+    uprintf("\r\n[ROLE_GRANT] role=%s bundle=%s\r\n",
+            role, bundle_key ? bundle_key : "(none)");
+    if (!bundle_key) return;
+    bundle_install_job_t *job = malloc(sizeof(*job));
+    if (!job) return;
+    snprintf(job->role, sizeof(job->role), "%s", role);
+    snprintf(job->bundle_key, sizeof(job->bundle_key), "%s", bundle_key);
+    if (xTaskCreate(bundle_install_worker, "bundle", 6144, job, 3, NULL) != pdPASS)
+        free(job);
+}
+
 static void maybe_start_hive(void) {
     if (hive_started) return;
     if (!craw_wifi_is_connected()) return;
@@ -346,6 +409,8 @@ static void maybe_start_hive(void) {
         .secret         = secret_copy,
         .on_state       = on_hive_state,
         .on_state_ctx   = NULL,
+        .on_role_grant  = on_role_grant,
+        .on_role_grant_ctx = NULL,
     };
     if (craw_hive_node_start(&ncfg) == 0) {
         hive_started = true;
@@ -642,6 +707,12 @@ void app_main(void) {
     /* Forth */
     forth_init(FORTH_HEAP_SIZE);
     register_forth_words();
+    craw_role_bundle_register_hive_words();   /* hkv-put$/hkv-get$/hkv-run */
+    craw_role_bundle_init();
+    {
+        int reapplied = craw_role_bundle_apply_saved(CAPS, N_NODE_CAPS);
+        if (reapplied > 0) uprintf("[bundle] %d persisted bundle(s) re-applied\r\n", reapplied);
+    }
     uprintf("Free heap: %lu bytes\r\n", (unsigned long)esp_get_free_heap_size());
 
     xTaskCreate(housekeeping_task, "keep", 6144, NULL, 3, NULL);

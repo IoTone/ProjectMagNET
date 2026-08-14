@@ -950,6 +950,7 @@ void app_main(void) {
 
     forth_init(FORTH_HEAP_SIZE);
     register_forth_words();
+    craw_role_bundle_register_hive_words();   /* hkv-put$/hkv-get$/hkv-run */
     uprintf("Forth ready. Free heap: %lu bytes\r\n",
             (unsigned long)esp_get_free_heap_size());
 
