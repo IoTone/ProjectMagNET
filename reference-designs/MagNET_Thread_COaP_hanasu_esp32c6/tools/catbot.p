@@ -317,6 +317,7 @@ define cb_maybe_initiate();
         cb_pick(cb_moods) -> cb_mood;
         lvars cmd = cb_lookup(cb_mood, cb_mood_leds);
         if cmd then cb_send_raw(cmd) endif;           ;;; mood on the pixel
+        cb_log('# mood -> ' sys_>< cb_mood);
         now + 300 + cb_rand(300) -> cb_next_mood;     ;;; drift every 5-10 min
     endif;
     if now >= cb_next_init and cb_may_speak(false) then

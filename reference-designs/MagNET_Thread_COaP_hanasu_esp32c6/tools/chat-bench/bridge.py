@@ -10,6 +10,10 @@ Wraps a MagnetNode (host-sdk) around each serial port and exposes:
                       bridge clock (one clock ⇒ honest cross-node latency)
     POST /send        {"node": i, "text": "..."} → CHAT on that node;
                       responds {"ok": true, "ts": <bridge time before write>}
+    POST /cmd         {"node": i, "line": "<verb …>"} → run one HCP command
+                      (LED, NAME, STATS, …); responds {"ok", "body", "ts"}.
+                      This is the driver-facing surface: hosts like the
+                      catbot own NO serial — the bridge is the sole owner.
     POST /sendphoto   {"node": i, "to": j, "name": "x.jpg", "data": "<b64>"} →
                       Type 6 transfer to node j's ML-EID ("to" may be omitted
                       on a two-node bench: the other node is implied). Responds
@@ -299,6 +303,25 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if self.path == "/cmd":
+            n = int(self.headers.get("Content-Length", 0))
+            req = json.loads(self.rfile.read(n))
+            i, line = int(req["node"]), str(req["line"])[:400]
+            ts = time.time()
+            try:
+                body = nodes[i].command(line)
+                rsp = {"ok": True, "body": body, "ts": ts}
+            except HCPError as e:
+                rsp = {"ok": False, "err": e.code, "ts": ts}
+            except Exception as e:
+                rsp = {"ok": False, "err": str(e), "ts": ts}
+            out = json.dumps(rsp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
             return
         if self.path != "/send":
             self.send_error(404)
