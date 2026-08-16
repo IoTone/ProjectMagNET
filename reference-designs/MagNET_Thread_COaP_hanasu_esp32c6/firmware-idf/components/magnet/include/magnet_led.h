@@ -28,6 +28,10 @@ int  mn_led_init(void);                          /* 0 on success, else esp_err *
 int  mn_led_ok(void);                            /* 1 once init succeeded */
 int  mn_led_last(void);                          /* last transmit rc (0 = ok) */
 void mn_led_set(uint8_t r, uint8_t g, uint8_t b);
+/* colour + rhythm: period_ms 0 = solid, else 50%-duty strobe. The bench
+ * NanoC6 case is blue-tinted translucent plastic — hue alone is ambiguous
+ * through it, so meaning rides on the blink rate first, colour second. */
+void mn_led_pattern(uint8_t r, uint8_t g, uint8_t b, uint32_t period_ms);
 
 #else
 
@@ -36,6 +40,8 @@ static inline int  mn_led_ok(void)   { return 0; }
 static inline int  mn_led_last(void) { return 0; }
 static inline void mn_led_set(uint8_t r, uint8_t g, uint8_t b)
     { (void)r; (void)g; (void)b; }
+static inline void mn_led_pattern(uint8_t r, uint8_t g, uint8_t b, uint32_t p)
+    { (void)r; (void)g; (void)b; (void)p; }
 
 #endif /* MN_ENABLE_LED */
 #endif /* MAGNET_LED_H */

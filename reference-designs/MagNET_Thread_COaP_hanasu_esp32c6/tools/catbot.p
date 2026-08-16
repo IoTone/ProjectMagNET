@@ -115,13 +115,15 @@ enddefine;
 
 vars cb_mood = 'purr';
 
-;;; mood -> on-board LED colour (fw >= esp32c6_ble_led; older firmware
-;;; answers -ERR E_UNSUPPORTED per change, which the driver logs and ignores)
+;;; mood -> on-board LED colour + rhythm (fw >= esp32c6_ble_led; older fw
+;;; answers -ERR E_UNSUPPORTED per change, which the driver logs and ignores).
+;;; Rhythm first, colour second: the NanoC6's blue case muddies hue but not
+;;; blink rate (bench-verified: red @ 1 Hz reads clearly through the case).
 vars cb_mood_leds = [
-    ['purr'    'LED 255 120 30']       ;;; warm white
-    ['hongry'  'LED 255 60 0']         ;;; amber
-    ['slepy'   'LED 40 0 0']           ;;; dim red
-    ['zoomies' 'LED 0 180 120']        ;;; charged teal
+    ['purr'    'LED 255 120 30']         ;;; warm white, solid — content
+    ['hongry'  'LED 255 60 0 1000']      ;;; amber, 1 Hz — wants something
+    ['slepy'   'LED 120 0 0 3000']       ;;; red, slow breathe-ish — napping
+    ['zoomies' 'LED 0 255 180 300']      ;;; cyan, fast — chaos
 ];
 
 define catify(s) -> out;

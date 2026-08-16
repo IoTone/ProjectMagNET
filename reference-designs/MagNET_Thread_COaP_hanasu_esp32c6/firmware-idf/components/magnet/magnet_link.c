@@ -159,7 +159,8 @@ static void emit_help(const char *tag) {
     mn_write_line("#            BOTMODE [<id>|OFF]  (no arg lists bots; Forth: `0 botmode`)");
 #endif
 #if MN_ENABLE_LED
-    mn_write_line("#            LED <r> <g> <b> | OFF  (0-255; on-board LED; Forth: `led!`)");
+    mn_write_line("#            LED <r> <g> <b> [<period-ms>] | OFF  (0-255; strobe if period;");
+    mn_write_line("#              Forth: `led!` solid, `led-pat!` with period)");
 #endif
     mn_write_line("#            FACTORY RESET CONFIRM  (erases everything, reboots)");
     mn_write_line("# FORTH drops into the Forth REPL; type  .hcp  to return.");
@@ -275,9 +276,10 @@ static void handle_hcp_line(char *line) {
         else respond(tag, "+OK");
     }
     else if (!strcmp(verb, "LED")) {
-        /* LED <r> <g> <b>   → set the on-board LED (0-255 per channel;
-         * LED OFF          → same as LED 0 0 0
-         * plain-LED boards light on any nonzero channel) */
+        /* LED <r> <g> <b> [<period-ms>] → on-board LED; optional 50%-duty
+         * strobe (period clamped 100..10000 ms, 0/absent = solid).
+         * LED OFF → dark. Colour+rhythm on purpose: the NanoC6's blue case
+         * muddies hue, so the blink rate carries the meaning. */
         if (!MN_ENABLE_LED) {
             respond_err(tag, "E_UNSUPPORTED", "not built with MN_ENABLE_LED=1");
             return;
@@ -286,15 +288,19 @@ static void handle_hcp_line(char *line) {
             respond_err(tag, "E_INTERNAL", "led init failed (see boot '# led:' line)");
             return;
         }
-        int r = 0, g = 0, b = 0;
+        int r = 0, g = 0, b = 0, ms = 0;
         if (*rest != '\0' && strcasecmp(rest, "OFF") != 0) {
-            if (sscanf(rest, "%d %d %d", &r, &g, &b) != 3
-                    || r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255) {
-                respond_err(tag, "E_SYNTAX", "LED <r> <g> <b> (0-255) | OFF");
+            int n = sscanf(rest, "%d %d %d %d", &r, &g, &b, &ms);
+            if (n < 3 || r < 0 || r > 255 || g < 0 || g > 255
+                    || b < 0 || b > 255 || ms < 0) {
+                respond_err(tag, "E_SYNTAX",
+                            "LED <r> <g> <b> [<period-ms>] | OFF");
                 return;
             }
+            if (ms > 0 && ms < 100)   ms = 100;
+            if (ms > 10000)           ms = 10000;
         }
-        mn_led_set((uint8_t)r, (uint8_t)g, (uint8_t)b);
+        mn_led_pattern((uint8_t)r, (uint8_t)g, (uint8_t)b, (uint32_t)ms);
         if (mn_led_last() != 0) {
             char msg[40];
             snprintf(msg, sizeof msg, "rmt transmit rc=%d", mn_led_last());

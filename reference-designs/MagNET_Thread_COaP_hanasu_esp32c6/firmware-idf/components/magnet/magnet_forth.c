@@ -124,6 +124,14 @@ static void w_led_store(void) {
     intptr_t b = forth_pop(), g = forth_pop(), r = forth_pop();
     mn_led_set((uint8_t)(r & 255), (uint8_t)(g & 255), (uint8_t)(b & 255));
 }
+/* led-pat! ( r g b period-ms -- )  colour + 50%-duty strobe; 0 = solid */
+static void w_led_pattern(void) {
+    intptr_t ms = forth_pop();
+    intptr_t b = forth_pop(), g = forth_pop(), r = forth_pop();
+    if (ms < 0) ms = 0;
+    mn_led_pattern((uint8_t)(r & 255), (uint8_t)(g & 255),
+                   (uint8_t)(b & 255), (uint32_t)ms);
+}
 #endif
 
 /* mn-state ( -- n )  push current lifecycle state enum */
@@ -221,6 +229,7 @@ void mn_register_forth_vocab(void) {
     forth_register_word("gpio-set",      w_gpio_set);
 #if MN_ENABLE_LED
     forth_register_word("led!",          w_led_store);
+    forth_register_word("led-pat!",      w_led_pattern);
 #endif
     forth_register_word("mn-time!",      w_mn_time);
     forth_register_word("mn-now",        w_mn_now);
