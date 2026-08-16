@@ -113,6 +113,9 @@ def main():
     ap.add_argument('--hours', type=float, default=6.0)
     ap.add_argument('--chat-secs', type=float, default=60.0)
     ap.add_argument('--sample-mins', type=float, default=10.0)
+    ap.add_argument('--skip', default='',
+                    help='comma-separated port substrings to leave alone '
+                         '(e.g. a node another harness is driving)')
     ap.add_argument('--expect-nodes', type=int, default=0,
                     help='fail fast unless exactly this many nodes are found')
     ap.add_argument('--gate', action='store_true',
@@ -134,7 +137,9 @@ def main():
         print(line, flush=True)
         logf.write(line + '\n')
 
-    nodes = [Node(p) for p in hcp.ports()]
+    skips = [s for s in a.skip.split(',') if s]
+    nodes = [Node(p) for p in hcp.ports()
+             if not any(s in p for s in skips)]
     if len(nodes) < 2:
         sys.exit(f'need >=2 nodes, found {len(nodes)}')
     if a.expect_nodes and len(nodes) != a.expect_nodes:
