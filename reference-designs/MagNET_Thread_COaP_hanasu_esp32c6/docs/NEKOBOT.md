@@ -170,10 +170,12 @@ traffic added to chat-rate soak traffic cost the mesh nothing measurable.
 
 The long run was segmented by two external events, both instructive:
 
-1. **Hub power loss at 5 h 34 m** — the bench USB hub cut power ≈5½ h into
-   sustained use (second occurrence; see bench report). Nodes rebooted
-   (reset-reason=POWERON), NVS kept the bot node's name and channel, the
-   mesh re-formed in seconds, and the bot resumed after a bridge restart.
+1. **Bench power interruption at 5 h 34 m** — all four USB ports dropped and
+   the nodes rebooted (reset-reason=POWERON). Initially read as a failing
+   hub, later corrected: the operator had previously detached the hub to
+   move the laptop, so there is no evidence of a hub fault. Either way the
+   recovery story holds: NVS kept the bot node's name and channel, the mesh
+   re-formed in seconds, and the bot resumed after a bridge restart.
 2. **Probe collision** — an `hcp.py` status sweep against the bridge-held
    port killed the bridge (§2.1). Now a documented ground rule.
 
@@ -216,7 +218,54 @@ overpowered for a 0.2 s tick. Gaps encountered and their idioms: no JSON
 `sys_obey_linerep`), `sys_input_waiting` false on FIFOs (FIONREAD ioctl),
 device writes need `sysflush`.
 
-## 5. Future work
+## 5. Running catbot v2 (operations)
+
+Everything below assumes the 4-node bench on USB and the chat-bench bridge
+sources in `tools/chat-bench/`. One command runs the whole rig:
+
+```sh
+tools/catbot_run.sh                      # 1-hour session
+tools/catbot_run.sh 21600 --traffic --photos   # 6 h, with company + photo turns
+tools/catbot_run.sh 300 --bot neko       # 5-minute smoke
+```
+
+What it does, in order:
+
+1. **Bridge** — reuses a bridge already serving `:8642`, else starts
+   `tools/chat-bench/bridge.py` on every port `hcp.py list` reports (this
+   open resets the boards; allow ~30 s before the first named snapshots).
+   The browser view at <http://127.0.0.1:8642/> works throughout the run.
+2. **Event pipeline** — `curl -sN /events | jq` filtered to a TSV file in
+   `tools/logs/`; this is what the bot's `cb_pump` tails.
+3. **Company (optional)** — `--traffic` starts `catbot_traffic.py`
+   (rotating intent-baited chats at the bot from every other pane, ~2 min
+   cadence); `--photos` starts `catbot_photoloop.py` (a ~48 KB Type 6 photo
+   from the bot to a rotating peer, first at 15 min then 2-hourly). Both
+   discover the bot's pane by `STATUS` name — nothing is hard-coded to a
+   node index.
+4. **The bot** — a `popsession` named `catbot` loads `tools/catbot.p` then
+   `tools/catbot_bridge.p` (order matters: v2 overrides v1's transport) and
+   runs in the foreground for the requested seconds.
+5. **Verdict** — transcript + `# v2 REPORT` lines land in
+   `tools/logs/catbot-<stamp>.log`; the script exits 0 iff the run ended
+   with `misses=0`. Everything the script started is killed on exit; a
+   bridge it merely reused is left running.
+
+Dependencies: PlatformIO penv python (pyserial), `jq`, `curl`, and the
+pop11 skill's `popsession` (path override: `POPSESSION=…`; python override:
+`PIO_PY=…`). The node needs no special build for conversation; the mood →
+LED pattern feature wants an `MN_ENABLE_LED` build (`esp32c6_ble_led`) and
+degrades to logged `-ERR E_UNSUPPORTED` without one.
+
+Ground rules: nothing else may touch a serial port the bridge holds (no
+`hcp.py` against a held port — it kills the holder), and only one catbot
+session per bench (the popsession name is machine-global).
+
+Reference run (2026-08-16, 4 h 50 m, `--traffic --photos`): 888/888
+deliveries, latency avg 57 ms / max 154 ms, 3/3 photo transfers (~10.5 s
+each), 0 errors, 40 mood/LED changes.
+
+## 6. Future work
 
 - **Bridge-native driver** (plan of record): layer 3 over chat-bench
   HTTP/SSE; browser panes show the conversation live; latency stamps in the

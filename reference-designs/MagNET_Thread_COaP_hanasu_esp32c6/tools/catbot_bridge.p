@@ -211,7 +211,9 @@ define catbot2_open(evpath, selfname, logpath);
     ;;; find our node index from the info snapshots in the event stream
     sysopen(evpath, 0, false) -> cb2_ev;
     lvars t, fields, rest;
-    for t from 1 to 300 do                 ;;; snapshots arrive every ~5 s
+    ;;; up to ~90 s: if the bridge was just started, its port-open reset the
+    ;;; boards and the first named snapshots take a boot (~30 s) to appear
+    for t from 1 to 900 do                 ;;; snapshots arrive every ~5 s
         lvars buf = inits(8192), n, k;
         repeat
             sysread(cb2_ev, buf, 8192) -> n;
