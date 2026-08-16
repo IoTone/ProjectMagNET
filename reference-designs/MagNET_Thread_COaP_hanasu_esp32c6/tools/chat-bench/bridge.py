@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""chat-bench bridge — two Hanasu nodes ⇄ one browser page.
+"""chat-bench bridge — N Hanasu nodes (2+) ⇄ one browser page.
 
 Wraps a MagnetNode (host-sdk) around each serial port and exposes:
 
     GET  /            the SolidJS chat page (index.html, same dir)
-    GET  /events      SSE stream: every ! event from both nodes + periodic
+    GET  /nodes       {"count": N, "ports": [...]} — pane bootstrap
+    GET  /events      SSE stream: every ! event from every node + periodic
                       STATUS/CHANNEL/WHOAMI snapshots, all stamped with the
                       bridge clock (one clock ⇒ honest cross-node latency)
-    POST /send        {"node": 0|1, "text": "..."} → CHAT on that node;
+    POST /send        {"node": i, "text": "..."} → CHAT on that node;
                       responds {"ok": true, "ts": <bridge time before write>}
-    POST /sendphoto   {"node": 0|1, "name": "x.jpg", "data": "<base64>"} →
-                      Type 6 transfer to the OTHER node's ML-EID. Responds
+    POST /sendphoto   {"node": i, "to": j, "name": "x.jpg", "data": "<b64>"} →
+                      Type 6 transfer to node j's ML-EID ("to" may be omitted
+                      on a two-node bench: the other node is implied). Responds
                       immediately; progress/photo events arrive over SSE:
                         {kind:"xfer", node, dir:"out|in", phase:"begin|
                          progress|sent|fail", pct, name, secs, reason}
@@ -19,7 +21,7 @@ Wraps a MagnetNode (host-sdk) around each serial port and exposes:
                       Raw !XFER_* lines are consumed here, never forwarded
                       (a 448-char b64 line per chunk would swamp the page).
 
-    python3 bridge.py [port0 port1] [--http 8642]
+    python3 bridge.py [port0 port1 ...] [--http 8642]
 
 Opening a serial port resets the node (DTR/RTS toggle) — both boards reboot
 when the bridge starts and re-attach in ~30 s; the page shows the state live.
@@ -45,7 +47,7 @@ DEFAULT_PORTS = ["/dev/ttyACM0", "/dev/ttyACM1"]
 clients: list = []                      # queue.Queue per connected SSE client
 clients_lock = threading.Lock()
 nodes: list = []
-eids: list = [None, None]               # each node's ML-EID (poll fills it in)
+eids: list = []                         # each node's ML-EID (poll fills it in)
 CHUNK, WINDOW = 336, 32
 
 
@@ -121,7 +123,7 @@ class XferManager:
 xfers: list = []
 
 
-def send_photo_worker(i, name, data):
+def send_photo_worker(i, dest_i, name, data):
     """Drive one outbound Type 6 transfer; progress goes out over SSE."""
     xm, n = xfers[i], nodes[i]
     if not xfers[i].out_busy.acquire(blocking=False):
@@ -129,7 +131,7 @@ def send_photo_worker(i, name, data):
                    "reason": "a photo send is already running on this node"})
         return
     try:
-        dest = eids[1 - i]
+        dest = eids[dest_i]
         if not dest:
             broadcast({"kind": "xfer", "node": i, "dir": "out", "phase": "fail",
                        "reason": "peer ML-EID not known yet (node still attaching?)"})
@@ -221,6 +223,15 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == "/nodes":
+            body = json.dumps({"count": len(nodes),
+                               "ports": [n._t.port for n in nodes]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path in ("/", "/index.html"):
             with open(os.path.join(HERE, "index.html"), "rb") as f:
                 body = f.read()
@@ -263,11 +274,24 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(n))
             i = int(req["node"])
+            # "to" is implied on a two-node bench, required beyond that
+            dest_i = req.get("to", 1 - i if len(nodes) == 2 else None)
+            if (dest_i is None or not 0 <= int(dest_i) < len(nodes)
+                    or int(dest_i) == i):
+                body = json.dumps({"ok": False,
+                                   "err": "need 'to': a different node index"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             # spaces would split the firmware's !XFER_BEGIN meta field
             name = (os.path.basename(str(req.get("name", "photo.jpg")))
                     .replace(" ", "_")[:64] or "photo.jpg")
             data = base64.b64decode(req["data"])
-            threading.Thread(target=send_photo_worker, args=(i, name, data),
+            threading.Thread(target=send_photo_worker,
+                             args=(i, int(dest_i), name, data),
                              daemon=True).start()
             body = json.dumps({"ok": True, "size": len(data)}).encode()
             self.send_response(200)
@@ -314,13 +338,14 @@ def main():
         else:
             ports.append(a)
         i += 1
-    if ports and len(ports) != 2:
-        print(f"need exactly two serial ports (got {len(ports)}): {' '.join(ports)}")
+    if ports and len(ports) < 2:
+        print(f"need at least two serial ports (got {len(ports)}): {' '.join(ports)}")
         return 1
     ports = ports or DEFAULT_PORTS
 
-    print(f"attaching {ports[0]} + {ports[1]} (boards reset on open, ~30 s to READY)")
+    print(f"attaching {' + '.join(ports)} (boards reset on open, ~30 s to READY)")
     for i, p in enumerate(ports):
+        eids.append(None)
         xfers.append(XferManager(i))
         nodes.append(attach_node(i, p))
     threading.Thread(target=poll_loop, daemon=True).start()

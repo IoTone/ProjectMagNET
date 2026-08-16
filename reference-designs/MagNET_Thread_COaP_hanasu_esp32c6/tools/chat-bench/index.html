@@ -17,9 +17,10 @@
            display: flex; justify-content: space-between; align-items: baseline; }
   header h1 { font-size: 15px; margin: 0; font-weight: 600; }
   header .sub { color: var(--dim); font-size: 12px; }
-  main { display: grid; grid-template-columns: 1fr 1fr; gap: 64px;
-         padding: 48px 64px; height: calc(100vh - 46px);
-         max-width: 1240px; margin: 0 auto; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+         grid-auto-rows: minmax(0, 1fr); gap: 24px;
+         padding: 24px 32px; height: calc(100vh - 46px);
+         max-width: 1600px; margin: 0 auto; }
   .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 1px;
           display: flex; flex-direction: column; min-height: 0; }
   .head { padding: 10px 12px; border-bottom: 1px solid var(--line); }
@@ -45,8 +46,9 @@
   .msg .lat { color: var(--accent); }
   .sys { align-self: center; font-size: 11px; color: var(--dim); }
   .sys.warn { color: var(--warn); }
-  .inbar { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
-  .inbar input { flex: 1; background: var(--panel2); color: var(--fg);
+  .inbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px;
+           border-top: 1px solid var(--line); }
+  .inbar input { flex: 1; min-width: 90px; background: var(--panel2); color: var(--fg);
                  border: 1px solid var(--line); border-radius: 1px; padding: 8px 10px;
                  font: inherit; outline: none; }
   .inbar input:focus { border-color: var(--accent); }
@@ -55,6 +57,8 @@
   .inbar button:disabled { opacity: .4; cursor: default; }
   .inbar button.attach { background: var(--panel2); color: var(--fg);
                          border: 1px solid var(--line); font-weight: 400; }
+  .inbar select { background: var(--panel2); color: var(--fg); font: inherit;
+                  border: 1px solid var(--line); border-radius: 1px; padding: 0 6px; }
   .stats { font-size: 11px; color: var(--dim); padding: 0 12px 8px; }
 </style>
 </head>
@@ -65,18 +69,22 @@ import { createSignal } from "https://esm.sh/solid-js@1.9.3";
 import { render } from "https://esm.sh/solid-js@1.9.3/web";
 import html from "https://esm.sh/solid-js@1.9.3/html";
 
-/* ---- state: one info signal + one message-list signal per node ---- */
-const infoSig = [createSignal({}), createSignal({})];
-const msgsSig = [createSignal([]), createSignal([])];
-const latsSig = [createSignal([]), createSignal([])];   // delivered latencies, ms
-/* Correlation entries per SENDER node: text → {t0, rxTs}. The POST response
- * (t0, bridge clock) and the receiver's SSE chat event (rxTs, bridge clock)
- * race each other — whichever lands second completes the measurement. */
-const pending = [new Map(), new Map()];
+/* ---- state: one info signal + one message-list signal per node ----
+ * Pane count comes from the bridge (GET /nodes) so this page serves any
+ * bench size; module top-level await keeps the rest of the code linear. */
+const N = (await (await fetch("/nodes")).json()).count;
+const idxs = Array.from({ length: N }, (_, i) => i);
+const infoSig = idxs.map(() => createSignal({}));
+const msgsSig = idxs.map(() => createSignal([]));
+const latsSig = idxs.map(() => createSignal([]));       // delivered latencies, ms
+/* Correlation entries per SENDER node: text → {t0, rx: Map(receiver→ts)}.
+ * The POST response (t0, bridge clock) and each receiver's SSE chat event
+ * (bridge clock) race each other — a measurement completes when both halves
+ * are in; with N nodes every receiver gets its own latency. */
+const pending = idxs.map(() => new Map());
 
-function finishLat(sender, text, entry) {
-  const lat = (entry.rxTs - entry.t0) * 1000;
-  pending[sender].delete(text);
+function finishLat(sender, receiver, text, entry) {
+  const lat = (entry.rx.get(receiver) - entry.t0) * 1000;
   const [gl, sl] = latsSig[sender];
   sl([...gl(), lat]);
   const stamp = (idx, dir) => {
@@ -85,8 +93,10 @@ function finishLat(sender, text, entry) {
     sm(gm().map(m => (!done && m.dir === dir && m.text === text && m.lat == null)
                       ? (done = true, { ...m, lat }) : m));
   };
-  stamp(sender, "out");
-  stamp(1 - sender, "in");
+  if (!entry.outStamped) { entry.outStamped = true; stamp(sender, "out"); }
+  stamp(receiver, "in");
+  entry.done = (entry.done || 0) + 1;
+  if (entry.done >= N - 1) pending[sender].delete(text);
 }
 
 function addMsg(i, m) {
@@ -147,15 +157,17 @@ es.onmessage = (e) => {
   if (ev.kind !== "event") return;
   const i = ev.node;
   if (ev.name === "chat") {
-    // multicast chat lands on the node that DIDN'T send it; correlate with
-    // the other pane's pending send to compute end-to-end latency
-    const other = 1 - i;
+    // multicast chat lands on every node that DIDN'T send it; correlate with
+    // whichever pane has this text pending to compute end-to-end latency
     addMsg(i, { dir: "in", from: ev.fields[2] !== "-" ? ev.fields[2] : ev.fields[1],
                 text: ev.text, lat: null });
-    const entry = pending[other].get(ev.text);
-    if (entry) {
-      entry.rxTs = ev.ts;
-      if (entry.t0 != null) finishLat(other, ev.text, entry);
+    for (const s of idxs) {
+      if (s === i) continue;
+      const entry = pending[s].get(ev.text);
+      if (entry && !entry.rx.has(i)) {
+        entry.rx.set(i, ev.ts);
+        if (entry.t0 != null) finishLat(s, i, ev.text, entry);
+      }
     }
   } else if (ev.name === "dm") {
     addMsg(i, { dir: "in", from: ev.fields[1], text: ev.text, lat: null, dm: true });
@@ -167,14 +179,14 @@ es.onmessage = (e) => {
  * and fresh info snapshots overwrite this */
 es.onerror = () => {
   for (const [, set] of infoSig) set(p => ({ ...p, state: "BRIDGE DOWN" }));
-};
+};    // red dot + state on EVERY pane until SSE reconnects
 
 /* ---- sending ---- */
 async function send(i, inputEl) {
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = "";
-  const entry = { t0: null, rxTs: null };
+  const entry = { t0: null, rx: new Map() };
   pending[i].set(text, entry);           // registered BEFORE the fetch: the
   addMsg(i, { dir: "out", text, lat: null });  // delivery event may beat the response
   const r = await fetch("/send", { method: "POST",
@@ -186,7 +198,8 @@ async function send(i, inputEl) {
     return;
   }
   entry.t0 = j.ts;
-  if (entry.rxTs != null) finishLat(i, text, entry);  // event won the race
+  for (const rcv of [...entry.rx.keys()])      // events that won the race
+    finishLat(i, rcv, text, entry);
 }
 
 /* ---- photos: downscale on the host (the mesh carries a re-encode, never
@@ -219,7 +232,7 @@ function shrink(file) {
   });
 }
 
-async function sendPhoto(i, fileEl) {
+async function sendPhoto(i, fileEl, to) {
   const file = fileEl.files[0];
   fileEl.value = "";
   if (!file) return;
@@ -228,10 +241,10 @@ async function sendPhoto(i, fileEl) {
   catch { addMsg(i, { dir: "sys", warn: true, text: "not an image?" }); return; }
   addMsg(i, { dir: "out", kind: "photo", img: p.dataUrl, name: p.name, pct: 0 });
   const r = await fetch("/sendphoto", { method: "POST",
-    body: JSON.stringify({ node: i, name: p.name, data: p.b64 }) });
+    body: JSON.stringify({ node: i, to, name: p.name, data: p.b64 }) });
   const j = await r.json();
   if (!j.ok)
-    patchLast(i, livePhoto("out"), { failed: "send refused", done: true });
+    patchLast(i, livePhoto("out"), { failed: j.err || "send refused", done: true });
 }
 
 /* ---- UI ---- */
@@ -241,7 +254,13 @@ const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
 function Pane(i) {
   const info = infoSig[i][0], msgs = msgsSig[i][0], lats = latsSig[i][0];
   const st = () => (info().state || "?").toLowerCase();
-  let inputEl, fileEl;
+  let inputEl, fileEl, toSel;
+  const others = idxs.filter(k => k !== i);
+  /* photos are unicast: beyond two nodes the sender picks the receiver */
+  const label = (k) => {
+    const inf = infoSig[k][0]();
+    return "→ " + (inf.name && inf.name !== "-" ? inf.name : "node " + k);
+  };
   return html`
     <section class="pane">
       <div class="head">
@@ -301,7 +320,11 @@ function Pane(i) {
                onKeyDown=${(e) => { if (e.key === "Enter") send(i, inputEl); }} />
         <input type="file" accept="image/*" style="display:none"
                ref=${(el) => (fileEl = el)}
-               onChange=${() => sendPhoto(i, fileEl)} />
+               onChange=${() => sendPhoto(i, fileEl, Number(toSel ? toSel.value : others[0]))} />
+        ${N > 2 ? html`<select class="attach" ref=${(el) => (toSel = el)}
+                title="photo receiver">
+            ${others.map(k => html`<option value=${k}>${() => label(k)}</option>`)}
+          </select>` : ""}
         <button class="attach" title="send a photo (downscaled to ≤180 KB)"
                 onClick=${() => fileEl.click()}
                 disabled=${() => st() !== "ready"}>photo</button>
@@ -314,8 +337,9 @@ function Pane(i) {
 render(() => html`
   <header>
     <h1>MagNET Hanasu — chat bench</h1>
+    <span class="sub">${N} nodes</span>
   </header>
-  <main>${Pane(0)}${Pane(1)}</main>`, document.getElementById("app"));
+  <main>${idxs.map(Pane)}</main>`, document.getElementById("app"));
 </script>
 </body>
 </html>

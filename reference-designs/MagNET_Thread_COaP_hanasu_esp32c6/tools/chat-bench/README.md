@@ -1,7 +1,8 @@
-# chat-bench — two nodes chatting side-by-side in a browser
+# chat-bench — the bench chatting side-by-side in a browser
 
 A visual test rig for mesh chat **and Type 6 photo transfer**: one SolidJS
-page with two chat panes, one per attached node, each showing live lifecycle
+page with a chat pane per attached node (any number ≥ 2 — the page asks the
+bridge via `GET /nodes` and lays out accordingly), each showing live lifecycle
 state, role, channel, encryption info, **per-message end-to-end latency**
 (host serial → envelope/AEAD → 802.15.4 → receiver's serial, all timed on the
 bridge's single clock), and a **photo** button that sends an image across the
@@ -10,8 +11,15 @@ on the receiving pane.
 
 ```
 ../../../../.venv/bin/python bridge.py            # /dev/ttyACM0 + /dev/ttyACM1
+bridge.py /dev/cu.usbmodem13101 /dev/cu.usbmodem13201 \
+          /dev/cu.usbmodem13301 /dev/cu.usbmodem13401   # the whole bench
 # → open http://127.0.0.1:8642/
 ```
+
+With more than two nodes, chat latency is measured **per receiver** (every
+receiving pane gets its own ⏱ stamp) and photos — which are unicast — grow a
+per-pane receiver picker; `POST /sendphoto` takes `"to": <node index>`
+(implied on a two-node bench).
 
 - `bridge.py` — stdlib-only HTTP server wrapping a `MagnetNode` (host-sdk)
   around each port. Events stream to the page over SSE; sends are POSTs.
