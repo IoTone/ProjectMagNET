@@ -282,6 +282,10 @@ static void handle_hcp_line(char *line) {
             respond_err(tag, "E_UNSUPPORTED", "not built with MN_ENABLE_LED=1");
             return;
         }
+        if (!mn_led_ok()) {
+            respond_err(tag, "E_INTERNAL", "led init failed (see boot '# led:' line)");
+            return;
+        }
         int r = 0, g = 0, b = 0;
         if (*rest != '\0' && strcasecmp(rest, "OFF") != 0) {
             if (sscanf(rest, "%d %d %d", &r, &g, &b) != 3
@@ -291,7 +295,13 @@ static void handle_hcp_line(char *line) {
             }
         }
         mn_led_set((uint8_t)r, (uint8_t)g, (uint8_t)b);
-        respond(tag, "+OK");
+        if (mn_led_last() != 0) {
+            char msg[40];
+            snprintf(msg, sizeof msg, "rmt transmit rc=%d", mn_led_last());
+            respond_err(tag, "E_INTERNAL", msg);
+        } else {
+            respond(tag, "+OK");
+        }
     }
     else if (!strcmp(verb, "TIME")) {
         /* TIME                        → report current time / uptime

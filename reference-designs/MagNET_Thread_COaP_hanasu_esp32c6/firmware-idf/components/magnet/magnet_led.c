@@ -21,9 +21,11 @@ int mn_led_init(void) {
 #ifdef MN_LED_EN_GPIO
     /* LED power rail (NanoC6 G19): without this the pixel never lights,
      * which reads as a wrong-data-pin bug. Enable BEFORE the first frame. */
+    gpio_reset_pin((gpio_num_t)MN_LED_EN_GPIO);
     gpio_set_direction((gpio_num_t)MN_LED_EN_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)MN_LED_EN_GPIO, 1);
 #endif
+    gpio_reset_pin((gpio_num_t)MN_LED_RGB_GPIO);
     rmt_tx_channel_config_t ch = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .gpio_num = MN_LED_RGB_GPIO,
@@ -31,7 +33,8 @@ int mn_led_init(void) {
         .resolution_hz = RMT_HZ,
         .trans_queue_depth = 4,
     };
-    if (rmt_new_tx_channel(&ch, &s_chan) != ESP_OK) return -1;
+    esp_err_t err = rmt_new_tx_channel(&ch, &s_chan);
+    if (err != ESP_OK) { s_chan = NULL; return (int)err; }
     /* WS2812 bit timing at 0.1 us/tick: 0 = 0.3us hi / 0.9us lo,
      * 1 = 0.9us hi / 0.3us lo, MSB first. */
     rmt_bytes_encoder_config_t bytes = {
@@ -39,11 +42,17 @@ int mn_led_init(void) {
         .bit1 = { .level0 = 1, .duration0 = 9, .level1 = 0, .duration1 = 3 },
         .flags.msb_first = 1,
     };
-    if (rmt_new_bytes_encoder(&bytes, &s_enc) != ESP_OK) return -1;
-    if (rmt_enable(s_chan) != ESP_OK) return -1;
+    err = rmt_new_bytes_encoder(&bytes, &s_enc);
+    if (err == ESP_OK) err = rmt_enable(s_chan);
+    if (err != ESP_OK) { s_chan = NULL; return (int)err; }
     mn_led_set(0, 0, 0);               /* known state (part may power up lit) */
     return 0;
 }
+
+int mn_led_ok(void) { return s_chan != NULL; }
+
+static int s_last_err;                 /* last transmit rc, for diagnosis */
+int mn_led_last(void) { return s_last_err; }
 
 void mn_led_set(uint8_t r, uint8_t g, uint8_t b) {
     if (!s_chan) return;
@@ -51,8 +60,9 @@ void mn_led_set(uint8_t r, uint8_t g, uint8_t b) {
      * a green LED when you asked for red. */
     uint8_t grb[3] = { g, r, b };
     rmt_transmit_config_t tx = { .loop_count = 0 };
-    rmt_transmit(s_chan, s_enc, grb, sizeof(grb), &tx);
-    rmt_tx_wait_all_done(s_chan, 100);
+    esp_err_t err = rmt_transmit(s_chan, s_enc, grb, sizeof(grb), &tx);
+    if (err == ESP_OK) err = rmt_tx_wait_all_done(s_chan, 100);
+    s_last_err = (int)err;
 }
 
 #elif defined(MN_LED_GPIO)
@@ -62,10 +72,14 @@ void mn_led_set(uint8_t r, uint8_t g, uint8_t b) {
 #endif
 
 int mn_led_init(void) {
+    gpio_reset_pin((gpio_num_t)MN_LED_GPIO);
     gpio_set_direction((gpio_num_t)MN_LED_GPIO, GPIO_MODE_OUTPUT);
     mn_led_set(0, 0, 0);
     return 0;
 }
+
+int mn_led_ok(void)   { return 1; }
+int mn_led_last(void) { return 0; }
 
 void mn_led_set(uint8_t r, uint8_t g, uint8_t b) {
     int on = (r || g || b) ? 1 : 0;

@@ -90,7 +90,6 @@ void app_main(void) {
         nvs_flash_init();
     }
     mn_core_init();
-    mn_led_init();                     /* no-op stub unless MN_ENABLE_LED=1 */
     mn_register_forth_vocab();
     /* E-E: user automation script runs once, after the mn-* words exist and
      * before the radios come up (so hooks are armed when traffic starts). */
@@ -153,6 +152,17 @@ void app_main(void) {
 #endif
     mn_set_state(MN_CONFIGURING);
     mn_openthread_start();
+
+#if MN_ENABLE_LED
+    /* LAST on purpose: earlier bring-up (radio/BLE/forth) must not get a
+     * chance to reclaim the LED pins after we matrix them to RMT. */
+    {
+        int lrc = mn_led_init();
+        char lbuf[48];
+        snprintf(lbuf, sizeof lbuf, "# led: init rc=%d\r\n", lrc);
+        raw_print(lbuf);
+    }
+#endif
 
     report_heap("after openthread_start");
 

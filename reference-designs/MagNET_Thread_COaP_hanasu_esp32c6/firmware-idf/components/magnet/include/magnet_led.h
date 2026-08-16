@@ -24,12 +24,16 @@
 
 #if MN_ENABLE_LED
 
-int  mn_led_init(void);                          /* 0 on success */
+int  mn_led_init(void);                          /* 0 on success, else esp_err */
+int  mn_led_ok(void);                            /* 1 once init succeeded */
+int  mn_led_last(void);                          /* last transmit rc (0 = ok) */
 void mn_led_set(uint8_t r, uint8_t g, uint8_t b);
 
 #else
 
 static inline int  mn_led_init(void) { return -1; }
+static inline int  mn_led_ok(void)   { return 0; }
+static inline int  mn_led_last(void) { return 0; }
 static inline void mn_led_set(uint8_t r, uint8_t g, uint8_t b)
     { (void)r; (void)g; (void)b; }
 
