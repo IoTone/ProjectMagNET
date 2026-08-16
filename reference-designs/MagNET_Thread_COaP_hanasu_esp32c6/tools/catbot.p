@@ -115,6 +115,15 @@ enddefine;
 
 vars cb_mood = 'purr';
 
+;;; mood -> on-board LED colour (fw >= esp32c6_ble_led; older firmware
+;;; answers -ERR E_UNSUPPORTED per change, which the driver logs and ignores)
+vars cb_mood_leds = [
+    ['purr'    'LED 255 120 30']       ;;; warm white
+    ['hongry'  'LED 255 60 0']         ;;; amber
+    ['slepy'   'LED 40 0 0']           ;;; dim red
+    ['zoomies' 'LED 0 180 120']        ;;; charged teal
+];
+
 define catify(s) -> out;
     lvars w, r, kept = [];
     for w in cb_split(cb_lower(s)) do
@@ -304,6 +313,8 @@ define cb_maybe_initiate();
     lvars now = cb_now();
     if now >= cb_next_mood then
         cb_pick(cb_moods) -> cb_mood;
+        lvars cmd = cb_lookup(cb_mood, cb_mood_leds);
+        if cmd then cb_send_raw(cmd) endif;           ;;; mood on the pixel
         now + 300 + cb_rand(300) -> cb_next_mood;     ;;; drift every 5-10 min
     endif;
     if now >= cb_next_init and cb_may_speak(false) then

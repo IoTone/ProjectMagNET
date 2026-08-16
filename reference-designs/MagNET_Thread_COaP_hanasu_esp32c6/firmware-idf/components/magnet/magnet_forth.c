@@ -11,6 +11,7 @@
  */
 #include "magnet.h"
 #include "magnet_bot.h"
+#include "magnet_led.h"
 #include "forth_core.h"
 
 #include <stdint.h>
@@ -117,6 +118,14 @@ static void w_gpio_set(void) {
     if (pin >= 0 && pin < 32) gpio_set_level((gpio_num_t)pin, level ? 1 : 0);
 }
 
+#if MN_ENABLE_LED
+/* led! ( r g b -- )  on-board LED, 0-255 per channel (magnet_led.h) */
+static void w_led_store(void) {
+    intptr_t b = forth_pop(), g = forth_pop(), r = forth_pop();
+    mn_led_set((uint8_t)(r & 255), (uint8_t)(g & 255), (uint8_t)(b & 255));
+}
+#endif
+
 /* mn-state ( -- n )  push current lifecycle state enum */
 static void w_mn_state(void)  { forth_push((intptr_t)mn_get_state()); }
 
@@ -210,6 +219,9 @@ void mn_register_forth_vocab(void) {
     forth_register_word("str=",          w_str_eq);
     forth_register_word("gpio-output",   w_gpio_output);
     forth_register_word("gpio-set",      w_gpio_set);
+#if MN_ENABLE_LED
+    forth_register_word("led!",          w_led_store);
+#endif
     forth_register_word("mn-time!",      w_mn_time);
     forth_register_word("mn-now",        w_mn_now);
     forth_register_word("mn-time-push",  w_mn_time_push);

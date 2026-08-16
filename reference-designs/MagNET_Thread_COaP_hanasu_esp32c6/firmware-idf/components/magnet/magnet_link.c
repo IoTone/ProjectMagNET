@@ -15,6 +15,7 @@
  */
 #include "magnet.h"
 #include "magnet_bot.h"
+#include "magnet_led.h"
 #include "magnet_xfer.h"
 #include "forth_core.h"
 #include "craw_role_bundle.h"
@@ -130,6 +131,9 @@ static void emit_caps(const char *tag) {
 #if MN_ENABLE_BOTS
         ",BOTMODE"
 #endif
+#if MN_ENABLE_LED
+        ",LED"
+#endif
         " "
         "events=ready,state,chat,dm,cmd,peer,role,heartbeat,warn,xfer queue=4 "
         "xfer_chunk=336 xfer_window=32 xfer_max_chunks=4096 mode=HCP");
@@ -153,6 +157,9 @@ static void emit_help(const char *tag) {
     mn_write_line("#               pushes to the channel; SYNC pulls from whoever has one)");
 #if MN_ENABLE_BOTS
     mn_write_line("#            BOTMODE [<id>|OFF]  (no arg lists bots; Forth: `0 botmode`)");
+#endif
+#if MN_ENABLE_LED
+    mn_write_line("#            LED <r> <g> <b> | OFF  (0-255; on-board LED; Forth: `led!`)");
 #endif
     mn_write_line("#            FACTORY RESET CONFIRM  (erases everything, reboots)");
     mn_write_line("# FORTH drops into the Forth REPL; type  .hcp  to return.");
@@ -266,6 +273,25 @@ static void handle_hcp_line(char *line) {
         }
         if (mn_bot_set(id) != 0) respond_err(tag, "E_NO_BOT", "no such bot");
         else respond(tag, "+OK");
+    }
+    else if (!strcmp(verb, "LED")) {
+        /* LED <r> <g> <b>   → set the on-board LED (0-255 per channel;
+         * LED OFF          → same as LED 0 0 0
+         * plain-LED boards light on any nonzero channel) */
+        if (!MN_ENABLE_LED) {
+            respond_err(tag, "E_UNSUPPORTED", "not built with MN_ENABLE_LED=1");
+            return;
+        }
+        int r = 0, g = 0, b = 0;
+        if (*rest != '\0' && strcasecmp(rest, "OFF") != 0) {
+            if (sscanf(rest, "%d %d %d", &r, &g, &b) != 3
+                    || r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255) {
+                respond_err(tag, "E_SYNTAX", "LED <r> <g> <b> (0-255) | OFF");
+                return;
+            }
+        }
+        mn_led_set((uint8_t)r, (uint8_t)g, (uint8_t)b);
+        respond(tag, "+OK");
     }
     else if (!strcmp(verb, "TIME")) {
         /* TIME                        → report current time / uptime

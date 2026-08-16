@@ -7,6 +7,7 @@ idf_component_register(
         "magnet_forth.c"
         "magnet_xfer.c"
         "magnet_bot.c"
+        "magnet_led.c"
         "magnet_ot.c"
         "magnet_ble.c"
     INCLUDE_DIRS "include"

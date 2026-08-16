@@ -20,6 +20,7 @@
 #include "forth_core.h"
 #include "craw_role_bundle.h"
 #include "magnet.h"
+#include "magnet_led.h"
 
 /* C6 has no PSRAM and must also host OpenThread + mbedTLS, so the Forth
  * dictionary heap is cut from ESPIDFORTH's default 100 KB (design proposal
@@ -89,6 +90,7 @@ void app_main(void) {
         nvs_flash_init();
     }
     mn_core_init();
+    mn_led_init();                     /* no-op stub unless MN_ENABLE_LED=1 */
     mn_register_forth_vocab();
     /* E-E: user automation script runs once, after the mn-* words exist and
      * before the radios come up (so hooks are armed when traffic starts). */
