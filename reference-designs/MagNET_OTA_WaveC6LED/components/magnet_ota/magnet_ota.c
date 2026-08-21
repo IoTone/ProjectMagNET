@@ -87,8 +87,15 @@ ota_action_t ota_checkin(void) {
         snprintf(s_status, sizeof s_status, "busy");
         return OTA_ERROR;
     }
-    if (!cfg_get(CFG_SERVER_URL, ver, sizeof ver)) {
-        snprintf(s_status, sizeof s_status, "no server_url");
+    /* A reachable server is either a seeded URL or an mDNS discovery (R2).
+     * The early bail exists so a wholly unprovisioned device reports a crisp
+     * status instead of a transport error — but "unprovisioned" now means
+     * "no URL AND nothing discoverable", so give discovery its chance
+     * (cached after the first hit; transport_ip does the same fallback). */
+    if (!cfg_get(CFG_SERVER_URL, ver, sizeof ver)
+        && !ota_discovered_url()
+        && !ota_discover_server(3000)) {
+        snprintf(s_status, sizeof s_status, "no server_url (and no mDNS answer)");
         if (s_lock) xSemaphoreGive(s_lock);
         return OTA_ERROR;
     }
