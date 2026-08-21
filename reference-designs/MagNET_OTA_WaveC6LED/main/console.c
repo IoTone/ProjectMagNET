@@ -88,6 +88,7 @@ static void cmd_help(void) {
         "  set <key> <value>   wifi_ssid | wifi_pass | server_url | dev_token\r\n"
         "  show                current config (secrets masked)\r\n"
         "  wifi                connect using the stored credentials\r\n"
+        "  discover            find the server via mDNS (_robotarme._tcp)\r\n"
         "  checkin             POST /api/devices/check-in now\r\n"
         "  verify              fetch the pending release + check its signature\r\n"
         "  forget <key>        erase one key\r\n"
@@ -166,6 +167,17 @@ void console_run(int (*getch)(void), void (*putch)(int), void (*print)(const cha
                                  (unsigned)n, (const char *)b);
                         out(m);
                     }
+                }
+            } else if (strcmp(line, "discover") == 0) {
+                /* R2 proof, runnable with server_url deliberately forgotten:
+                 * mDNS answers "where is the server" on this LAN. */
+                out("querying _robotarme._tcp (3 s)...\r\n");
+                if (ota_discover_server(3000)) {
+                    char m[CFG_MAX + 32];
+                    snprintf(m, sizeof m, "  found %s\r\n", ota_discovered_url());
+                    out(m);
+                } else {
+                    out("  nothing answered\r\n");
                 }
             } else if (strcmp(line, "wifi") == 0) {
                 char ssid[CFG_MAX], pass[CFG_MAX];

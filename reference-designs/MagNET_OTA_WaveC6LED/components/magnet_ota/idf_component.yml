@@ -1,0 +1,6 @@
+## R2 needs the espressif mdns managed component (out of IDF core since 5.0).
+## Declared HERE, on magnet_ota, so the dependency travels with the component
+## that uses it rather than with whichever main happens to include it.
+dependencies:
+  idf: ">=5.0"
+  espressif/mdns: "^1.2"

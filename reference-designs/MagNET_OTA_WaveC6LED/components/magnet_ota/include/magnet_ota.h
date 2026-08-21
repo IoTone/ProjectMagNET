@@ -60,6 +60,13 @@ const ota_release_t *ota_pending(void);
 /* Last outcome in words, for the screen and the console. */
 const char  *ota_last_status(void);
 
+/* R2 — mDNS discovery of the server (mdns_discover.c). DISCOVER runs a
+ * one-shot `_robotarme._tcp` query and caches the winner until reboot or the
+ * next call; DISCOVERED-URL is that cache or NULL. transport_ip falls back to
+ * it only when NVS `server_url` is unset — an explicit URL always wins. */
+bool         ota_discover_server(uint32_t timeout_ms);
+const char  *ota_discovered_url(void);
+
 /* D3: fetch the pending release and PROVE it before anything may run it.
  * Signature descriptor first, then the body, then SHA256, then Ed25519. */
 bool         ota_fetch_and_verify(struct magnet_transport *tx, const ota_release_t *rel);

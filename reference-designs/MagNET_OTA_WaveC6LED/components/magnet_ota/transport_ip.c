@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "magnet_transport.h"
+#include "magnet_ota.h"
 #include "magnet_cfg.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -44,8 +45,15 @@ static int ip_request(magnet_transport_t *t,
     char base[CFG_MAX], token[CFG_MAX], url[CFG_MAX + 128];
 
     if (!cfg_get(CFG_SERVER_URL, base, sizeof base)) {
-        ESP_LOGW(TAG, "server_url not set");
-        return -1;
+        /* R2: no seeded URL — fall back to mDNS discovery (cached after the
+         * first hit). An NVS server_url, when present, always wins. */
+        const char *d = ota_discovered_url();
+        if (!d && ota_discover_server(3000)) d = ota_discovered_url();
+        if (!d) {
+            ESP_LOGW(TAG, "server_url not set and mDNS found no _robotarme._tcp");
+            return -1;
+        }
+        strlcpy(base, d, sizeof base);
     }
     /* Trailing slash on the configured URL plus a leading slash on the path
      * yields "//api/..." which some servers route differently — normalise. */
