@@ -23,9 +23,38 @@ radio in general, and every figure below should be read that way.
 - Transport floor: Thread 8-byte payload DM at 41.5 ms one-way p50, 100 % delivery; BLE Mesh 8-byte raw probe with no Hanasu envelope at 50.6 ms one-way p50, 100 % delivery. Different measurements, same order of magnitude — the radio itself is not the limit.
 - Sustained rate, 48-byte payload unicast, delivery percentage at each offered rate in messages/second: Thread 100 % at 1, 2, 5, 10 and 20 messages/second, 69 % at 30; BLE Mesh 100 % at 1 and 2, 53 % at 5, 33 % at 10, 20 % at 20, 14 % at 30.
 - Group multicast CHAT with roughly 8 bytes of text: Thread 100 % delivery at 1, 5 and 10 messages/second, 42–45 ms one-way p50; BLE Mesh 93 % at 1 message/second, 33 % at 5, 20 % at 10, at 133–153 ms one-way p50. BLE Mesh group traffic is never acknowledged by anything.
-- Bulk transfer, application-payload throughput, every transfer verified byte-intact on both radios: Thread 5,176 bytes/second for a 16,384-byte file (3.17 seconds) and 5,308 bytes/second for 65,536 bytes (12.35 seconds); BLE Mesh 67.9 bytes/second for 16,384 bytes (241 seconds), flat across 1,024 to 16,384 bytes. Ratio 78×. A 32,768-byte photo takes about 6 seconds on Thread and about 12 minutes on BLE Mesh.
+- Bulk transfer, application-payload throughput, every transfer verified byte-intact on both radios: Thread 5,176 bytes/second for a 16,384-byte file (3.17 seconds) and 5,308 bytes/second for 65,536 bytes (12.35 seconds); BLE Mesh 67.9 bytes/second for 16,384 bytes (241 seconds), flat across 1,024 to 16,384 bytes. Ratio 76× like-for-like at 16,384 bytes. A 32,768-byte photo takes about 6 seconds on Thread and about 12 minutes on BLE Mesh.
 - Overload, using the firmware's own STRESS verb with a 16-byte payload, over 5 seconds: Thread 1,425 attempted, 340 accepted, 287 delivered — 285 offered, 68 accepted, 57 delivered per second, with the refusal returned to the caller; BLE Mesh 2,339 attempted, 2,339 accepted, 11 delivered — 468 offered, 468 accepted, 2.2 delivered per second, so the send call reported success for every single frame while 99.5 % went nowhere.
 - Image footprint in bytes: BLE Mesh is smaller at 122,976 bytes static RAM and 722,173 bytes flash, against Thread's 137,212 bytes static RAM and 851,553 bytes flash. Free heap measured on hardware favours Thread at 205,660 bytes against 184,000 bytes, a difference of about 22 kilobytes, because the mesh stack allocates advertising buffers and segmentation contexts dynamically.
+
+The ratio between the two depends entirely on which measure is meant, so it is
+worth setting them side by side rather than quoting one number:
+
+| measure | Thread | BLE Mesh 1.1 tuned | Thread faster by |
+|---|---|---|---|
+| bulk transfer, 16,384-byte file | 5,176 bytes/second | 67.9 bytes/second | 76× |
+| bulk transfer, 4,096-byte file | 4,470 bytes/second | 69.7 bytes/second | 64× |
+| bulk transfer, 1,024-byte file | 2,375 bytes/second | 68.0 bytes/second | 35× |
+| delivered rate at saturation, 16-byte payload | 57.4 messages/second (918 bytes/second) | 2.2 messages/second (35 bytes/second) | 26× |
+| delivered rate at saturation, 48-byte payload | 35.6 messages/second (1,709 bytes/second) | 1.4 messages/second (67 bytes/second) | 25× |
+| highest offered rate still lossless | 20 messages/second | 2 messages/second | 10× |
+| one-way p50 latency, 340-byte payload | 82.0 ms | 1,009 ms | 12× |
+| one-way p50 latency, 48-byte payload | 56.7 ms | 252.5 ms | 4.5× |
+| one-way p50 latency, 8-byte payload | 41.5 ms | 154.9 ms | 3.7× |
+
+The ratio grows with message size because BLE Mesh's cost is per 12-byte
+segment while Thread's is flat until fragmentation. The small-file transfer
+ratios are lower only because Thread has not reached its own steady state at
+1,024 bytes — its rate is still climbing there, while BLE Mesh is already flat
+at roughly 68 bytes/second.
+
+Worth noting against the raw radio rates, which run the other way: BLE's PHY is
+1 Mbit/second and 802.15.4's is 250 kbit/second. Thread's higher application
+throughput comes despite a radio four times slower, because BLE Mesh spends
+that radio on three advertising channels, small unconnected PDUs, per-message
+overhead and flooding duplicates. The gap belongs to the mesh bearer rather
+than to Bluetooth: a BLE GATT connection, with the same radio, a connection and
+a roughly 244-byte MTU, would exceed Thread comfortably.
 
 ## 2. Frame size, segmentation and airtime: the mechanisms that appear to produce those numbers
 
