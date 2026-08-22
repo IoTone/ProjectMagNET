@@ -12,8 +12,42 @@
 #include "magnet_ota.h"
 #include "magnet_cfg.h"
 #include "esp_http_client.h"
+#include "esp_crt_bundle.h"
 #include "esp_log.h"
 #include "esp_system.h"
+
+/*
+ * R1 — HTTPS. An https:// server_url (seeded or discovered) turns on real
+ * certificate verification; http:// is untouched, so R0 and LAN mDNS
+ * discovery keep working. Two trust roots, chosen at build time:
+ *
+ *   - server_ca.pem present in this component  → it is EMBEDDED and PINNED.
+ *     The org-CA path: the device trusts exactly one issuer, the one that
+ *     signs the fleet's servers. CFG_MAX is 128, so a PEM can never travel
+ *     through NVS/console config — baking it into the image is not a
+ *     shortcut, it is the only channel that fits, and it matches how the
+ *     org Ed25519 public key already ships.
+ *
+ *   - no server_ca.pem → the IDF public-CA bundle. The tunnel path: a
+ *     server behind a real hostname with a Let's-Encrypt-class cert works
+ *     with zero device-side cert management.
+ *
+ * NOT offered: skip-verify. Encrypting to an unauthenticated peer would
+ * read as "HTTPS done" while a LAN MITM still harvests the dvc_ token —
+ * worse than the honest clear text of R0, because it looks fixed.
+ *
+ * CERT SHAPE FOR IP ENDPOINTS — learned on the bench, not in review: this
+ * mbedTLS does NOT match iPAddress SANs, and when ANY SAN extension is
+ * present it ignores the CN entirely (per RFC). A cert with
+ * SAN=IP:10.0.0.116 therefore fails verification against the very host it
+ * names, symmetrically with a hostile cert — which briefly made the pinned
+ * CA look broken. Org-issued certs for bare-IP servers must be CN-only;
+ * certs for DNS hostnames can use SANs as usual.
+ */
+#if __has_include("server_ca_pem.h")
+#define HAVE_PINNED_CA 1
+extern const char server_ca_pem_start[] asm("_binary_server_ca_pem_start");
+#endif
 
 static const char *TAG = "transport_ip";
 
@@ -71,6 +105,11 @@ static int ip_request(magnet_transport_t *t,
         .user_data = &rx,
         .timeout_ms = 8000,
         .disable_auto_redirect = true,
+#ifdef HAVE_PINNED_CA
+        .cert_pem = server_ca_pem_start,      /* pinned org/test CA */
+#else
+        .crt_bundle_attach = esp_crt_bundle_attach,  /* public CAs */
+#endif
         /* NO KEEP-ALIVE. This device polls once a minute — there is nothing to
          * amortise — and a lingering connection is a socket held open in a pool
          * of CONFIG_LWIP_MAX_SOCKETS (10 by default).
