@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include "magnet_ota.h"
 #include "magnet_transport.h"
+#include "magnet_relay.h"
 #include "magnet_cfg.h"
 #include "forth_core.h"
 #include "cJSON.h"
@@ -43,18 +44,38 @@ static SemaphoreHandle_t s_lock;
 static SemaphoreHandle_t s_nudge;   /* console -> poll task "check in now" */
 static char s_resp[RESP_CAP];
 
-static magnet_transport_t *s_tx;
+static magnet_transport_t *s_tx;        /* transport_ip */
+static magnet_transport_t *s_relay;     /* transport_relay */
 static ota_release_t s_pending;
 static bool s_have_pending;
 static char s_status[64] = "idle";
 
 esp_err_t ota_init(void) {
     s_tx = transport_ip();
-    if (!s_tx) return ESP_FAIL;
+    s_relay = transport_relay();
+    if (!s_tx || !s_relay) return ESP_FAIL;
     if (!s_lock)  s_lock  = xSemaphoreCreateMutex();
     if (!s_nudge) s_nudge = xSemaphoreCreateBinary();
-    return s_tx->open(s_tx);
+    esp_err_t e = s_relay->open(s_relay);
+    return e != ESP_OK ? e : s_tx->open(s_tx);
 }
+
+/*
+ * R3: WHICH TRANSPORT. Decided per request, not at init, because the answer
+ * changes at runtime — a phone attaches over BLE, a WiFi lease appears.
+ *
+ * The relay wins whenever a proxy is attached. Rationale: a proxy attaching
+ * is a deliberate act by an operator standing next to the device; WiFi being
+ * up is ambient. When someone has gone to the trouble of relaying, they want
+ * to see the traffic go through the thing they are holding. It also means a
+ * device with a dead WiFi association (the silent-loss case main.c watches
+ * for) recovers the moment a phone comes near, without waiting on the
+ * reassociation watchdog.
+ */
+static magnet_transport_t *pick_transport(void) {
+    return relay_available() ? s_relay : s_tx;
+}
+const char *ota_transport_name(void) { return pick_transport()->name; }
 
 void ota_request_checkin(void) {
     if (s_nudge) xSemaphoreGive(s_nudge);
@@ -92,7 +113,8 @@ ota_action_t ota_checkin(void) {
      * status instead of a transport error — but "unprovisioned" now means
      * "no URL AND nothing discoverable", so give discovery its chance
      * (cached after the first hit; transport_ip does the same fallback). */
-    if (!cfg_get(CFG_SERVER_URL, ver, sizeof ver)
+    if (!relay_available()                 /* the proxy knows the server */
+        && !cfg_get(CFG_SERVER_URL, ver, sizeof ver)
         && !ota_discovered_url()
         && !ota_discover_server(3000)) {
         snprintf(s_status, sizeof s_status, "no server_url (and no mDNS answer)");
@@ -133,8 +155,9 @@ ota_action_t ota_checkin(void) {
                  (unsigned)esp_get_free_heap_size());
     }
 
-    int st = s_tx->request(s_tx, "POST", "/api/devices/check-in",
-                           body, s_resp, sizeof s_resp, &rlen);
+    magnet_transport_t *tx = pick_transport();
+    int st = tx->request(tx, "POST", "/api/devices/check-in",
+                         body, s_resp, sizeof s_resp, &rlen);
     if (s_lock) xSemaphoreGive(s_lock);
 
     if (st < 0)    { snprintf(s_status, sizeof s_status, "unreachable"); return OTA_ERROR; }
@@ -198,13 +221,19 @@ static void w_ota_status(void) {
  * share one path. */
 bool ota_fetch_pending(void) {
     if (!s_have_pending || !s_tx) return false;
-    return ota_fetch_and_verify(s_tx, &s_pending);
+    magnet_transport_t *tx = pick_transport();
+    return ota_fetch_and_verify(tx, &s_pending);
 }
 
 bool ota_apply_pending(void) {
     if (!s_have_pending || !s_tx) return false;
-    if (!ota_fetch_and_verify(s_tx, &s_pending)) return false;
-    return ota_apply(s_tx, &s_pending);
+    /* One transport for the whole fetch→apply→report sequence, chosen once:
+     * if the phone walks away mid-apply the report still goes out over the
+     * transport the fetch used (and fails honestly), rather than flipping to
+     * WiFi halfway and confusing anyone reading the two logs side by side. */
+    magnet_transport_t *tx = pick_transport();
+    if (!ota_fetch_and_verify(tx, &s_pending)) return false;
+    return ota_apply(tx, &s_pending);
 }
 
 static void w_ota_apply(void) { forth_push((intptr_t)(ota_apply_pending() ? 1 : 0)); }
