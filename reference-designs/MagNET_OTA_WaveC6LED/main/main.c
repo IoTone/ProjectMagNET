@@ -20,6 +20,7 @@
 #include "craw_wifi.h"
 #include "console.h"
 #include "magnet_ota.h"
+#include "magnet_relay.h"
 #include "esp_wifi.h"
 
 /* 100 KB dictionary. No PSRAM on this board, and 512 KB of HP SRAM has to also
@@ -119,7 +120,14 @@ static void draw_status(const char *state, uint16_t state_colour,
     ui_text(6, 244, "NETWORK", UI_DIM, UI_BG, 1);
     {
         char ip[32];
-        if (craw_wifi_is_connected() && craw_wifi_get_ip_str(ip, sizeof ip)) {
+        if (relay_available()) {
+            /* R3/R4: a proxy is attached; it is where the next request goes
+             * even if WiFi is also up. Say so — the operator holding the
+             * phone (or the cable) should see the device agree. */
+            bool ble = strcmp(relay_pipe_name(), "ble") == 0;
+            ui_text(6, 258, ble ? "BLE RELAY" : "USB RELAY", UI_GREEN, UI_BG, 1);
+            ui_text(6, 272, ble ? pipe_ble_name() : "VIA HOST", UI_WHITE, UI_BG, 1);
+        } else if (craw_wifi_is_connected() && craw_wifi_get_ip_str(ip, sizeof ip)) {
             char ssid[CFG_MAX];
             cfg_get(CFG_WIFI_SSID, ssid, sizeof ssid);
             ui_text(6, 258, ssid[0] ? ssid : "WIFI", UI_GREEN, UI_BG, 1);
@@ -200,8 +208,9 @@ static void checkin_task(void *arg) {
      * open with a spurious "unreachable" on screen. */
     vTaskDelay(pdMS_TO_TICKS(2000));
     for (;;) {
-        if (!craw_wifi_is_connected()) {
-            /* Retry SOON, not after a full period. Association typically
+        if (!craw_wifi_is_connected() && !relay_available()) {
+            /* R3: a relay proxy is as good as a network. Without either,
+             * retry SOON, not after a full period. Association typically
              * completes ~10 s after boot, well past the first tick; sleeping
              * the whole 60 s here made a healthy device look dead for a minute
              * after every power-on. */
@@ -209,8 +218,10 @@ static void checkin_task(void *arg) {
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
-        if (!settled) {
-            /* GOT_IP is not the same as "the network works". A check-in issued
+        if (!settled && !relay_available()) {
+            /* (Relay needs no settling: the proxy's network is the proxy's
+             * problem, and a phone that just attached is ready now.)
+             * GOT_IP is not the same as "the network works". A check-in issued
              * ~2 s after DHCP reliably failed to connect while the identical
              * request 15 s later succeeded — ARP for the gateway and the route
              * to the server still have to settle. Firing too early painted
@@ -280,7 +291,7 @@ static void checkin_task(void *arg) {
                 led_rgb(48, 0, 0);
                 break;
             }
-            usb_printf("[checkin] %s\r\n", ota_last_status());
+            usb_printf("[checkin] %s (via %s)\r\n", ota_last_status(), ota_transport_name());
 
             /*
              * SILENT ASSOCIATION LOSS WATCHDOG.
@@ -408,6 +419,18 @@ void app_main(void) {
 
     ota_init();
     ota_register_forth_words();
+
+    /* R3: the BLE relay pipe. Up from boot, always advertising: a device that
+     * is only reachable when someone remembers to enable BLE is not a device
+     * a phone can rescue. Costs ~45 KB of internal RAM (measured below). */
+    if (pipe_ble_init() == ESP_OK)
+        usb_printf("ble relay: advertising as %s\r\n", pipe_ble_name());
+    else
+        usb_print("ble relay: unavailable in this build\r\n");
+    /* R4: the serial relay pipe rides this same console; a host attaches by
+     * sending "!A". usb_print is already chunked below the TX buffer, which
+     * a 200-char base64 line needs. */
+    pipe_serial_init(usb_print);
 
     /* H4: bring back whatever the last successful apply installed — the
      * dictionary is RAM, and a reboot must not silently revert the device

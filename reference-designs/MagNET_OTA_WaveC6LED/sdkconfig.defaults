@@ -31,6 +31,14 @@ CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 # and networking on this target was unproven, so the first job of D1 is to turn
 # it on and MEASURE rather than assume it fits in 512 KB alongside Forth.
 CONFIG_ESP_WIFI_ENABLED=y
-# BLE stays off: nothing needs it until R3 (the BLE relay transport), and it is
-# the largest single thing we can decline to link while measuring headroom.
-CONFIG_BT_ENABLED=n
+# R3: BLE ON, NimBLE host (the only host IDF supports on the C6). The relay
+# pipe advertises from boot. Measured cost on this board: see the boot log's
+# "heap after ble" line — budget ~45 KB of internal RAM.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+# ATT MTU: frames follow the negotiated value; ask for the max.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517

@@ -60,6 +60,9 @@ const ota_release_t *ota_pending(void);
 /* Last outcome in words, for the screen and the console. */
 const char  *ota_last_status(void);
 
+/* R3: "ip" or "relay" — whichever the NEXT request would use. */
+const char  *ota_transport_name(void);
+
 /* R2 — mDNS discovery of the server (mdns_discover.c). DISCOVER runs a
  * one-shot `_robotarme._tcp` query and caches the winner until reboot or the
  * next call; DISCOVERED-URL is that cache or NULL. transport_ip falls back to

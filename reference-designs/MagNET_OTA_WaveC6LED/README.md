@@ -56,6 +56,27 @@ brightness overheats the panel and leaves permanent dark shadows, and this devic
 is meant to display status indefinitely — precisely the abuse pattern described.
 Attention-getting is the RGB LED's job, not the backlight's.
 
+## Relay transports (R3 BLE, R4 USB serial)
+
+A device with no usable WiFi can still check in: something else carries its
+HTTP for it. Both pipes speak the same framed protocol (`relay_frame.h`) and
+the same `transport_relay`; an attached proxy takes precedence over WiFi.
+
+- **BLE** — the board advertises as `ROBOTARME-<mac4>` with service
+  `4d41474e-4554-0002-0000-000000000000`. Proxies: the RobotARme Contributor
+  app (Settings → Bluetooth relay), or from a laptop
+  `python3 -m venv .venv && .venv/bin/pip install bleak &&
+  .venv/bin/python tools/ble_relay_proxy.py --server http://<server>:8000`.
+- **USB serial** — open `http://<server>:8000/device-serial` in Chrome/Edge,
+  choose the board's port, attach. The page relays over the console using
+  `!R<base64>` lines; the console keeps working alongside.
+- On the device: `relay` shows which pipe is attached and frame counters;
+  `checkin` then goes through it. The screen's NETWORK section reads
+  `BLE RELAY` / `USB RELAY` while a proxy is attached.
+
+The device's bearer token crosses the proxy in clear text by decision (plan
+§5.3 (a)); the proxy is operator-controlled.
+
 ## Build and flash
 
 Plain ESP-IDF 5.1.1. No PlatformIO.

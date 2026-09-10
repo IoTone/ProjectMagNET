@@ -27,6 +27,7 @@
 #include "magnet_ui.h"
 #include "craw_wifi.h"
 #include "magnet_ota.h"
+#include "magnet_relay.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -90,6 +91,7 @@ static void cmd_help(void) {
         "  wifi                connect using the stored credentials\r\n"
         "  discover            find the server via mDNS (_robotarme._tcp)\r\n"
         "  checkin             POST /api/devices/check-in now\r\n"
+        "  relay               BLE/serial relay state + frame counters\r\n"
         "  verify              fetch the pending release + check its signature\r\n"
         "  forget <key>        erase one key\r\n"
         "  help                this\r\n");
@@ -110,6 +112,10 @@ void console_run(int (*getch)(void), void (*putch)(int), void (*print)(const cha
             n = 0;
             trim(line);
             if (line[0] == '\0') { out("ok> "); continue; }
+            /* R4: relay lines ("!A", "!D", "!R<base64>") belong to the serial
+             * pipe, not to Forth, and get no prompt — the host on the other
+             * end is a program parsing our output, not a person. */
+            if (line[0] == '!' && pipe_serial_line(line)) continue;
 
             if (strncmp(line, "set ", 4) == 0) {
                 char *key = line + 4;
@@ -168,6 +174,29 @@ void console_run(int (*getch)(void), void (*putch)(int), void (*print)(const cha
                         out(m);
                     }
                 }
+            } else if (strcmp(line, "relay") == 0) {
+                /* R3: is a proxy attached, and is traffic actually flowing.
+                 * frames_in > 0 with responses == 0 is the signature of a
+                 * proxy that hears us but cannot reach the server. */
+                char m[160];
+                const relay_stats_t *st = relay_stats();
+                snprintf(m, sizeof m, "  ble:       %s, %s\r\n", pipe_ble_name(),
+                         relay_available() ? "proxy ATTACHED" :
+                         pipe_ble_connected() ? "central connected, not subscribed" : "advertising");
+                out(m);
+                snprintf(m, sizeof m, "  serial:    %s\r\n",
+                         pipe_serial_attached() ? "host ATTACHED" : "no host (send !A)");
+                out(m);
+                snprintf(m, sizeof m, "  transport: %s (next request)\r\n", ota_transport_name());
+                out(m);
+                snprintf(m, sizeof m, "  requests %lu  responses %lu  timeouts %lu\r\n",
+                         (unsigned long)st->requests, (unsigned long)st->responses,
+                         (unsigned long)st->timeouts);
+                out(m);
+                snprintf(m, sizeof m, "  frames out %lu  in %lu  bad %lu\r\n",
+                         (unsigned long)st->frames_out, (unsigned long)st->frames_in,
+                         (unsigned long)st->bad_frames);
+                out(m);
             } else if (strcmp(line, "discover") == 0) {
                 /* R2 proof, runnable with server_url deliberately forgotten:
                  * mDNS answers "where is the server" on this LAN. */
@@ -196,7 +225,9 @@ void console_run(int (*getch)(void), void (*putch)(int), void (*print)(const cha
             if (n > 0) { n--; putch(8); putch(' '); putch(8); }
         } else if (n < LINE_MAX - 1 && c >= 32 && c < 127) {
             line[n++] = (char)c;
-            putch(c);                              /* echo */
+            /* No echo on relay lines: a 196-char base64 frame echoed back
+             * doubles the traffic and interleaves with our own "!R" output. */
+            if (line[0] != '!') putch(c);          /* echo */
         }
     }
 }
