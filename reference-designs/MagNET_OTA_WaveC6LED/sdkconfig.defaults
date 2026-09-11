@@ -1,4 +1,12 @@
 # Waveshare ESP32-C6-LCD-1.47 — 4 MB flash, 512 KB HP SRAM, no PSRAM.
+# The Touch variant (ESP32-C6-Touch-LCD-1.47, C6FH8, 8 MB flash) builds from
+# the same tree: pick it under "MagNET board" (CONFIG_MAGNET_BOARD_WAVEC6TOUCH=y).
+# The 4 MB partition table fits either part.
+#
+# IDF >= 5.1.4 REQUIRED for the C6FH8 (chip rev v0.2): under 5.1.1 the analog
+# register bus never clears its busy bit during early clock init and the board
+# boot-loops on TG0_WDT_HPSYS before app_main — with PC in
+# esp_rom_regi2c_write_mask. Built and verified with v5.4.4 (2026-09-10).
 CONFIG_IDF_TARGET="esp32c6"
 
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

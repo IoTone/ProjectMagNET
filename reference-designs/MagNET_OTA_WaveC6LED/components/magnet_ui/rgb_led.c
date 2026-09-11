@@ -8,9 +8,11 @@
  * The LED is the attention-getting surface on this board — NOT the backlight,
  * which is thermally capped (see UI_BL_MAX).
  */
+#include "sdkconfig.h"
 #include "magnet_ui.h"
-#include "driver/rmt_tx.h"
 #include "esp_log.h"
+#if CONFIG_MAGNET_HAS_RGB_LED
+#include "driver/rmt_tx.h"
 
 #define PIN_LED   8
 #define RMT_HZ    (10 * 1000 * 1000)   /* 0.1 us per tick */
@@ -53,3 +55,9 @@ void led_rgb(uint8_t r, uint8_t g, uint8_t b) {
     rmt_transmit(s_chan, s_enc, grb, sizeof(grb), &tx);
     rmt_tx_wait_all_done(s_chan, 100);
 }
+
+#else  /* board without an RGB LED (the touch variant): the API stays, the
+        * light does not. Attention-getting there is the screen alone. */
+esp_err_t led_init(void) { return ESP_ERR_NOT_SUPPORTED; }
+void led_rgb(uint8_t r, uint8_t g, uint8_t b) { (void)r; (void)g; (void)b; }
+#endif
