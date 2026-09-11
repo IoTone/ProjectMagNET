@@ -29,6 +29,7 @@ typedef struct {
     char version[32];
     char name[64];
     char sha256[72];
+    long size_bytes;          /* from check-in release.file_size_bytes; 0 = unknown */
     char download_url[256];
     char signature_url[256];
     long expires_unix;

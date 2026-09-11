@@ -190,6 +190,8 @@ ota_action_t ota_checkin(void) {
             jstr(rel, "version",     s_pending.version, sizeof s_pending.version);
             jstr(rel, "name",        s_pending.name,    sizeof s_pending.name);
             jstr(rel, "file_sha256", s_pending.sha256,  sizeof s_pending.sha256);
+            cJSON *sz = cJSON_GetObjectItemCaseSensitive(rel, "file_size_bytes");
+            if (cJSON_IsNumber(sz)) s_pending.size_bytes = (long)sz->valuedouble;
         }
         s_have_pending = true;
         snprintf(s_status, sizeof s_status, "update %s", s_pending.version);
