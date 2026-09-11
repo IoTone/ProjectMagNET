@@ -112,13 +112,16 @@ static void draw_status(const char *state, uint16_t state_colour,
     ui_text(6, 190, "CHECK-IN", UI_DIM, UI_BG, 1);
     ui_text(6, 204, ota_last_status(), UI_CYAN, UI_BG, 1);
 
-    ui_text(6, 200, "FREE RAM", UI_DIM, UI_BG, 1);
+    /* FREE RAM sat at y=200/214, ON TOP of the CHECK-IN block above — the
+     * two were added in different phases and nobody rendered the whole
+     * screen until tools/screen_render.c existed. Rows now: 228/242. */
+    ui_text(6, 228, "FREE RAM", UI_DIM, UI_BG, 1);
     snprintf(line, sizeof(line), "%lu KB", heap_free / 1024);
-    ui_text(6, 214, line, UI_WHITE, UI_BG, 2);
+    ui_text(6, 242, line, UI_WHITE, UI_BG, 2);
 
     /* Network. An unprovisioned device says so in words rather than leaving a
      * blank for the reader to interpret. */
-    ui_text(6, 244, "NETWORK", UI_DIM, UI_BG, 1);
+    ui_text(6, 270, "NETWORK", UI_DIM, UI_BG, 1);
     {
         char ip[32];
         if (relay_available()) {
@@ -126,19 +129,19 @@ static void draw_status(const char *state, uint16_t state_colour,
              * even if WiFi is also up. Say so — the operator holding the
              * phone (or the cable) should see the device agree. */
             bool ble = strcmp(relay_pipe_name(), "ble") == 0;
-            ui_text(6, 258, ble ? "BLE RELAY" : "USB RELAY", UI_GREEN, UI_BG, 1);
-            ui_text(6, 272, ble ? pipe_ble_name() : "VIA HOST", UI_WHITE, UI_BG, 1);
+            ui_text(6, 284, ble ? "BLE RELAY" : "USB RELAY", UI_GREEN, UI_BG, 1);
+            ui_text(6, 298, ble ? pipe_ble_name() : "VIA HOST", UI_WHITE, UI_BG, 1);
         } else if (craw_wifi_is_connected() && craw_wifi_get_ip_str(ip, sizeof ip)) {
             char ssid[CFG_MAX];
             cfg_get(CFG_WIFI_SSID, ssid, sizeof ssid);
-            ui_text(6, 258, ssid[0] ? ssid : "WIFI", UI_GREEN, UI_BG, 1);
-            ui_text(6, 272, ip, UI_WHITE, UI_BG, 1);
+            ui_text(6, 284, ssid[0] ? ssid : "WIFI", UI_GREEN, UI_BG, 1);
+            ui_text(6, 298, ip, UI_WHITE, UI_BG, 1);
         } else if (cfg_get(CFG_WIFI_SSID, line, sizeof line)) {
-            ui_text(6, 258, "CONNECTING", UI_AMBER, UI_BG, 1);
-            ui_text(6, 272, line, UI_DIM, UI_BG, 1);
+            ui_text(6, 284, "CONNECTING", UI_AMBER, UI_BG, 1);
+            ui_text(6, 298, line, UI_DIM, UI_BG, 1);
         } else {
-            ui_text(6, 258, "NOT PROVISIONED", UI_DIM, UI_BG, 1);
-            ui_text(6, 272, "SET WIFI SSID", UI_DIM, UI_BG, 1);
+            ui_text(6, 284, "NOT PROVISIONED", UI_DIM, UI_BG, 1);
+            ui_text(6, 298, "SET WIFI SSID", UI_DIM, UI_BG, 1);
         }
     }
 
