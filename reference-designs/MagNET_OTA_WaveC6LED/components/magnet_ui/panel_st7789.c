@@ -20,13 +20,33 @@
 
 static const char *TAG = "magnet_ui";
 
-/* Pinout from docs.waveshare.com/ESP32-C6-LCD-1.47 */
+/*
+ * TWO BOARDS, ONE FILE (Kconfig MAGNET_BOARD). The touch variant is not the
+ * LCD variant with a touch layer glued on: different controller (JD9853, not
+ * ST7789T), different SPI pins, backlight on 23 not 22, and its LCD_RST sits
+ * on the pin the LCD board uses for BACKLIGHT — so an image built for one
+ * board driving the other holds the panel in reset. Found the hard way: the
+ * first flash of the touch unit was a black screen with everything else
+ * working. Pins from each board's own Waveshare demo, not from the wiki.
+ */
+#if CONFIG_MAGNET_BOARD_WAVEC6TOUCH
+#include "esp_lcd_jd9853.h"
+#define PIN_MOSI  2
+#define PIN_SCLK  1
+#define PIN_CS   14
+#define PIN_DC   15
+#define PIN_RST  22
+#define PIN_BL   23
+#define PANEL_NAME "JD9853"
+#else   /* ESP32-C6-LCD-1.47 */
 #define PIN_MOSI  6
 #define PIN_SCLK  7
 #define PIN_CS   14
 #define PIN_DC   15
 #define PIN_RST  21
 #define PIN_BL   22
+#define PANEL_NAME "ST7789"
+#endif
 
 /* Glass is 172 columns centred in the controller's 240, so writes need a
  * 34-column offset. */
@@ -144,6 +164,22 @@ esp_err_t ui_init(void) {
      * sequence (its own porch, power and gamma tables, plus INVON). Chasing
      * MADCTL bits against the generic driver was never going to converge; the
      * vendor's init is the ground truth and is vendored here beside us. */
+#if CONFIG_MAGNET_BOARD_WAVEC6TOUCH
+    /* JD9853, as the Waveshare touch demo brings it up: RGB order, invert ON
+     * (its init table has no 0x21), no mirror, and NO set_gap — the driver's
+     * own CASET (0x2A: 34..205) already centres the 172 columns. */
+    esp_lcd_panel_dev_config_t panel_cfg = {
+        .reset_gpio_num = PIN_RST,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .bits_per_pixel = 16,
+    };
+    ESP_ERROR_CHECK(esp_lcd_new_panel_jd9853(io, &panel_cfg, &s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, false, false));
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
+#else
     esp_lcd_panel_dev_st7789t_config_t panel_cfg = {
         .reset_gpio_num = PIN_RST,
         /* BGR, not RGB. From the vendor demo — with RGB the red and blue
@@ -160,12 +196,13 @@ esp_err_t ui_init(void) {
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, true, false));
     ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, X_GAP, Y_GAP));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
+#endif
 
     backlight_init();
     s_ready = true;
     ui_clear(UI_BG);
     ui_backlight(40);           /* comfortably under the thermal ceiling */
-    ESP_LOGI(TAG, "ST7789 %dx%d up (gap %d,%d)", UI_W, UI_H, X_GAP, Y_GAP);
+    ESP_LOGI(TAG, PANEL_NAME " %dx%d up (gap %d,%d)", UI_W, UI_H, X_GAP, Y_GAP);
     return ESP_OK;
 }
 

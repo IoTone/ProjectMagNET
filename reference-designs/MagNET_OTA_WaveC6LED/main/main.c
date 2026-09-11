@@ -6,6 +6,7 @@
  * Derived from ESPIDFORTH's src/main.c.
  */
 #include <stdio.h>
+#include "sdkconfig.h"
 #include <stdarg.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -96,7 +97,7 @@ static void draw_status(const char *state, uint16_t state_colour,
     ui_fill(6, 48, UI_W - 12, 1, UI_DIM);
 
     ui_text(6, 60, "DEVICE", UI_DIM, UI_BG, 1);
-    ui_text(6, 74, "WAVEC6LED", UI_WHITE, UI_BG, 2);
+    ui_text(6, 74, CONFIG_MAGNET_BOARD_NAME, UI_WHITE, UI_BG, 2);
 
     ui_text(6, 104, "FIRMWARE", UI_DIM, UI_BG, 1);
     snprintf(line, sizeof(line), "E4TH %s", ESPIDFORTH_VERSION_STRING);
@@ -349,7 +350,7 @@ void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(500));
 
     usb_print("\r\n\r\n============================================\r\n");
-    usb_print("  MagNET OTA client - WaveC6LED\r\n");
+    usb_print("  MagNET OTA client - " CONFIG_MAGNET_BOARD_NAME "\r\n");
     usb_printf("  ESPIDFORTH v%s\r\n", ESPIDFORTH_VERSION_STRING);
     usb_printf("  Build: %s %s\r\n", ESPIDFORTH_BUILD_DATE, ESPIDFORTH_BUILD_TIME);
     usb_print("============================================\r\n");
@@ -363,11 +364,16 @@ void app_main(void) {
     } else {
         usb_print("display: FAILED\r\n");
     }
-    if (led_init() == ESP_OK) {
-        led_rgb(40, 24, 0);                 /* amber: booting */
-        usb_print("led: WS2812 on GPIO8 up\r\n");
-    } else {
-        usb_print("led: FAILED\r\n");
+    {
+        esp_err_t le = led_init();
+        if (le == ESP_OK) {
+            led_rgb(40, 24, 0);                 /* amber: booting */
+            usb_print("led: WS2812 on GPIO8 up\r\n");
+        } else if (le == ESP_ERR_NOT_SUPPORTED) {
+            usb_print("led: none on this board\r\n");
+        } else {
+            usb_print("led: FAILED\r\n");
+        }
     }
 
     int rc = forth_init(FORTH_HEAP_SIZE);

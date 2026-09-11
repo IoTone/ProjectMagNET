@@ -77,6 +77,23 @@ the same `transport_relay`; an attached proxy takes precedence over WiFi.
 The device's bearer token crosses the proxy in clear text by decision (plan
 §5.3 (a)); the proxy is operator-controlled.
 
+## Board variants and toolchain
+
+Two Waveshare 1.47" C6 boards build from this tree; choose under
+`idf.py menuconfig` → "MagNET board" (or set `CONFIG_MAGNET_BOARD_WAVEC6TOUCH=y`):
+
+| board | LCD | pins (MOSI/SCLK/CS/DC/RST/BL) | RGB LED | chip |
+|---|---|---|---|---|
+| ESP32-C6-LCD-1.47 (default) | ST7789T | 6/7/14/15/21/22 | WS2812 on GPIO8 | C6FH4, 4 MB |
+| ESP32-C6-Touch-LCD-1.47 | JD9853 | 2/1/14/15/22/23 | none | C6FH8 rev v0.2, 8 MB |
+
+**The touch board needs ESP-IDF ≥ 5.1.4** (built and verified with v5.4.4).
+Under 5.1.1 its newer silicon boot-loops on `TG0_WDT_HPSYS` before `app_main`,
+with the saved PC in `esp_rom_regi2c_write_mask` — the analog register bus
+never clears busy during early clock init. Nothing in this tree is at fault;
+the fix is the toolchain. With 5.4.4: `. ~/esp/esp-idf-v5.4/export.sh &&
+idf.py -B build-v54 build`.
+
 ## Build and flash
 
 Plain ESP-IDF 5.1.1. No PlatformIO.

@@ -28,10 +28,8 @@ import time
 import urllib.error
 import urllib.request
 
-try:
-    from bleak import BleakClient, BleakScanner
-except ImportError:
-    sys.exit("bleak is not installed: python3 -m venv .venv && .venv/bin/pip install bleak")
+# bleak is imported in main(), not here: serial_relay_proxy.py imports this
+# module for the codec and must work on a machine with pyserial but no bleak.
 
 SVC  = "4d41474e-4554-0002-0000-000000000000"
 TX   = "4d41474e-4554-0002-0000-000000000001"   # device -> us (notify)
@@ -79,7 +77,7 @@ def chunk(t: int, seq: int, msg: bytes, max_frame: int):
 
 
 class Proxy:
-    def __init__(self, client: BleakClient, server: str, max_frame: int, timeout: float):
+    def __init__(self, client, server: str, max_frame: int, timeout: float):   # client: BleakClient
         self.client, self.server, self.max_frame, self.timeout = client, server.rstrip("/"), max_frame, timeout
         self.cur = None      # (seq, total, next_idx, chunks)
         self.n_in = self.n_out = self.n_req = 0
@@ -147,6 +145,10 @@ class Proxy:
 
 
 async def main():
+    try:
+        from bleak import BleakClient, BleakScanner
+    except ImportError:
+        sys.exit("bleak is not installed: python3 -m venv .venv && .venv/bin/pip install bleak")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--server", help="base URL when the device sends none (its own NVS server_url wins)")
     ap.add_argument("--name", default="ROBOTARME-", help="advertised-name prefix to accept (default ROBOTARME-)")

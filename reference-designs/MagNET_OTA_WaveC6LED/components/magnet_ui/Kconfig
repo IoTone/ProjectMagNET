@@ -1,0 +1,28 @@
+menu "MagNET board"
+
+choice MAGNET_BOARD
+    prompt "Waveshare board variant"
+    default MAGNET_BOARD_WAVEC6LED
+    help
+        The two ESP32-C6 1.47" boards look alike and are not: different LCD
+        controller, different SPI pins, one has an RGB LED and the other has
+        touch + IMU + battery. Pick the one on the bench. Wrong choice = black
+        screen, nothing worse.
+
+config MAGNET_BOARD_WAVEC6LED
+    bool "ESP32-C6-LCD-1.47 (ST7789T, WS2812 on GPIO8)"
+config MAGNET_BOARD_WAVEC6TOUCH
+    bool "ESP32-C6-Touch-LCD-1.47 (JD9853, AXS5106L touch, no RGB LED)"
+endchoice
+
+config MAGNET_BOARD_NAME
+    string
+    default "WAVEC6LED" if MAGNET_BOARD_WAVEC6LED
+    default "WAVEC6TOUCH" if MAGNET_BOARD_WAVEC6TOUCH
+
+config MAGNET_HAS_RGB_LED
+    bool
+    default y if MAGNET_BOARD_WAVEC6LED
+    default n
+
+endmenu
