@@ -178,6 +178,14 @@ esp_err_t ui_init(void) {
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(s_panel, true));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(s_panel, false, false));
+    /* The gap IS needed here too. The driver's init table sets CASET to
+     * 34..205 once, but every draw_bitmap re-sends CASET from its own x plus
+     * x_gap — and with x_gap 0 our columns 0..33 land off the glass. First
+     * flash of the touch unit: everything shifted left by 34 px, left margin
+     * gone (owner, 2026-09-10). The vendor demo hides this because LVGL
+     * paints the full 172 from x=0 after a set_gap the demo happens to have
+     * commented out but the driver's rotation path re-applies. */
+    ESP_ERROR_CHECK(esp_lcd_panel_set_gap(s_panel, X_GAP, Y_GAP));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(s_panel, true));
 #else
     esp_lcd_panel_dev_st7789t_config_t panel_cfg = {
