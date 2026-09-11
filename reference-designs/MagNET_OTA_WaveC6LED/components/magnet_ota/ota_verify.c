@@ -102,9 +102,22 @@ bool ota_fetch_and_verify(magnet_transport_t *tx, const ota_release_t *rel) {
 
     /* --- 2. Body --- */
     free(s_bundle); s_bundle = NULL; s_bundle_len = 0;
+    /* SIZE THE BUFFER TO THE RELEASE, not to the cap. A fixed 64 KB malloc
+     * for a 67-byte bundle failed on the touch unit (IDF 5.4 + NimBLE +
+     * WiFi resident: ~78 KB free, no 64 KB contiguous block) — three times,
+     * until the poison counter gave up. The check-in tells us the size;
+     * only an unknown size falls back to the cap, and either way the
+     * transport flags truncation rather than parsing a clipped body. */
     size_t cap = BUNDLE_MAX;
+    if (rel->size_bytes > 0 && (size_t)rel->size_bytes < BUNDLE_MAX) cap = (size_t)rel->size_bytes;
     s_bundle = malloc(cap + 1);
-    if (!s_bundle) { snprintf(s_verify_status, sizeof s_verify_status, "no memory"); return false; }
+    if (!s_bundle) {
+        snprintf(s_verify_status, sizeof s_verify_status, "no memory (need %u, largest %u)",
+                 (unsigned)(cap + 1),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        ESP_LOGE(TAG, "%s", s_verify_status);
+        return false;
+    }
 
     size_t got = 0;
     int st = tx->request(tx, "GET", rel->download_url, NULL,
