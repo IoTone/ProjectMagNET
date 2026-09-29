@@ -1,0 +1,11 @@
+/* MCUboot sees the same flash map as the app. Supplying this overlay
+ * REPLACES MCUboot's default one, which is what points its code at the boot
+ * partition — without the chosen below it links at slot0 (0x0800C000) and
+ * the part, which boots from 0x08000000, never runs it. */
+#include "../boards/mg24_partitions.dtsi"
+
+/ {
+	chosen {
+		zephyr,code-partition = &boot_partition;
+	};
+};

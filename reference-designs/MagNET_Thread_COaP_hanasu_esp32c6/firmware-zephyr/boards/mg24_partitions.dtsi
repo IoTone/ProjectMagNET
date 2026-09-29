@@ -1,0 +1,44 @@
+/*
+ * XIAO MG24 flash map for MCUboot + dual-slot OTA (Z-F). Shared by the app
+ * (boards/xiao_mg24.overlay) and MCUboot (sysbuild/mcuboot.overlay) so the two
+ * can never disagree. 1536 KB, 8 KB pages:
+ *
+ *   0x000000  mcuboot   48 KB
+ *   0x00C000  slot0    712 KB   running image
+ *   0x0BE000  slot1    712 KB   OTA download / swap partner
+ *   0x170000  storage   64 KB   settings: identity key, bonds, channel, OT
+ *
+ * storage stays at 0x170000 (where the pre-MCUboot build put it) so an
+ * upgrade keeps the node's identity and bonds.
+ */
+&flash0 {
+	/delete-node/ partitions;
+
+	partitions {
+		ranges;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			compatible = "zephyr,mapped-partition";
+			reg = <0x00000000 DT_SIZE_K(48)>;
+			label = "mcuboot";
+			read-only;
+		};
+		slot0_partition: partition@c000 {
+			compatible = "zephyr,mapped-partition";
+			reg = <0x0000c000 DT_SIZE_K(712)>;
+			label = "image-0";
+		};
+		slot1_partition: partition@be000 {
+			compatible = "zephyr,mapped-partition";
+			reg = <0x000be000 DT_SIZE_K(712)>;
+			label = "image-1";
+		};
+		storage_partition: partition@170000 {
+			compatible = "zephyr,mapped-partition";
+			reg = <0x00170000 DT_SIZE_K(64)>;
+			label = "storage";
+		};
+	};
+};
