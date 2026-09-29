@@ -1,0 +1,22 @@
+# MagNET app options. Kconfig (not -D) because sysbuild forwards conf files to
+# the app image but not arbitrary -D cache variables.
+source "Kconfig.zephyr"
+
+menu "MagNET Hanasu"
+
+config MN_BLE_RESIDENT
+	bool "BLE stays up after provisioning (companion node)"
+	depends on BT
+	help
+	  Keep the BLE-GATT HCP binding up for the life of the node so a phone
+	  can use it as its live window into the mesh (magnet_app Option A).
+	  Default (n): advertise only while unprovisioned; CHANNEL SET tears
+	  the stack down.
+
+config MN_OTA_FORCE_UNHEALTHY
+	bool "TEST ONLY: never confirm an OTA image (exercises rollback)"
+	help
+	  The running image never counts as healthy and the confirm deadline
+	  drops to 20 s, so a swapped-in image reboots and MCUboot reverts.
+
+endmenu

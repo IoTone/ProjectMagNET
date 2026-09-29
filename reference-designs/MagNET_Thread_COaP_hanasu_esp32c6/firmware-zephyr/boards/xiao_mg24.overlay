@@ -1,0 +1,2 @@
+/* App flash map — see mg24_partitions.dtsi (shared with MCUboot). */
+#include "mg24_partitions.dtsi"
