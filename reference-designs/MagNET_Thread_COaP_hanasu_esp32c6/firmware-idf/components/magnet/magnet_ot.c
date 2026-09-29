@@ -23,15 +23,19 @@
 #include <string.h>
 
 #include "esp_err.h"
+#include "esp_openthread_lock.h"
+#ifndef __ZEPHYR__   /* Zephyr build (firmware-zephyr/): L2 owns OT bringup */
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
 
 #include "esp_openthread.h"
-#include "esp_openthread_lock.h"
 #include "esp_openthread_netif_glue.h"
 #include "esp_openthread_types.h"
 #include "esp_vfs_eventfd.h"
+#else
+#include <openthread.h>      /* openthread_get_default_instance() */
+#endif
 
 #include "openthread/coap.h"
 #include "openthread/dataset.h"
@@ -56,6 +60,7 @@ static const uint8_t MN_OT_NETWORK_KEY[16] = {
 };
 static const uint8_t MN_OT_EXT_PANID[8] = { 'M','a','g','N','E','T','v','2' };
 
+#ifndef __ZEPHYR__
 static const esp_openthread_platform_config_t s_ot_config = {
     .radio_config = {
         .radio_mode = RADIO_MODE_NATIVE,           /* C6 native 802.15.4 */
@@ -69,6 +74,7 @@ static const esp_openthread_platform_config_t s_ot_config = {
         .task_queue_size  = 10,
     },
 };
+#endif
 
 static otInstance  *s_inst = NULL;                    /* set once config is done */
 static char         s_role[12] = "-";
@@ -369,6 +375,29 @@ static void ot_configure(otInstance *inst) {
     ESP_ERROR_CHECK(otThreadSetEnabled(inst, true) == OT_ERROR_NONE ? ESP_OK : ESP_FAIL);
 }
 
+#ifdef __ZEPHYR__
+/* Zephyr's OpenThread L2 created the instance at boot and its work queue is
+ * already running, so — unlike IDF, which configures before the mainloop
+ * starts — configuration must hold the OT API lock. Nothing to launch: OT
+ * tasklets run on Zephyr's "openthread" work queue.
+ *
+ * s_inst is published BEFORE the lock drops: the OT work queue is a
+ * cooperative thread that preempts us the instant we unlock, and the first
+ * thing it runs is on_ot_state_changed(), which dereferences s_inst. (IDF
+ * can publish after config because its mainloop has not started yet.) Every
+ * other s_inst user takes this lock, so it still sees a configured stack. */
+void mn_openthread_start(void) {
+    mn_set_state(MN_ATTACHING);
+    otInstance *inst = openthread_get_default_instance();
+    esp_openthread_lock_acquire(portMAX_DELAY);
+    ot_configure(inst);
+    s_inst = inst;
+    esp_openthread_lock_release();
+
+    mn_emit_event("# openthread up: chan=%d pan=0x%04x net=%s (mcast derived from channel)",
+                  MN_OT_CHANNEL, MN_OT_PANID, MN_OT_NETWORK_NAME);
+}
+#else
 static void ot_main_task(void *arg) {
     (void)arg;
     mn_set_state(MN_ATTACHING);
@@ -414,6 +443,7 @@ void mn_openthread_start(void) {
     /* Generous stack — OpenThread mainloop + lwIP need headroom. */
     xTaskCreate(ot_main_task, "ot_main", 8192, NULL, 5, NULL);
 }
+#endif /* __ZEPHYR__ */
 
 #else  /* MN_ENABLE_OPENTHREAD == 0 */
 

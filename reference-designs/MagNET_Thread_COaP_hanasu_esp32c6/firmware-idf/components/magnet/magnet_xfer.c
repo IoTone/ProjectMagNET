@@ -93,6 +93,10 @@ static struct {
 } s_rx;
 
 static SemaphoreHandle_t s_mx = NULL;
+static const mn_xfer_sink_t *s_sink;      /* registered (Z-F); NULL = host  */
+static const mn_xfer_sink_t *s_rx_sink;   /* bound to the current rx session */
+
+void mn_xfer_set_sink(const mn_xfer_sink_t *sink) { s_sink = sink; }
 static TimerHandle_t     s_tick = NULL;
 
 static void tick_cb(TimerHandle_t t) { (void)t; mn_post_xfer_tick(); }
@@ -194,6 +198,7 @@ static void tx_fail(const char *reason) {
 static void rx_close(void) { s_rx.active = false; }
 
 static void rx_fail(const char *reason) {
+    if (s_rx_sink) { s_rx_sink->on_done(false); s_rx_sink = NULL; }
     xfer_event("!XFER_FAIL %04x %s", s_rx.xid, reason);
     rx_close();
 }
@@ -412,6 +417,7 @@ static void on_init(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
      * host-protocol line — allow printable-ASCII-no-space only */
     for (uint8_t i = 0; i < mlen; i++)
         if (meta[i] <= 0x20 || meta[i] > 0x7e) meta[i] = '_';
+    s_rx_sink = (s_sink && s_sink->claim(sender_id, meta, tlen, clen)) ? s_sink : NULL;
     xfer_event("!XFER_BEGIN %02x%02x%02x%02x %04x %lu %u %u %s",
                sender_id[0], sender_id[1], sender_id[2], sender_id[3],
                xid, (unsigned long)tlen, chunks, clen,
@@ -439,9 +445,19 @@ static void on_data(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     s_rx.bitmap[idx >> 3] |= (1u << (idx & 7));
     s_rx.got++;
 
-    rx_emit_chunk(idx, pl + 5, want);
+    if (s_rx_sink) {
+        if (s_rx_sink->on_chunk(idx, (uint32_t)idx * s_rx.chunk_len, pl + 5, want) < 0) {
+            send_abort(s_rx.src, s_rx.xid, 2);
+            rx_fail("sink-refused");
+            rx_close();
+            return;
+        }
+    } else {
+        rx_emit_chunk(idx, pl + 5, want);
+    }
 
     if (s_rx.got == s_rx.total_chunks) {
+        if (s_rx_sink) { s_rx_sink->on_done(true); s_rx_sink = NULL; }
         xfer_event("!XFER_DONE %02x%02x%02x%02x %04x len=%lu",
                    s_rx.peer_id[0], s_rx.peer_id[1], s_rx.peer_id[2],
                    s_rx.peer_id[3], s_rx.xid, (unsigned long)s_rx.total_len);

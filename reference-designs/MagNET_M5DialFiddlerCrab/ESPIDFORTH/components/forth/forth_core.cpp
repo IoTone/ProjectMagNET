@@ -61,12 +61,27 @@ static void engine_unlock(void) {}
 #endif
 
 // ----- Configuration -----
+// Overridable per build (-DMAX_WORD_LEN=32 …) for RAM-tight targets: the
+// dictionary is MAX_WORDS × ~(MAX_WORD_LEN + 12) bytes of BSS. Defaults are
+// what every existing ESP build uses.
+#ifndef MAX_STACK
 #define MAX_STACK     256
+#endif
+#ifndef MAX_RSTACK
 #define MAX_RSTACK    256
+#endif
+#ifndef MAX_WORD_LEN
 #define MAX_WORD_LEN  64
+#endif
+#ifndef MAX_WORDS
 #define MAX_WORDS     512
+#endif
+#ifndef MAX_INPUT
 #define MAX_INPUT     256
+#endif
+#ifndef MAX_DICT_CODE
 #define MAX_DICT_CODE 4096
+#endif
 
 // ----- Types -----
 typedef intptr_t cell_t;

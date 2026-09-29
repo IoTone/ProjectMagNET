@@ -43,6 +43,23 @@ void mn_xfer_on_rx(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
                    const char *src_ipv6);
 void mn_xfer_tick(void);          /* 250 ms cadence while any session active  */
 
+/* ---- optional receive sink (Z-F mesh OTA) ----
+ * By default a received transfer streams up the host link as !XFER events
+ * (the node is a modem; the host holds the file). A node with no host — a
+ * mesh OTA target — registers a sink instead: claim() sees each inbound
+ * BEGIN and returns true to take the transfer, after which every verified,
+ * de-duplicated chunk goes to on_chunk() (NOT the host) and on_done() closes
+ * it. !XFER_BEGIN/!XFER_DONE/!XFER_FAIL events are still emitted. All calls
+ * run on the pump task. No sink registered = unchanged behaviour. */
+typedef struct {
+    bool (*claim)(const uint8_t sender_id[4], const char *meta,
+                  uint32_t total_len, uint16_t chunk_len);
+    int  (*on_chunk)(uint16_t idx, uint32_t offset,      /* <0 aborts it */
+                     const uint8_t *data, size_t len);
+    void (*on_done)(bool complete);
+} mn_xfer_sink_t;
+void mn_xfer_set_sink(const mn_xfer_sink_t *sink);
+
 #ifdef __cplusplus
 }
 #endif
