@@ -296,6 +296,14 @@ static void handle_hcp_line(char *line) {
         else respond_err(tag, "E_SYNTAX", "ADMIN ADD <pubkey-hex> | LIST | REMOVE <n|fp> | REVOKE <fp>");
     }
     else if (!strcmp(verb, "OTA")) {             /* §13.5 admin-signed remote apply */
+#if MN_TEST_REPLAY
+        if (!strcmp(rest, "REPLAY")) {            /* test builds: resend the last apply verbatim */
+            extern int mn_test_replay(void);
+            if (mn_test_replay() != 0) respond_err(tag, "E_BAD_STATE", "no apply sent yet");
+            else respond(tag, "+OK replayed");
+            return;
+        }
+#endif
         char peer[48], sha[40], ver[32], o1[16] = "", o2[16] = "";
         uint8_t sha128[16];
         mn_pkg_ver_t v;

@@ -2330,6 +2330,8 @@ other's key. Every row observed on hardware:
 | 3 | Happy path, C6 admin → MG24 | accepted → swap → TEST → confirmed; C6 got `!OTA_REPORT 959f2e62 confirmed v0.7.0+2 (was v0.7.0+1)` |
 | 4 | Forced-unhealthy MG24 v+3 | TEST → not healthy in 20 s → MCUboot revert → `rolled-back v0.7.0+2 (failed v0.7.0+3)` |
 | 5 | Same apply resent after success | `E_NOT_STAGED` (binding to what is staged now) |
+| 5 | Captured apply **frame** replayed byte for byte (`OTA REPLAY`, test builds with `-DMN_TEST_REPLAY=1`) | at once: dropped by the counter high-water (`STATS rx dup` 0 → 1, no reply, never reached dispatch). After the target applied and rebooted (high-water table empty): reached dispatch, `E_NOT_STAGED` — the §13.7 binding is what stops it |
+| 6 | BLE host path: Mac → bonded BLE → MG24 `OTA APPLY` → C6 | `HCP-AUTH: bonded`; `!OTA_RESULT accepted` and `!OTA_REPORT confirmed v0.7.0+2 (was v0.7.0+1) bundles=1` both arrived as BLE notifications |
 | 7 | Package rejection matrix | step 1–3 runs + `tools/pkgtest` 25/25 |
 | 8 | MG24 admin → C6 target | accepted → ota_1 TEST → confirmed; MG24 got `confirmed v0.7.0+2 (was v0.7.0+1) bundles=1` — xray1's saved role bundle re-applied, so the bundle half of health was exercised |
 | 8 | Forced-unhealthy C6 image | reverted via IDF app rollback (step 3, local apply) |
@@ -2337,11 +2339,14 @@ other's key. Every row observed on hardware:
 
 Found on the way: with the draft's 1–3 s reboot delay the `accepted` reply was
 lost on 2 of 4 applies (the node rebooted inside the CON retransmit window);
-4–6 s fixed it (§13.3). Not yet run: item 6's BLE-host path end to end (the
-builds tested *are* the BLE-resident variants, driven over serial), and a
-replay of a captured apply *frame* (item 5 covered the re-sent command).
-Staging a 1.17 MB C6 package took 737 s from the MG24 (385 s in step 3) —
-unexplained, open.
+4–6 s fixed it (§13.3) — every apply since got its reply. Not covered: the
+refusal of a privileged verb on an *unbonded* BLE link (the bench Mac is
+bonded to the MG24; that gate was validated in the BLE phase).
+
+Staging times: `tools/ota_push.py` moves ~90 ms per 336-byte DATA line (C6 →
+MG24 557 KB: 137–169 s; MG24 → C6 1.17 MB: 385 s). The 351 s / 737 s runs above
+came from a bench harness whose 200 ms serial read timeout held each reply
+back — not the firmware.
 
 ### 13.11 Admin revocation (rev 2.4 — §13.9 Q5)
 

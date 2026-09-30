@@ -59,8 +59,12 @@ def main():
     log = bytearray()
 
     def rd():
+        # read what is waiting (>= 1 byte), not read(4096): that blocks until
+        # 4096 bytes or the timeout, holding each short "+OK" back. (Measured:
+        # ~90 ms per DATA line either way — the node/radio round trip is the
+        # limit here; a harness with a 200 ms timeout ran 2x slower.)
         while True:
-            log.extend(s.read(4096))
+            log.extend(s.read(max(1, s.in_waiting)))
     threading.Thread(target=rd, daemon=True).start()
 
     def send(line):
