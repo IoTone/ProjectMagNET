@@ -115,6 +115,14 @@ void app_main(void) {
                   mn_device_id()[0], mn_device_id()[1], mn_device_id()[2], mn_device_id()[3],
                   mn_name_get());
     mn_emit_event("# type CAPS, or HELP. FORTH drops to the engine.");
+#if MN_ENABLE_OTA
+    {   /* report the image; arm confirm-when-healthy; take "mnpkg:1" transfers */
+        extern void mn_ota_boot(void);
+        extern void mn_ota_sink_init(void);
+        mn_ota_boot();
+        mn_ota_sink_init();
+    }
+#endif
 
     /* 5. bring up radios LAST — heap is committed by now */
 #if MN_XIAO_RF_SWITCH

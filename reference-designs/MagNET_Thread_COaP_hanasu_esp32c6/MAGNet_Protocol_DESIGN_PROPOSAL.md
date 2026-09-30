@@ -2263,8 +2263,9 @@ state); the MG24 BLE build has ~3 KB static left.
    irreversible hardware security counters).
 5. **Admin revocation in scope** for this phase (`ADMIN REMOVE`, signed
    `admin/revoke`).
-6. **ESP32-C6 included.** 4 MB parts suffice (2 × 1216 KB slots; image is
-   852 KB) — OTA-PACKAGE §7.3. The old "OTA needs 8 MB" note assumed 2 MB slots.
+6. **ESP32-C6 included.** 4 MB parts suffice: 2 × 1792 KB slots (OTA-PACKAGE
+   §7.3, rev 1.3); the BLE+LED image is 1.16 MB, the Thread-only one 852 KB.
+   The old "OTA needs 8 MB" note assumed 2 MB slots.
 
 ### 13.10 Test plan (MG24 target, C6 admin)
 

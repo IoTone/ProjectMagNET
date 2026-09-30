@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | **Wire format** | `format_version = 1` (the byte at header offset 4) |
-| **Document revision** | 1.2 — 2026-09-29 |
-| **Status** | Normative; approved; not yet implemented |
+| **Document revision** | 1.3 — 2026-09-30 |
+| **Status** | Normative; approved. Receive + verify + apply implemented on XIAO MG24 and XIAO ESP32C6; signed remote apply (§13) pending |
 | **Shared copy** | https://claude.ai/code/artifact/367a8f54-6808-4a1f-8b7c-34e80274e30b (commentable; this file is the source of truth) |
-| **Tag** | `mnpkg-spec-v1.2` (previous: `mnpkg-spec-v1.1`, `mnpkg-spec-v1.0`) |
+| **Tag** | `mnpkg-spec-v1.3` (previous: `v1.2`, `v1.1`, `v1.0`) |
 
 Companion to design proposal §13 (remote apply) and `docs/EXTENDED-TRANSFER.md`
 (the Type 6 transport that carries it). Keywords MUST / SHOULD / MAY as in
@@ -254,13 +254,14 @@ Update slot = the inactive `ota_N` app partition. **New partition table
 (required once, over USB — a table cannot be changed over the air):**
 
 ```
-# 4 MB parts (M5NanoC6, XIAO ESP32C6) — current image is 852,000 B (70 % of a slot)
-nvs,      data, nvs,      0x9000,   0x6000,
+# 4 MB parts (M5NanoC6, XIAO ESP32C6) — firmware-idf/partitions_ota.csv
+# images: Thread-only ~852 KB, BLE+LED (xray1's build) ~1.16 MB = 65 % of a slot
+nvs,      data, nvs,      0x9000,   0x6000,     # unchanged: identity, bonds survive
 otadata,  data, ota,      0xf000,   0x2000,
 phy_init, data, phy,      0x11000,  0x1000,
-ota_0,    app,  ota_0,    0x20000,  0x130000,   # 1216 KB
-ota_1,    app,  ota_1,    0x150000, 0x130000,   # 1216 KB
-scripts,  data, littlefs, 0x280000, 0x180000,   # 1.5 MB (was 960 KB)
+ota_0,    app,  ota_0,    0x20000,  0x1C0000,   # 1792 KB
+ota_1,    app,  ota_1,    0x1E0000, 0x1C0000,   # 1792 KB
+scripts,  data, littlefs, 0x3A0000, 0x60000,    # 384 KB (was 960 KB; reserved, unused today)
 ```
 
 8 MB parts keep the 2 × 2 MB table in `firmware-idf/README.md`.
@@ -300,7 +301,7 @@ Two update layers, two version spaces — they compose, they do not overlap:
 | | Forth bundle OTA (WaveC6LED ↔ RobotARme) | Firmware OTA (this spec) |
 |---|---|---|
 | What changes | Forth source in the dictionary | The ESP-IDF / Zephyr image |
-| Artifact | Bundle JSON, ≤ 64 KB | `.mnpkg`, up to a slot (≤ 1216 KB C6) |
+| Artifact | Bundle JSON, ≤ 64 KB | `.mnpkg`, up to a slot (≤ 1792 KB C6) |
 | Signature | Ed25519 over hex(SHA-256) | Ed25519 over header[0:192] (§6) |
 | Delivery | Pull: HTTP check-in (IP or BLE/USB relay) | Push: Type 6 over the mesh; any transport can carry the file |
 | Rollback | Dictionary savepoint | MCUboot / IDF app rollback |
@@ -348,6 +349,7 @@ Fields are never repurposed; new ones take reserved bytes and a new version.
 
 | Revision | Date | Wire format | Change |
 |---|---|---|---|
+| 1.3 | 2026-09-30 | 1 | §7.3 C6 table corrected to 2 × 1792 KB slots, scripts 384 KB. Revs 1.0–1.2 sized slots from the Thread-only image (852 KB); the BLE+LED build is 1.16 MB and filled 93 % of a 1216 KB slot. No package byte changes. |
 | 1.2 | 2026-09-29 | 1 | §7.1: a refusal carries the failing check number (Type 6 STATUS optional reason byte); checks 1–6 refuse at chunk 0. Clarification — no package byte changes. |
 | 1.1 | 2026-09-29 | 1 | ESPIDFORTH alignment: `sig_alg 2` = Ed25519, preferred (§6); health includes persisted Forth bundles + `CLEARS_BUNDLES` flag (§7.4); relation to the RobotARme bundle OTA (§7.5); registry grown to every board in use — 4 more chips, 22 boards (§3.1). Additive: no v1.0 byte changes meaning; a v1.0 reader rejects the new values at check 1. |
 | 1.0 | 2026-09-29 | 1 | First approved revision (design proposal rev 2.3, §13). |
