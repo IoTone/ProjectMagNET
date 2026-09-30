@@ -19,6 +19,7 @@
 
 #include "forth_core.h"
 #include "craw_role_bundle.h"
+#include "magnet_ota.h"
 #include "magnet.h"
 #include "magnet_led.h"
 
@@ -102,6 +103,9 @@ void app_main(void) {
         const char **caps = mn_bundle_caps(&ncaps);
         int applied = craw_role_bundle_apply_saved(caps, ncaps);
         if (applied > 0) raw_print("# autorun: persisted role bundle(s) re-applied\r\n");
+        int found, failed;                   /* OTA health: a failed re-apply blocks confirm */
+        craw_role_bundle_boot_stats(&found, &failed);
+        mn_boot_bundles_set(found, failed);
     }
     if (mn_script_run() == 0) raw_print("# autorun: boot script executed\r\n");
 

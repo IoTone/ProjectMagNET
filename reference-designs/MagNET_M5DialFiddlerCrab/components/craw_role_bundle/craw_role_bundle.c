@@ -534,8 +534,16 @@ int craw_role_bundle_install_from_json(const char *json,
 
 /* ---------- Apply persisted bundles on boot ---------- */
 
+static int s_boot_found, s_boot_failed;     /* last apply_saved: for OTA health */
+
+void craw_role_bundle_boot_stats(int *found, int *failed) {
+    *found = s_boot_found;
+    *failed = s_boot_failed;
+}
+
 int craw_role_bundle_apply_saved(const char **node_caps, int n_caps) {
     int applied = 0;
+    s_boot_found = s_boot_failed = 0;
     nvs_iterator_t it = NULL;
     /* Iterate all "b:<name>" entries — each is a saved envelope. */
     if (nvs_entry_find(NVS_DEFAULT_PART_NAME, NVS_NS, NVS_TYPE_STR, &it) != ESP_OK) {
@@ -547,6 +555,8 @@ int craw_role_bundle_apply_saved(const char **node_caps, int n_caps) {
         if (strncmp(info.key, KEY_PREFIX_BUNDLE, 2) == 0) {
             /* Open + load + reinstall */
             nvs_handle_t h;
+            s_boot_found++;
+            s_boot_failed++;                  /* cleared below once it installs */
             if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
                 size_t sz = 0;
                 if (nvs_get_str(h, info.key, NULL, &sz) == ESP_OK && sz > 0 && sz < 8192) {
@@ -555,7 +565,7 @@ int craw_role_bundle_apply_saved(const char **node_caps, int n_caps) {
                         if (nvs_get_str(h, info.key, buf, &sz) == ESP_OK) {
                             int rc = craw_role_bundle_install_from_json(
                                 buf, node_caps, n_caps, NULL);
-                            if (rc == BUNDLE_OK) applied++;
+                            if (rc == BUNDLE_OK) { applied++; s_boot_failed--; }
                             else {
                                 ESP_LOGW(TAG, "skipping persisted '%s' rc=%d",
                                          info.key + 2, rc);

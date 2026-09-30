@@ -8,8 +8,12 @@ travels as one Type 6 transfer over Thread with meta "mnpkg:1". The sender is
 ANY Hanasu node on a host link. The target checks the header as soon as chunk
 0 lands and everything else at the end; !XFER_SENT therefore means "staged
 and verified", and a rejection comes back as "refused:<n>" (n = the spec §4
-check). Applying is separate and privileged — on the target: FORTH, then
-`ota-apply` (swaps in TEST mode; confirms once healthy, rolls back otherwise).
+check). Applying is separate and privileged:
+  --apply   the sender then sends an admin-signed OTA APPLY (design §13.3; the
+            target must allow-list the sender's key: ADMIN ADD on the target)
+            and waits for !OTA_RESULT and, after the target reboots, its
+            !OTA_REPORT (confirmed / rolled-back). --perm / --downgrade pass on.
+  or, on the target itself: FORTH, then `ota-apply`.
 
 Host-link rules: a C6 resets on open (this waits for its READY); a MG24's
 SAMD11 bridge only forwards while DTR is asserted (pyserial's default) and
@@ -37,6 +41,9 @@ def main():
     ap.add_argument("target")
     ap.add_argument("image", help=".mnpkg package")
     ap.add_argument("--verbose", action="store_true", help="print everything the sender port said")
+    ap.add_argument("--apply", action="store_true", help="then OTA APPLY and wait for the report")
+    ap.add_argument("--perm", action="store_true", help="with --apply: PERMANENT (no trial)")
+    ap.add_argument("--downgrade", action="store_true", help="with --apply: allow an older version")
     a = ap.parse_args()
 
     img = open(a.image, "rb").read()
@@ -62,10 +69,10 @@ def main():
             s.write(b[i:i + 32])
             time.sleep(0.004)
 
-    def wait(pat, t):
+    def wait(pat, t, start=0):
         t0 = time.time()
         while time.time() - t0 < t:
-            m = re.search(pat, bytes(log))
+            m = re.search(pat, bytes(log[start:]))
             if m:
                 return m
             time.sleep(0.1)
@@ -122,7 +129,24 @@ def main():
     for l in bytes(log).decode(errors="replace").splitlines():   # loopback: target lines too
         if l.startswith("!OTA") or "refused" in l:
             print("# node:  ", l.strip())
-    sys.exit(0 if m and m.group(1) == b"SENT" else 1)
+    if not (m and m.group(1) == b"SENT"):
+        sys.exit(1)
+    if not a.apply:
+        sys.exit(0)
+
+    ver = f"{v[0]}.{v[1]}.{int.from_bytes(v[2:4], 'big')}+{int.from_bytes(v[4:8], 'big')}"
+    opts = (" PERM" if a.perm else "") + (" DOWNGRADE" if a.downgrade else "")
+    mark = len(log)
+    send(f"OTA APPLY {a.target} {img[36:52].hex()} {ver}{opts}")
+    r = wait(rb"(-ERR[^\r\n]*|!OTA_RESULT[^\r\n]*)", 20, mark)
+    res = r.group(0).decode() if r else "no reply (is the sender's key on the target's allow-list?)"
+    print(f"# apply: {res}")
+    if not r or b"accepted" not in r.group(0):
+        sys.exit(1)
+    # TEST: the target confirms when healthy (<= 10 min) or reboots and rolls back
+    r = wait(rb"!OTA_REPORT[^\r\n]*", 12 * 60, mark)
+    print(f"# report: {r.group(0).decode() if r else 'none within 12 min'}")
+    sys.exit(0 if r and b"confirmed" in r.group(0) else 1)
 
 
 if __name__ == "__main__":

@@ -76,6 +76,10 @@ int craw_role_bundle_install_from_json(const char *json,
 // Returns the number of bundles successfully reapplied.
 int craw_role_bundle_apply_saved(const char **node_caps, int n_caps);
 
+/* Result of the last craw_role_bundle_apply_saved(): bundles found, and how
+ * many of those failed to re-install (OTA health, OTA-PACKAGE §7.4). */
+void craw_role_bundle_boot_stats(int *found, int *failed);
+
 // The hkv-put$ / hkv-get$ / hkv-run Forth words moved to the separate
 // craw_role_hive_words component (H6) so this engine has no craw_hive
 // dependency and ports to non-WiFi transports (Hanasu/Thread).

@@ -195,23 +195,27 @@ stock table **cannot hold it**. This project ships a custom `partitions.csv`:
 | factory | app | **2.625 MB** | firmware (≈1.5 MB expected, room to grow) |
 | scripts | data/littlefs | 960 KB | persisted Forth autorun scripts (§12.3) |
 
-Total ≈ 3.6 MB on a 4 MB part — fits, **but no OTA** (two app slots don't fit
-in 4 MB). For mesh OTA firmware update (Open Q4), move to an **8 MB** C6 module
-and a dual-slot table:
+Total ≈ 3.6 MB on a 4 MB part. That table has **no OTA**; mesh OTA uses a
+second, dual-slot table that **also fits 4 MB** (the old "OTA needs 8 MB" note
+assumed 2 MB slots — superseded, design proposal §13.9 item 6):
 
 ```
-# 8 MB / OTA-capable
-nvs,      data, nvs,     0x9000,   0x6000,
-otadata,  data, ota,     ,         0x2000,
-phy_init, data, phy,     ,         0x1000,
-ota_0,    app,  ota_0,   0x20000,  0x200000,   # 2 MB
-ota_1,    app,  ota_1,   ,         0x200000,   # 2 MB
-scripts,  data, littlefs,,         0x100000,   # 1 MB
+# 4 MB / OTA-capable — partitions_ota.csv (env esp32c6_xiao_ble_led_ota)
+nvs,      data, nvs,      0x9000,   0x6000,     # unchanged: identity, bonds survive
+otadata,  data, ota,      0xf000,   0x2000,
+phy_init, data, phy,      0x11000,  0x1000,
+ota_0,    app,  ota_0,    0x20000,  0x1C0000,   # 1792 KB
+ota_1,    app,  ota_1,    0x1E0000, 0x1C0000,   # 1792 KB
+scripts,  data, littlefs, 0x3A0000, 0x60000,    # 384 KB (reserved, unused today)
 ```
 
-**Action item:** confirm whether your C6 devkit is the 4 MB or 8 MB (N8) part
-(`esptool.py flash_id`). If OTA matters, standardize on N8 now — it's a
-hardware/BOM decision, not a code one.
+Moving a node onto it is **one USB flash** of an `_ota` env (a table cannot
+change over the air). After that, updates arrive as signed `.mnpkg` packages
+over Thread (`../docs/OTA-PACKAGE.md`): `magnet_ota_idf.c` stages them in the
+inactive slot, `ota-apply` (FORTH) or an admin-signed `OTA APPLY` from another
+node (`../tools/ota_push.py … --apply`) boots it in TEST, and IDF app rollback
+(`sdkconfig.defaults.ota`) reverts it unless the node is healthy — READY with
+every saved bundle re-applied — within 10 min.
 
 ## Build & flash
 

@@ -1,7 +1,7 @@
 # MagNET Hanasu v2 - Design Proposal
 
-## Status: DRAFT (rev 2.3)
-## Date: 2026-03-27 (rev 2.1: 2026-06-14, rev 2.2: 2026-07-30, rev 2.3: 2026-09-29 — §13 OTA)
+## Status: DRAFT (rev 2.4)
+## Date: 2026-03-27 (rev 2.1: 2026-06-14, rev 2.2: 2026-07-30, rev 2.3: 2026-09-29 — §13 OTA, rev 2.4: 2026-09-30 — §13 remote apply implemented)
 ## Target Platform: ESP-IDF (prototypes on Arduino)
 
 > **Rev 2.1 note**: Sections 1–10 are the original v2 proposal. **Section 11 supersedes
@@ -394,8 +394,9 @@ use, so user commands belong at 0x03+.
 | 0x03 | rotate | 1 byte: new epoch | MUST be ADMIN\|SIGNED (§11.1.8) |
 | 0x04 | time_announce | 11 bytes: epoch `int64` BE ‖ tz offset minutes `int16` BE ‖ sender stratum `u8` | Mesh clock. Receivers adopt at stratum+1 and **MUST NOT re-broadcast** — Thread MPL already floods realm-local multicast. Stratum ≥ 4 MUST be refused. |
 | 0x05 | time_request | none | Pull. Responders MUST jitter (biased by stratum) and MUST cancel on hearing any 0x04, so one node answers regardless of mesh size. |
-| 0x06 | ota_apply | 30 bytes (§13.3) | **Proposed (rev 2.3).** MUST be ADMIN\|SIGNED, CON unicast. |
-| 0x07 | ota_report | 18 bytes (§13.4) | **Proposed (rev 2.3).** SIGNED by the reporting node. |
+| 0x06 | ota_apply | 30 bytes (§13.3) | MUST be ADMIN\|SIGNED, CON unicast. Reply: Type 2, same ns/cmd. |
+| 0x07 | ota_report | 83 bytes (§13.4) | SIGNED (not ADMIN) by the reporting node; carries its key. |
+| 0x08 | admin_revoke | 8 bytes: key fingerprint (§13.11) | MUST be ADMIN\|SIGNED. Multicast; idempotent. |
 
 Mesh time is **not** NTP: ~±1 s, no round-trip compensation, no date. It is
 channel-encrypted only, so any channel member can set it — acceptable because
@@ -2108,7 +2109,10 @@ script (`patch_openthread_datetime.py`) sanitizes it idempotently.
 
 **Status:** §13.1–13.2 are implemented and hardware-validated on the XIAO MG24
 (Zephyr) build, 2026-09-29. §13.3 onward — **remote apply** — was approved
-2026-09-29 with every §13.9 recommendation, **extended to the ESP32-C6**.
+2026-09-29 with every §13.9 recommendation, **extended to the ESP32-C6**, and
+is **implemented and hardware-validated in both directions (rev 2.4,
+2026-09-30)** — results in §13.10. Where the build refined the proposal, the
+text below says so ("rev 2.4").
 What travels over the air is now a signed **OTA package** — normative format
 in **`docs/OTA-PACKAGE.md`** — rather than a bare platform image.
 
@@ -2156,22 +2160,38 @@ params (30 bytes):
 
 Receiver, in order — any failure → reply with the code, change nothing:
 
-| # | Check | Code |
+| # | Check | Code (status byte = check number) |
 |---|---|---|
 | 1 | frame is ADMIN\|SIGNED and signer allow-listed (existing, pre-dispatch) | *(silently dropped, as today)* |
-| 2 | `target_id` == our device_id | `E_NOT_TARGET` |
-| 3 | an image is staged and not being received | `E_NOT_STAGED` |
-| 4 | staged SHA prefix == `sha128` | `E_SHA_MISMATCH` |
-| 5 | slot1 MCUboot header version == `version` | `E_VERSION_MISMATCH` |
-| 6 | `version` > running, unless ALLOW_DOWNGRADE | `E_DOWNGRADE` |
-| 7 | this build supports OTA (C6 still on the pre-OTA partition table) | `E_UNSUPPORTED` |
+| 2 | `target_id` == our device_id | `E_NOT_TARGET` (2) |
+| 3 | an image is staged and not being received | `E_NOT_STAGED` (3) |
+| 4 | staged SHA prefix == `sha128` | `E_SHA_MISMATCH` (4) |
+| 5 | the staged **package header** version == `version` | `E_VERSION_MISMATCH` (5) |
+| 6 | `version` > running, unless ALLOW_DOWNGRADE | `E_DOWNGRADE` (6) |
+| 7 | this build supports OTA; `mode` ≤ 1; no unknown `flags` bit | `E_UNSUPPORTED` (7) |
+
+Rev 2.4: status codes are the check numbers, as package refusals carry theirs
+(OTA-PACKAGE §7.1); check 7 is evaluated right after check 2, so a build
+without OTA answers 7 rather than 3. Check 5 compares the package header (both
+platforms have one); `tools/mnpkg.py` refuses to build an MCUboot package whose
+embedded image version differs from `--version`, so the two cannot disagree.
 
 On success: `boot_request_upgrade(mode)`, reply `ACCEPTED`, reboot after a
-1–3 s jitter (lets the CoAP ACK and the Type 2 reply leave the radio).
+4–6 s jitter (lets the CoAP ACK and the Type 2 reply leave the radio). Rev 2.4:
+the draft said 1–3 s; the reply is CON and its first retransmit comes 2–3 s
+after a loss, so on the bench a lost first reply was cut off by the reboot.
 
 Reply: **Type 2 M2M Response** to the sender, `ns 0x00 cmd 0x06`,
-`status u8 ‖ running version (8)`. Signed with the target's identity key
-(SIGNED, not ADMIN) so the operator can trust which node said what.
+`status u8 ‖ running version (8) ‖ identity pubkey (65)` = 74 bytes. Signed with
+the target's identity key (SIGNED, not ADMIN) so the operator can trust which
+node said what.
+
+Rev 2.4 — how a SIGNED-only frame is checked: the admin does not hold the
+target's key, so the key rides in the params and the receiver requires
+`SHA-256(pubkey)[0:4] == sender device_id` (the §11.1.4 derivation) plus a valid
+signature over `header ‖ ciphertext ‖ MIC`. SIGNED-without-ADMIN is accepted
+**only** for this reply and `ota_report`; on any other frame it is dropped.
+The binding is 32 bits — see §13.7.
 
 ### 13.4 Proposal: `system/ota_report` (ns 0x00, cmd 0x07)
 
@@ -2179,15 +2199,26 @@ After an apply, the result is only visible *after the reboot*, possibly to a
 node that has moved on. The target reports once, when its OTA state settles:
 
 ```
-params (18 bytes): outcome u8 ‖ running version (8) ‖ previous version (8) ‖ bundles u8
+params (83 bytes): outcome u8 ‖ running version (8) ‖ other version (8) ‖ bundles u8 ‖ pubkey (65)
   outcome: 1 CONFIRMED (new image healthy)   2 ROLLED_BACK (new image never became healthy)
+  other:   CONFIRMED → the version it replaced; ROLLED_BACK → the version that failed
   bundles: 0 none persisted   1 all re-applied   2 a re-apply failed   3 cleared (CLEARS_BUNDLES)
   "healthy" = READY and persisted role bundles re-applied — OTA-PACKAGE §7.4
 ```
 
+Rev 2.4: the pubkey is checked as for the apply reply; "other" replaces
+"previous" so a rollback report names the image that failed. Health is
+implemented on both platforms: the bundle loader counts saved bundles that fail
+to re-install at boot, and any failure blocks confirmation (→ rollback).
+`bundles = 3` is reserved until `CLEARS_BUNDLES` handling lands.
+
 Sent CON unicast to the admin that issued the apply (the target persists its
-device_id + ML-EID alongside the pending flag) — falling back to channel
-multicast NON if that address is unreachable. Signed with the target's
+device_id + ML-EID alongside the pending flag — NVS `magnet/otapend`, written
+before the slot is armed) — falling back to channel multicast NON if the send
+call fails. The outcome is decided by version, not by platform state: running
+== the applied version → CONFIRMED; running == the version before the apply →
+ROLLED_BACK; anything else (reflashed by hand since) → the record is dropped
+silently. The report waits for READY. Signed with the target's
 identity key. The rollback case is detected on the boot *after* the revert:
 the old image sees an unconfirmed swap record and reports ROLLED_BACK.
 
@@ -2196,13 +2227,17 @@ the old image sees an unconfirmed swap record and reports ROLLED_BACK.
 Admin node (HCP, privileged → bonded BLE or serial):
 
 ```
-OTA APPLY <peer-ipv6> <sha128-hex> <ver> [PERM] [DOWNGRADE]   → +OK sent
+OTA APPLY <peer-id|ipv6> <sha128-hex> <ver> [PERM] [DOWNGRADE]   → +OK sent
   … !OTA_RESULT <id> accepted|<E_code> v<running>
-  … !OTA_REPORT <id> confirmed|rolled-back v<new> (was v<old>)   (after reboot)
+  … !OTA_REPORT <id> confirmed v<new> (was v<old>) bundles=<n>      (after reboot)
+  … !OTA_REPORT <id> rolled-back v<old> (failed v<new>) bundles=<n>
 ```
 
-`tools/ota_push.py` grows `--apply`: stage → `!XFER_SENT` → `OTA APPLY` →
-wait for the report.
+The peer must be in `PEERS` (its id and address both go into the frame); a
+node that just received a transfer from it always is.
+
+`tools/ota_push.py --apply [--perm] [--downgrade]`: stage → `!XFER_SENT` →
+`OTA APPLY` → `!OTA_RESULT` → wait for the report (implemented, rev 2.4).
 
 **Needed first (small):** today the sink verifies the SHA *inside*
 `on_done()`, after which the receiver sends COMPLETE regardless — so the
@@ -2244,14 +2279,15 @@ state); the MG24 BLE build has ~3 KB static left.
 | Downgrade to an old signed image with a known bug | Check 6; ALLOW_DOWNGRADE is an explicit, signed admin choice |
 | Bricked radio after update | TEST mode + confirm-when-READY + 10 min deadline → automatic rollback (validated) |
 | Power loss mid-transfer / mid-swap | Transfer: not staged, restage. Swap: MCUboot swap-move is power-fail safe |
-| Stolen admin key | **Gap: no revocation exists** (§11.1.7 has `ADMIN ADD` and `admin/grant` only) — §13.9 Q5 |
+| Stolen admin key | Revocation (§13.11): `ADMIN REMOVE` locally, signed `admin_revoke` on the mesh. A thief holding a still-valid key can revoke the others just as fast; recovery is `ADMIN ADD` over a bonded link or serial |
+| Forged apply reply / report (rev 2.4) | Signature + `SHA-256(pubkey)[0:4] == device_id`. That is a **32-bit** binding: a channel member willing to grind ~2³² P-256 keys can impersonate one node's *report* (not its apply — that needs an admin key). Replace with the full key once peers exchange keys |
 
 ### 13.8 Prerequisites before any node leaves the bench
 
 1. **Replace the DEV keys** — the OTA release key (OTA-PACKAGE §6) and
    MCUboot's (`SB_CONFIG_BOOT_SIGNATURE_KEY_FILE`); keep the private halves off
    build machines that don't sign releases.
-2. **Admin revocation** (`ADMIN REMOVE` locally; signed `admin/revoke` on the mesh).
+2. ~~**Admin revocation**~~ — done, rev 2.4 (§13.11).
 3. Decide §13.9 Q1–Q4.
 
 ### 13.9 Decisions (approved 2026-09-29)
@@ -2281,6 +2317,29 @@ state); the MG24 BLE build has ~3 KB static left.
    payload, flipped payload byte — each its code, nothing staged.
 8. C6 as the *target*: stage from the MG24, apply, confirm; then a
    forced-unhealthy C6 image reverts via IDF app rollback.
+
+### 13.11 Admin revocation (rev 2.4 — §13.9 Q5)
+
+Keys are named by **fingerprint** = `SHA-256(65-byte pubkey)[0:8]`, which
+`ADMIN LIST` prints. (Its first 4 bytes are the key owner's device_id.)
+
+```
+ADMIN REMOVE <n | fp-hex>   local only: this node's allow-list
+ADMIN REVOKE <fp-hex>       signed system/admin_revoke to the whole channel,
+                            then removed here too
+```
+
+`system/admin_revoke` (ns 0x00, cmd 0x08): params = the 8-byte fingerprint.
+ADMIN|SIGNED, verified against the receiver's allow-list before dispatch
+(check 1 of §13.3). **Multicast NON**, unlike apply: revocation must reach every
+node, and it is idempotent, so the operator repeats it to cover a lost frame.
+A receiver that does not hold the key logs `# admin revoke: key not held`. An
+admin may revoke its own key (the frame is signed before the local removal).
+
+Limits: revocation removes a key; it cannot stop a thief who still holds a
+valid one from doing the same (§13.7). And a node that was offline when the
+revoke went out keeps the key until it is revoked again. There is no
+revocation list; re-sending after a partition heals is the operator's job.
 
 ---
 

@@ -14,11 +14,13 @@
 #include "magnet_crypto.h"
 #include "magnet_bot.h"
 #include "magnet_xfer.h"
+#include "magnet_ota.h"
 
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <sys/time.h>
 #include "freertos/FreeRTOS.h"
@@ -332,6 +334,15 @@ static void script_load(void);
 static void hook_invoke(const char *word, const uint8_t *payload, size_t len);
 static bool admin_verify(const uint8_t *signed_part, size_t len, const uint8_t sig[64]);
 static void epoch_apply(uint8_t e);
+static void admins_persist(void);
+/* §13.3–13.5 remote apply / report, admin revoke (defined near mn_rotate) */
+static void ver_get(const uint8_t *p, mn_pkg_ver_t *v);
+static bool peer_sig_ok(const uint8_t id[4], const uint8_t pub[65],
+                        const uint8_t *frame, size_t signed_len);
+static void ota_apply_rx(const uint8_t from[4], const char *src, const uint8_t *p);
+static void ota_report_rx(const char *idhex, const uint8_t *p);
+static void ota_report_try(void);
+static void admin_revoke_rx(const char *idhex, const uint8_t fp[8]);
 static int  send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
                           const char *dst, bool con, bool admin,
                           uint8_t extra_flags);
@@ -339,7 +350,7 @@ static int  send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
 /* ==================== event pump (§12.4) =================================== */
 typedef enum { MN_EVT_RX, MN_EVT_ROLE, MN_EVT_HEARTBEAT,
                MN_EVT_ANNOUNCE, MN_EVT_NOTE, MN_EVT_TIMEPUSH,
-               MN_EVT_XFER_TICK } mn_evt_kind_t;
+               MN_EVT_XFER_TICK, MN_EVT_OTA_REPORT } mn_evt_kind_t;
 
 typedef struct {
     mn_evt_kind_t kind;
@@ -399,13 +410,17 @@ void mn_post_note(const char *fmt, ...) {
     xQueueSend(s_evt_q, &evt, 0);
 }
 
+/* One event buffer for every timer callback: they all run on the one
+ * timer-service task (FreeRTOS daemon / Zephyr compat work queue), one at a
+ * time, and xQueueSend copies the item. A static per callback cost 576 B each. */
+static mn_evt_t s_tmr_evt;
+
 /* E-H: the xfer tick timer (timer-daemon task) posts here; the pump task
  * runs mn_xfer_tick(). Kind-only event — safe to share a static. */
 void mn_post_xfer_tick(void) {
     if (!s_evt_q) return;
-    static mn_evt_t evt;                 /* timer-daemon task is the only poster */
-    evt.kind = MN_EVT_XFER_TICK;
-    xQueueSend(s_evt_q, &evt, 0);
+    s_tmr_evt.kind = MN_EVT_XFER_TICK;
+    xQueueSend(s_evt_q, &s_tmr_evt, 0);
 }
 
 /* ---- traffic counters (STATS / STRESS) ---- */
@@ -448,16 +463,21 @@ static void handle_rx(const mn_evt_t *evt) {
     /* §11.1.7: ADMIN frames must carry a valid allow-listed signature over
      * everything before the 64-byte trailer — checked before decrypt/exec */
     bool is_admin = false;
+    size_t signed_len = 0;                 /* >0: SIGNED, trailer at data+signed_len */
     if (env.flags & MN_F_SIGNED) {
         if (env.payload_len <= 64) { s_stats.rx_err++; return; }
-        size_t signed_len = evt->len - 64;
-        if (!(env.flags & MN_F_ADMIN) ||
-            !admin_verify(evt->data, signed_len, evt->data + signed_len)) {
-            s_stats.rx_err++;
-            return;
+        signed_len = evt->len - 64;
+        if (env.flags & MN_F_ADMIN) {
+            if (!admin_verify(evt->data, signed_len, evt->data + signed_len)) {
+                s_stats.rx_err++;
+                return;
+            }
+            is_admin = true;
         }
+        /* SIGNED without ADMIN = a node vouching for its own words (§13.3
+         * reply, §13.4 report). The key rides in the params, so it is
+         * checked after decrypt by the handler that knows where (peer_sig_ok). */
         env.payload_len -= 64;
-        is_admin = true;
     }
 
     /* §11.1.5: decrypt + authenticate BEFORE any stateful processing */
@@ -479,6 +499,15 @@ static void handle_rx(const mn_evt_t *evt) {
         env.payload_len = ct_len;
     } else if (s_chan.set) {
         return;      /* plaintext on an encrypted channel → drop (E-D strict) */
+    }
+
+    /* A self-signed (non-ADMIN) frame is only meaningful to the two handlers
+     * that verify it; anywhere else it is dropped rather than half-trusted. */
+    if (signed_len && !is_admin && env.type != MN_T_M2M_RESP &&
+        !(env.type == MN_T_M2M_CMD && env.payload_len >= 2 &&
+          env.payload[0] == 0x00 && env.payload[1] == 0x07)) {
+        s_stats.rx_err++;
+        return;
     }
 
     if (dedup_seen(env.sender_id, env.counter)) { s_stats.rx_dup++; return; }
@@ -588,10 +617,38 @@ static void handle_rx(const mn_evt_t *evt) {
                                    pdMS_TO_TICKS(MN_TIME_REFRESH_MS), 0);
         } else if (ns == 0x00 && cmd_id == 0x05) {   /* system/time request */
             time_reply_schedule();
+        } else if (ns == 0x00 && cmd_id == 0x06) {   /* system/ota_apply (§13.3) */
+            /* check 1: not ADMIN|SIGNED by an allow-listed key → dropped */
+            if (is_admin && plen == 30) ota_apply_rx(env.sender_id, evt->src, &env.payload[4]);
+            else s_stats.rx_err++;
+        } else if (ns == 0x00 && cmd_id == 0x07) {   /* system/ota_report (§13.4) */
+            if (plen == 18 + 65 && signed_len && !is_admin &&
+                peer_sig_ok(env.sender_id, &env.payload[4 + 18], evt->data, signed_len))
+                ota_report_rx(idhex, &env.payload[4]);
+            else s_stats.rx_err++;
+        } else if (ns == 0x00 && cmd_id == 0x08) {   /* system/admin_revoke */
+            if (is_admin && plen == 8) admin_revoke_rx(idhex, &env.payload[4]);
+            else s_stats.rx_err++;
         } else {
             emit_class(MN_EC_CMD, "!CMD %s %s %u %u len=%u",
                        MN_CHANNEL_NAME, idhex, ns, cmd_id, plen);
             hook_invoke(s_hook_cmd, &env.payload[4], plen);       /* E-E */
+        }
+        break;
+    }
+    case MN_T_M2M_RESP: {
+        /* only system/ota_apply replies so far: status ‖ running ver ‖ pubkey */
+        if (env.payload_len >= 4 && env.payload[0] == 0x00 && env.payload[1] == 0x06 &&
+            ((env.payload[2] << 8) | env.payload[3]) == 9 + 65 && env.payload_len >= 4 + 9 + 65 &&
+            signed_len && !is_admin &&
+            peer_sig_ok(env.sender_id, &env.payload[4 + 9], evt->data, signed_len)) {
+            mn_pkg_ver_t v;
+            ver_get(&env.payload[5], &v);
+            mn_emit_event("!OTA_RESULT %s %s v%u.%u.%u+%u", idhex,
+                       mn_ota_status_name(env.payload[4]), v.major, v.minor, v.revision,
+                       (unsigned)v.build);
+        } else {
+            s_stats.rx_err++;
         }
         break;
     }
@@ -645,6 +702,8 @@ static void pump_task(void *arg) {
             /* Either a jittered answer to a request that nobody else beat us
              * to, or the stratum-0 refresh. Both are just "announce now". */
             if (s_state == MN_READY) mn_time_push();
+        } else if (evt.kind == MN_EVT_OTA_REPORT) {
+            ota_report_try();
         } else if (evt.kind == MN_EVT_XFER_TICK) {
             mn_xfer_tick();               /* E-H: paced send + timeout FSMs */
         } else if (evt.kind == MN_EVT_NOTE) {
@@ -667,9 +726,8 @@ static TimerHandle_t s_hb_timer = NULL;
 static void hb_timer_cb(TimerHandle_t t) {
     (void)t;
     if (!s_evt_q) return;
-    static mn_evt_t evt;                 /* timer-daemon task is the only poster */
-    evt.kind = MN_EVT_HEARTBEAT;
-    xQueueSend(s_evt_q, &evt, 0);
+    s_tmr_evt.kind = MN_EVT_HEARTBEAT;
+    xQueueSend(s_evt_q, &s_tmr_evt, 0);
 }
 
 void mn_heartbeat_set(uint32_t secs) {
@@ -693,9 +751,8 @@ static TimerHandle_t s_announce_timer = NULL;
 static void announce_timer_cb(TimerHandle_t t) {
     (void)t;
     if (!s_evt_q) return;
-    static mn_evt_t evt;                 /* timer-daemon task is the only poster */
-    evt.kind = MN_EVT_ANNOUNCE;
-    xQueueSend(s_evt_q, &evt, 0);
+    s_tmr_evt.kind = MN_EVT_ANNOUNCE;
+    xQueueSend(s_evt_q, &s_tmr_evt, 0);
 }
 
 static void announce_schedule(void) {
@@ -926,7 +983,7 @@ static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
         memcpy(frame + MN_ENV_HDR_LEN, ct, len);
         n += 8;
     }
-    if (admin) {                 /* §11.1.7: sig over header‖ciphertext‖MIC */
+    if (env.flags & MN_F_SIGNED) {   /* §11.1.7: sig over header‖ciphertext‖MIC */
         if (mn_sign(frame, (size_t)n, frame + n) != 0) return -7;
         n += 64;
     }
@@ -1227,9 +1284,8 @@ static void time_reply_schedule(void) {
 static void time_timer_cb(TimerHandle_t t) {
     (void)t;
     if (!s_evt_q) return;
-    static mn_evt_t evt;                 /* timer-daemon task is the only poster */
-    evt.kind = MN_EVT_TIMEPUSH;
-    xQueueSend(s_evt_q, &evt, 0);
+    s_tmr_evt.kind = MN_EVT_TIMEPUSH;
+    xQueueSend(s_evt_q, &s_tmr_evt, 0);
 }
 
 /* system/announce: Type 1, ns 0x00, cmd 0x02, params = display name */
@@ -1447,9 +1503,10 @@ void mn_admin_list_print(void) {
     int n = 0;
     for (int i = 0; i < MN_ADMIN_MAX; i++) {
         if (!s_admins[i].used) continue;
-        char hex[24];
-        for (int j = 0; j < 8; j++) sprintf(hex + j * 2, "%02x", s_admins[i].pub[j]);
-        mn_emit_event("# admin key %d: %s... (65B)", ++n, hex);
+        uint8_t fp[8];
+        mn_admin_fp(s_admins[i].pub, fp);
+        mn_emit_event("# admin key %d: fp=%02x%02x%02x%02x%02x%02x%02x%02x (SHA-256 of the 65-byte key)",
+                      ++n, fp[0], fp[1], fp[2], fp[3], fp[4], fp[5], fp[6], fp[7]);
     }
     if (!n) mn_emit_event("# admin allow-list empty");
 }
@@ -1518,6 +1575,295 @@ int mn_rotate(void) {
     uint8_t pl[5] = { 0x00, 0x03, 0x00, 0x01, (uint8_t)(s_epoch + 1) };
     int rc = send_frame_ex(MN_T_M2M_CMD, pl, sizeof(pl), NULL, false, true, 0);
     if (rc == 0) epoch_apply(s_epoch + 1);
+    return rc;
+}
+
+/* ==================== remote apply + report (§13.3–13.5) ====================
+ *
+ * Apply: an allow-listed admin sends system/ota_apply (ADMIN|SIGNED, CON
+ * unicast). The checks bind it to what is staged NOW (target, SHA, version),
+ * so a replayed or stale apply cannot switch images. On ACCEPTED the node
+ * records who asked, arms the slot, answers, and reboots after 1–3 s.
+ * Report: once the image settles — confirmed after its trial, or the old one
+ * back after a rollback — the node tells that admin how it went. The record
+ * lives in NVS so it survives the reboots in between.
+ *
+ * Replies and reports are SIGNED (not ADMIN) with the node's own identity key,
+ * which rides along; the receiver checks SHA-256(key)[0:4] == sender id. That
+ * binds the key to the id with 32 bits only (§13.7) — it proves "the node that
+ * owns this id's key", not more, until peers' full keys are known.
+ */
+static void ver_put(uint8_t *p, const mn_pkg_ver_t *v) {
+    p[0] = v->major; p[1] = v->minor;
+    p[2] = (uint8_t)(v->revision >> 8); p[3] = (uint8_t)v->revision;
+    for (int i = 0; i < 4; i++) p[4 + i] = (uint8_t)(v->build >> (24 - 8 * i));
+}
+static void ver_get(const uint8_t *p, mn_pkg_ver_t *v) {
+    v->major = p[0]; v->minor = p[1];
+    v->revision = (uint16_t)(p[2] << 8 | p[3]);
+    v->build = (uint32_t)p[4] << 24 | (uint32_t)p[5] << 16 | (uint32_t)p[6] << 8 | p[7];
+}
+#define VER_FMT "v%u.%u.%u+%u"
+#define VER_ARGS(v) (v).major, (v).minor, (v).revision, (unsigned)(v).build
+
+static void sha256_1(const uint8_t *d, size_t n, uint8_t out[32]) {
+    mn_sha256_t c;
+    mn_sha256_start(&c);
+    mn_sha256_update(&c, d, n);
+    mn_sha256_finish(&c, out);
+}
+
+static bool peer_sig_ok(const uint8_t id[4], const uint8_t pub[65],
+                        const uint8_t *frame, size_t signed_len) {
+    uint8_t h[32];
+    if (pub[0] != 0x04) return false;
+    sha256_1(pub, 65, h);
+    return !memcmp(h, id, 4) && mn_verify(pub, frame, signed_len, frame + signed_len) == 0;
+}
+
+const char *mn_ota_status_name(uint8_t st) {
+    switch (st) {
+    case MN_OTA_ACCEPTED:           return "accepted";
+    case MN_OTA_E_NOT_TARGET:       return "E_NOT_TARGET";
+    case MN_OTA_E_NOT_STAGED:       return "E_NOT_STAGED";
+    case MN_OTA_E_SHA_MISMATCH:     return "E_SHA_MISMATCH";
+    case MN_OTA_E_VERSION_MISMATCH: return "E_VERSION_MISMATCH";
+    case MN_OTA_E_DOWNGRADE:        return "E_DOWNGRADE";
+    case MN_OTA_E_UNSUPPORTED:      return "E_UNSUPPORTED";
+    default:                        return "E_?";
+    }
+}
+
+/* ---- platform defaults: a build that cannot stage answers E_UNSUPPORTED ---- */
+__attribute__((weak)) bool mn_ota_platform_supported(void) { return false; }
+__attribute__((weak)) const mn_pkg_hdr_t *mn_ota_platform_staged(void) { return NULL; }
+__attribute__((weak)) void mn_ota_platform_running(mn_pkg_ver_t *v) { memset(v, 0, sizeof(*v)); }
+__attribute__((weak)) int mn_ota_platform_arm(uint8_t mode) { (void)mode; return -1; }
+
+/* ---- boot bundle status (OTA-PACKAGE §7.4 health) ---- */
+static uint8_t s_boot_bundles = MN_BUNDLES_NONE;
+void mn_boot_bundles_set(int found, int failed) {
+    s_boot_bundles = failed > 0 ? MN_BUNDLES_FAILED : found > 0 ? MN_BUNDLES_OK : MN_BUNDLES_NONE;
+}
+uint8_t mn_boot_bundles(void) { return s_boot_bundles; }
+bool mn_ota_node_healthy(void) {
+    return s_state == MN_READY && s_boot_bundles != MN_BUNDLES_FAILED;
+}
+
+/* ---- the apply record (NVS "otapend") ---- */
+typedef struct __attribute__((packed)) {
+    uint8_t admin_id[4];
+    char    admin_addr[46];
+    uint8_t new_ver[8], prev_ver[8];
+    uint8_t mode;
+} ota_pend_t;
+
+static bool pend_load(ota_pend_t *p) {
+    nvs_handle_t h;
+    size_t n = sizeof(*p);
+    bool ok = false;
+    if (nvs_open("magnet", NVS_READONLY, &h) == ESP_OK) {
+        ok = nvs_get_blob(h, "otapend", p, &n) == ESP_OK && n == sizeof(*p);
+        nvs_close(h);
+    }
+    if (ok) p->admin_addr[sizeof(p->admin_addr) - 1] = '\0';
+    return ok;
+}
+static void pend_store(const ota_pend_t *p) {
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READWRITE, &h) != ESP_OK) return;
+    if (p) nvs_set_blob(h, "otapend", p, sizeof(*p));
+    else   nvs_erase_key(h, "otapend");
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+bool mn_ota_pending_permanent(void) {
+    ota_pend_t p;
+    mn_pkg_ver_t run, nv;
+    if (!pend_load(&p) || p.mode != MN_OTA_MODE_PERMANENT) return false;
+    mn_ota_platform_running(&run);
+    ver_get(p.new_ver, &nv);
+    return mn_pkg_ver_cmp(&run, &nv) == 0;
+}
+
+static void reboot_cb(TimerHandle_t t) { (void)t; esp_restart(); }
+
+static void ota_apply_rx(const uint8_t from[4], const char *src, const uint8_t *p) {
+    mn_pkg_ver_t want, run;
+    ver_get(p + 20, &want);
+    uint8_t mode = p[28], flags = p[29], st;
+    mn_ota_platform_running(&run);
+    const mn_pkg_hdr_t *h = NULL;
+
+    if (memcmp(p, s_device_id, 4))                               st = MN_OTA_E_NOT_TARGET;   /* 2 */
+    else if (!mn_ota_platform_supported() || mode > MN_OTA_MODE_PERMANENT ||
+             (flags & ~MN_OTA_F_ALLOW_DOWNGRADE))                st = MN_OTA_E_UNSUPPORTED;  /* 7 */
+    else if (!(h = mn_ota_platform_staged()))                    st = MN_OTA_E_NOT_STAGED;   /* 3 */
+    else if (memcmp(mn_pkg_sha128(h), p + 4, 16))                st = MN_OTA_E_SHA_MISMATCH; /* 4 */
+    else if (mn_pkg_ver_cmp(&h->version, &want))                 st = MN_OTA_E_VERSION_MISMATCH;
+    else if (mn_pkg_ver_cmp(&want, &run) <= 0 &&
+             !(flags & MN_OTA_F_ALLOW_DOWNGRADE))                st = MN_OTA_E_DOWNGRADE;    /* 6 */
+    else                                                         st = MN_OTA_ACCEPTED;
+
+    if (st == MN_OTA_ACCEPTED) {
+        ota_pend_t rec = { .mode = mode };
+        memcpy(rec.admin_id, from, 4);
+        strlcpy(rec.admin_addr, src, sizeof(rec.admin_addr));
+        ver_put(rec.new_ver, &want);
+        ver_put(rec.prev_ver, &run);
+        pend_store(&rec);                         /* before arming: the report needs it */
+        if (mn_ota_platform_arm(mode) != 0) { pend_store(NULL); st = MN_OTA_E_UNSUPPORTED; }
+    }
+    mn_emit_event("!OTA apply from %02x%02x%02x%02x: %s " VER_FMT " %s", from[0], from[1],
+                  from[2], from[3], mn_ota_status_name(st), VER_ARGS(want),
+                  mode == MN_OTA_MODE_PERMANENT ? "PERMANENT" : "TEST");
+
+    uint8_t pl[4 + 9 + 65] = { 0x00, 0x06, 0x00, 9 + 65, st };
+    ver_put(pl + 5, &run);
+    memcpy(pl + 13, mn_pubkey(), 65);
+    send_frame_ex(MN_T_M2M_RESP, pl, sizeof(pl), src, true, false, MN_F_SIGNED);
+
+    if (st == MN_OTA_ACCEPTED) {
+        /* 4–6 s: this reply is CON, and its first retransmit comes 2–3 s
+         * after a loss — 1–3 s (the §13.3 draft) cut it off on the bench */
+        TimerHandle_t t = xTimerCreate("mn_otarb", pdMS_TO_TICKS(4000 + esp_random() % 2000),
+                                       pdFALSE, NULL, reboot_cb);
+        if (!t || xTimerStart(t, 0) != pdPASS) esp_restart();
+    }
+}
+
+/* ---- report: queued by mn_ota_settled, sent by the pump once READY ---- */
+static TimerHandle_t s_report_timer;
+static uint8_t       s_report_outcome;
+
+static void report_timer_cb(TimerHandle_t t) {
+    (void)t;
+    if (!s_evt_q) return;
+    s_tmr_evt.kind = MN_EVT_OTA_REPORT;
+    xQueueSend(s_evt_q, &s_tmr_evt, 0);
+}
+
+void mn_ota_settled(void) {
+    ota_pend_t p;
+    if (!pend_load(&p)) return;
+    mn_pkg_ver_t run, nv, pv;
+    mn_ota_platform_running(&run);
+    ver_get(p.new_ver, &nv);
+    ver_get(p.prev_ver, &pv);
+    if (!mn_pkg_ver_cmp(&run, &nv))      s_report_outcome = MN_OTA_CONFIRMED;
+    else if (!mn_pkg_ver_cmp(&run, &pv)) s_report_outcome = MN_OTA_ROLLED_BACK;
+    else { pend_store(NULL); return; }   /* reflashed by hand since: nothing to say */
+    if (!s_report_timer)
+        s_report_timer = xTimerCreate("mn_otarp", pdMS_TO_TICKS(3000), pdTRUE, NULL,
+                                      report_timer_cb);
+    if (s_report_timer) xTimerStart(s_report_timer, 0);
+}
+
+/* pump context */
+static void ota_report_try(void) {
+    ota_pend_t p;
+    if (s_state != MN_READY) return;     /* the timer keeps polling */
+    if (s_report_timer) xTimerStop(s_report_timer, 0);
+    if (!pend_load(&p)) return;
+    mn_pkg_ver_t run, other;
+    mn_ota_platform_running(&run);
+    /* "other" = the image replaced (CONFIRMED) or the one that failed (ROLLED_BACK) */
+    ver_get(s_report_outcome == MN_OTA_CONFIRMED ? p.prev_ver : p.new_ver, &other);
+
+    uint8_t pl[4 + 18 + 65] = { 0x00, 0x07, 0x00, 18 + 65, s_report_outcome };
+    ver_put(pl + 5, &run);
+    ver_put(pl + 13, &other);
+    pl[21] = s_boot_bundles;
+    memcpy(pl + 22, mn_pubkey(), 65);
+    int rc = send_frame_ex(MN_T_M2M_CMD, pl, sizeof(pl), p.admin_addr, true, false, MN_F_SIGNED);
+    if (rc != 0)                         /* admin address unusable: tell the channel */
+        rc = send_frame_ex(MN_T_M2M_CMD, pl, sizeof(pl), NULL, false, false, MN_F_SIGNED);
+    mn_emit_event("!OTA report %s " VER_FMT " (%s " VER_FMT ") bundles=%u -> %02x%02x%02x%02x%s",
+                  s_report_outcome == MN_OTA_CONFIRMED ? "confirmed" : "rolled-back",
+                  VER_ARGS(run), s_report_outcome == MN_OTA_CONFIRMED ? "was" : "failed",
+                  VER_ARGS(other), s_boot_bundles, p.admin_id[0], p.admin_id[1],
+                  p.admin_id[2], p.admin_id[3], rc == 0 ? "" : " (send failed)");
+    pend_store(NULL);
+}
+
+static void ota_report_rx(const char *idhex, const uint8_t *p) {
+    mn_pkg_ver_t run, other;
+    ver_get(p + 1, &run);
+    ver_get(p + 9, &other);
+    bool ok = p[0] == MN_OTA_CONFIRMED;
+    mn_emit_event("!OTA_REPORT %s %s " VER_FMT " (%s " VER_FMT ") bundles=%u", idhex,
+                  ok ? "confirmed" : p[0] == MN_OTA_ROLLED_BACK ? "rolled-back" : "unknown",
+                  VER_ARGS(run), ok ? "was" : "failed", VER_ARGS(other), p[17]);
+}
+
+/* ---- operator: OTA APPLY <peer> ---- */
+int mn_ota_apply_send(const char *peer, const uint8_t sha128[16], const mn_pkg_ver_t *v,
+                      uint8_t mode, uint8_t flags) {
+    const mn_peer_t *pe = NULL;
+    uint8_t id[4];
+    unsigned b[4];
+    if (strlen(peer) == 8 && sscanf(peer, "%2x%2x%2x%2x", &b[0], &b[1], &b[2], &b[3]) == 4) {
+        for (int i = 0; i < 4; i++) id[i] = (uint8_t)b[i];
+        pe = peer_find(id);
+    } else {
+        for (int i = 0; i < MN_PEER_MAX && !pe; i++)
+            if (s_peers[i].used && !strcasecmp(s_peers[i].ipv6, peer)) pe = &s_peers[i];
+    }
+    if (!pe) return -3;                  /* need both id and address: heard from it? */
+    uint8_t pl[4 + 30] = { 0x00, 0x06, 0x00, 30 };
+    memcpy(pl + 4, pe->id, 4);
+    memcpy(pl + 8, sha128, 16);
+    ver_put(pl + 24, v);
+    pl[32] = mode;
+    pl[33] = flags;
+    return send_frame_ex(MN_T_M2M_CMD, pl, sizeof(pl), pe->ipv6, true, true, 0);
+}
+
+/* ---- admin revocation (§13.8 item 2) ---- */
+void mn_admin_fp(const uint8_t pub65[65], uint8_t fp[8]) {
+    uint8_t h[32];
+    sha256_1(pub65, 65, h);
+    memcpy(fp, h, 8);
+}
+
+int mn_admin_remove(const uint8_t fp[8]) {
+    for (int i = 0; i < MN_ADMIN_MAX; i++) {
+        uint8_t f[8];
+        if (!s_admins[i].used) continue;
+        mn_admin_fp(s_admins[i].pub, f);
+        if (memcmp(f, fp, 8)) continue;
+        s_admins[i].used = false;
+        admins_persist();
+        return 0;
+    }
+    return -1;
+}
+
+int mn_admin_remove_index(int n) {
+    for (int i = 0; i < MN_ADMIN_MAX; i++) {
+        if (!s_admins[i].used || --n) continue;
+        s_admins[i].used = false;
+        admins_persist();
+        return 0;
+    }
+    return -1;
+}
+
+static void admin_revoke_rx(const char *idhex, const uint8_t fp[8]) {
+    int rc = mn_admin_remove(fp);
+    mn_emit_event("%s fp=%02x%02x%02x%02x%02x%02x%02x%02x by %s",
+                  rc == 0 ? "!WARN admin-revoked" : "# admin revoke: key not held",
+                  fp[0], fp[1], fp[2], fp[3], fp[4], fp[5], fp[6], fp[7], idhex);
+}
+
+/* signed system/admin_revoke (ns 0, cmd 0x08): ADMIN|SIGNED multicast, like
+ * rotate. Idempotent, so repeating it covers a lost NON frame. */
+int mn_admin_revoke_send(const uint8_t fp[8]) {
+    uint8_t pl[4 + 8] = { 0x00, 0x08, 0x00, 8 };
+    memcpy(pl + 4, fp, 8);
+    int rc = send_frame_ex(MN_T_M2M_CMD, pl, sizeof(pl), NULL, false, true, 0);
+    if (rc == 0) mn_admin_remove(fp);    /* after signing: it may be our own key */
     return rc;
 }
 

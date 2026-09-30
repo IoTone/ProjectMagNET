@@ -17,6 +17,7 @@
 #include "magnet_bot.h"
 #include "magnet_led.h"
 #include "magnet_xfer.h"
+#include "magnet_ota.h"
 #include "forth_core.h"
 #include "craw_role_bundle.h"
 
@@ -65,7 +66,7 @@ static bool verb_is_privileged(const char *verb, const char *rest) {
     if (!strcmp(verb, "NAME") || !strcmp(verb, "ADMIN") ||
         !strcmp(verb, "ROTATE") || !strcmp(verb, "RAW") ||
         !strcmp(verb, "SCRIPT") || !strcmp(verb, "HOOK") ||
-        !strcmp(verb, "BUNDLE") ||
+        !strcmp(verb, "BUNDLE") || !strcmp(verb, "OTA") ||
         !strcmp(verb, "FORTH") || !strcmp(verb, "STRESS") ||
         !strcmp(verb, "FACTORY")) {
         return true;
@@ -78,6 +79,16 @@ static bool verb_is_privileged(const char *verb, const char *rest) {
 }
 
 /* ---- small helpers ---- */
+static bool hex_bytes(const char *hex, uint8_t *out, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        unsigned v;
+        if (!isxdigit((unsigned char)hex[2 * i]) || !isxdigit((unsigned char)hex[2 * i + 1]) ||
+            sscanf(hex + 2 * i, "%2x", &v) != 1) return false;
+        out[i] = (uint8_t)v;
+    }
+    return true;
+}
+
 static void respond(const char *tag, const char *body) {
     char buf[MN_LINE_MAX];
     if (tag && tag[0]) snprintf(buf, sizeof(buf), "@%s %s", tag, body);
@@ -127,7 +138,7 @@ static void emit_caps(const char *tag) {
     respond(tag,
         "+OK proto=2.1 fw=" MN_FW_VERSION " maxline=512 "
         "transports=usbcdc verbs=STATUS,CAPS,HELP,PING,CHAT,DM,PEERS,RECENT,WHOAMI,NAME,"
-        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH,TIME,XFER,BUNDLE"
+        "MODE,SUB,UNSUB,CHANNEL,PUBKEY,ADMIN,ROTATE,HOOK,SCRIPT,SYSINFO,MESH,BENCH,SELFTEST,STATS,STRESS,HEARTBEAT,FACTORY,FORTH,TIME,XFER,BUNDLE,OTA"
 #if MN_ENABLE_BOTS
         ",BOTMODE"
 #endif
@@ -144,7 +155,9 @@ static void emit_help(const char *tag) {
     mn_write_line("#            RECENT [peer-ipv6]  (no arg: replay own ring as !RCHAT; with peer: fetch+merge)");
     mn_write_line("#            NAME <name> MODE TERSE|HUMAN SUB/UNSUB <classes> CHANNEL LIST|SHOW");
     mn_write_line("#            SYSINFO MESH BENCH SELFTEST STATS [RESET] STRESS <secs> <len>");
-    mn_write_line("#            HEARTBEAT <secs|0> FORTH PUBKEY ADMIN ADD|LIST ROTATE");
+    mn_write_line("#            HEARTBEAT <secs|0> FORTH PUBKEY ROTATE");
+    mn_write_line("#            ADMIN ADD <pub-hex> | LIST | REMOVE <n|fp> | REVOKE <fp>  (REVOKE: signed, whole mesh)");
+    mn_write_line("#            OTA APPLY <peer-id|ipv6> <sha128-hex> <ver> [PERM] [DOWNGRADE]  (admin-signed, §13.3)");
     mn_write_line("#            HOOK CHAT|CMD <word>|LIST|CLEAR  SCRIPT SET|SHOW|RUN|CLEAR");
     mn_write_line("#            BUNDLE BEGIN | ADD <chunk> | COMMIT | LIST | CLEAR | STOP");
     mn_write_line("#              (signed role bundle over HCP: chunk the envelope JSON");
@@ -256,7 +269,56 @@ static void handle_hcp_line(char *line) {
             if (mn_admin_add(pub) != 0) respond_err(tag, "E_BUSY", "allow-list full (max 4)");
             else respond(tag, "+OK");
         }
-        else respond_err(tag, "E_SYNTAX", "ADMIN ADD <pubkey-hex> | LIST");
+        else if (!strncmp(rest, "REMOVE ", 7) || !strncmp(rest, "REVOKE ", 7)) {
+            bool mesh = rest[2] == 'V';
+            const char *a = rest + 7;
+            while (*a == ' ') a++;
+            uint8_t fp[8];
+            int rc;
+            if (strlen(a) == 16 && hex_bytes(a, fp, 8)) {
+                if (mesh) {
+                    if (mn_get_state() != MN_READY) { respond_err(tag, "E_BAD_STATE", mn_state_name(mn_get_state())); return; }
+                    rc = mn_admin_revoke_send(fp);
+                    if (rc != 0) { respond_err(tag, "E_INTERNAL", "sign/send failed"); return; }
+                    respond(tag, "+OK revoke sent; removed here too");
+                    return;
+                }
+                rc = mn_admin_remove(fp);
+            } else if (!mesh && atoi(a) > 0) {
+                rc = mn_admin_remove_index(atoi(a));
+            } else {
+                respond_err(tag, "E_SYNTAX", mesh ? "ADMIN REVOKE <16-hex fp>" : "ADMIN REMOVE <n|16-hex fp>");
+                return;
+            }
+            if (rc != 0) respond_err(tag, "E_NOT_FOUND", "no such admin key (see ADMIN LIST)");
+            else respond(tag, "+OK");
+        }
+        else respond_err(tag, "E_SYNTAX", "ADMIN ADD <pubkey-hex> | LIST | REMOVE <n|fp> | REVOKE <fp>");
+    }
+    else if (!strcmp(verb, "OTA")) {             /* §13.5 admin-signed remote apply */
+        char peer[48], sha[40], ver[32], o1[16] = "", o2[16] = "";
+        uint8_t sha128[16];
+        mn_pkg_ver_t v;
+        unsigned ma, mi, re, bu;
+        if (sscanf(rest, "APPLY %47s %39s %31s %15s %15s", peer, sha, ver, o1, o2) < 3 ||
+            strlen(sha) != 32 || !hex_bytes(sha, sha128, 16) ||
+            sscanf(ver, "%u.%u.%u+%u", &ma, &mi, &re, &bu) != 4 || ma > 255 || mi > 255 || re > 65535) {
+            respond_err(tag, "E_SYNTAX", "OTA APPLY <peer-id|ipv6> <sha128-hex> <maj.min.rev+build> [PERM] [DOWNGRADE]");
+            return;
+        }
+        v = (mn_pkg_ver_t){ (uint8_t)ma, (uint8_t)mi, (uint16_t)re, bu };
+        uint8_t mode = MN_OTA_MODE_TEST, flags = 0;
+        for (const char *o = o1; o; o = (o == o1) ? o2 : NULL) {
+            if (!*o) continue;
+            if (!strcasecmp(o, "PERM")) mode = MN_OTA_MODE_PERMANENT;
+            else if (!strcasecmp(o, "DOWNGRADE")) flags |= MN_OTA_F_ALLOW_DOWNGRADE;
+            else { respond_err(tag, "E_SYNTAX", "options: PERM DOWNGRADE"); return; }
+        }
+        if (mn_get_state() != MN_READY) { respond_err(tag, "E_BAD_STATE", mn_state_name(mn_get_state())); return; }
+        int rc = mn_ota_apply_send(peer, sha128, &v, mode, flags);
+        if (rc == -3) respond_err(tag, "E_UNKNOWN_PEER", "not in PEERS (need its id and address)");
+        else if (rc != 0) respond_err(tag, "E_INTERNAL", "sign/send failed");
+        else respond(tag, "+OK sent");
     }
     else if (!strcmp(verb, "BOTMODE")) {
         /* BOTMODE            → list bots (ascending by id) + which is active

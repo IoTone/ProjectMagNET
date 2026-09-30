@@ -132,10 +132,20 @@ PY=~/zephyrproject/.venv/bin/python
 $PY ../tools/mnpkg.py build build/X/firmware-zephyr/zephyr/zephyr.signed.bin \
     --chip efr32mg24 --board xiao-mg24 --variant dev-ble-resident \
     --version 0.7.0+2 --fw-version 0.7.0-eh --key ../tools/keys/dev_release_ed25519.pem -o node.mnpkg
-$PY ../tools/ota_push.py <sender-port> <target-ml-eid> node.mnpkg
-# target: !OTA staged v0.7.0+2 <sha128> — then, privileged, on the target:
+$PY ../tools/ota_push.py <sender-port> <target-ml-eid> node.mnpkg --apply
+# stages (!OTA staged v0.7.0+2 <sha128>), then the SENDER sends an admin-signed
+# OTA APPLY and waits: !OTA_RESULT <id> accepted → target reboots, TEST →
+# !OTA_REPORT <id> confirmed v0.7.0+2 (was v0.7.0+1)   — or rolled-back.
+# The target must allow-list the sender's key first:  ADMIN ADD <sender PUBKEY>
+# Without --apply, apply on the target itself (privileged):
 #   FORTH   ota-status   ota-apply     (swap in TEST mode; confirms when healthy)
 ```
+
+Remote apply is design proposal §13.3–13.5: `system/ota_apply` is bound to the
+target id, the staged SHA and version, so a replay after success answers
+`E_NOT_STAGED`. Health = READY **and** every saved role bundle re-applied.
+`ADMIN REMOVE <n|fp>` / `ADMIN REVOKE <fp>` (signed, whole channel) take keys
+back out (§13.11).
 
 The transfer is Type 6 with meta `mnpkg:1`. The receive sink
 (`mn_xfer_set_sink`) checks the 256-byte header the moment chunk 0 arrives

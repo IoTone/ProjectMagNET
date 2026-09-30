@@ -14,6 +14,7 @@
 #include <zephyr/sys/reboot.h>
 
 #include "magnet.h"
+#include "magnet_ota.h"
 
 /* MN_OTA_FORCE_UNHEALTHY (test builds only): never counts as healthy and
  * gives up after 20 s — exercises the automatic rollback path end to end. */
@@ -22,7 +23,7 @@
 #define MN_NODE_HEALTHY() false
 #else
 #define MN_OTA_CONFIRM_DEADLINE_S (10 * 60)
-#define MN_NODE_HEALTHY() (mn_get_state() == MN_READY)
+#define MN_NODE_HEALTHY() mn_ota_node_healthy()   /* READY + bundles re-applied (§7.4) */
 #endif
 #define MN_OTA_POLL_MS            2000
 
@@ -35,8 +36,9 @@ static void confirm_poll(struct k_work *w) {
     ARG_UNUSED(w);
     if (MN_NODE_HEALTHY()) {
         int rc = boot_write_img_confirmed();
-        mn_emit_event(rc == 0 ? "!OTA confirmed (node READY)"
+        mn_emit_event(rc == 0 ? "!OTA confirmed (node healthy)"
                               : "!WARN ota-confirm-failed rc=%d", rc);
+        mn_ota_settled();                    /* §13.4 report, if an apply is on record */
         return;
     }
     if (k_uptime_get() >= s_deadline_ms) {
@@ -48,8 +50,8 @@ static void confirm_poll(struct k_work *w) {
     k_work_reschedule(&s_confirm_work, K_MSEC(MN_OTA_POLL_MS));
 }
 
-/* Called once from main after the link is up (events can be emitted). */
-void mn_ota_boot(void) {
+/* "# ota: running ..." — at boot and from ota-status. True if confirmed. */
+static bool report_running(void) {
     struct mcuboot_img_header hdr;
     int rc = boot_read_bank_header(PARTITION_ID(slot0_partition), &hdr, sizeof(hdr));
     bool confirmed = boot_is_img_confirmed();
@@ -61,6 +63,13 @@ void mn_ota_boot(void) {
     } else {
         mn_emit_event("# ota: no MCUboot header (rc=%d) — not booted via MCUboot?", rc);
     }
+    return confirmed;
+}
+
+/* Called once from main after the link is up (events can be emitted). */
+void mn_ota_boot(void) {
+    bool confirmed = report_running();
+    if (confirmed) mn_ota_settled();         /* PERMANENT apply, or the old image after a rollback */
     if (!confirmed) {
         s_deadline_ms = k_uptime_get() + MN_OTA_CONFIRM_DEADLINE_S * 1000LL;
         k_work_reschedule(&s_confirm_work, K_MSEC(MN_OTA_POLL_MS));
@@ -217,6 +226,7 @@ static const mn_xfer_sink_t s_ota_sink = {
 
 /* Forth: ota-status ( -- )  ota-apply ( -- )  — privileged via FORTH verb */
 static void w_ota_status(void) {
+    (void)report_running();
     if (!s_ota.staged) {
         mn_emit_event("# ota: slot1 not staged%s", s_ota.active ? " (receiving)" : "");
         return;
@@ -236,6 +246,25 @@ static void w_ota_apply(void) {
     mn_emit_event("!OTA applying: rebooting into the staged image (TEST; confirms when healthy)");
     k_msleep(300);
     sys_reboot(SYS_REBOOT_COLD);
+}
+
+/* §13.3 hooks for the core's admin-signed apply */
+bool mn_ota_platform_supported(void) { return true; }
+const mn_pkg_hdr_t *mn_ota_platform_staged(void) {
+    return (s_ota.staged && !s_ota.active) ? &s_ota.hdr : NULL;
+}
+void mn_ota_platform_running(mn_pkg_ver_t *v) {
+    struct mcuboot_img_header h;
+    memset(v, 0, sizeof(*v));
+    if (boot_read_bank_header(PARTITION_ID(slot0_partition), &h, sizeof(h)) == 0)
+        *v = (mn_pkg_ver_t){ h.h.v1.sem_ver.major, h.h.v1.sem_ver.minor,
+                             h.h.v1.sem_ver.revision, h.h.v1.sem_ver.build_num };
+}
+int mn_ota_platform_arm(uint8_t mode) {
+    int rc = boot_request_upgrade(mode == MN_OTA_MODE_PERMANENT ? BOOT_UPGRADE_PERMANENT
+                                                                : BOOT_UPGRADE_TEST);
+    if (rc) mn_emit_event("!WARN ota-arm-failed rc=%d", rc);
+    return rc ? -1 : 0;
 }
 
 void mn_ota_sink_init(void) {
