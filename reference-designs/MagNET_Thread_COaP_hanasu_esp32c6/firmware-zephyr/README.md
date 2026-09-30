@@ -72,6 +72,13 @@ HCP runs on USART0, bridged to USB by the board's SAMD11:
 - **Pace long writes** (32 B / 5 ms) and never `flush()` (tcdrain can block
   forever under its backpressure). One unpaced 460-byte write once wedged the
   bridge until a USB replug.
+- **Keep one line in flight: wait for each reply before the next line.**
+  There is no flow control. The node receives by LDMA into a 1 KB ring (no
+  USART overruns, even during flash erases or BLE radio work — measured
+  0/1000 lines lost, down from 0.9 % with per-byte interrupts), but if the
+  dispatcher is busy (OTA staging, OpenThread) and the host keeps streaming,
+  the ring overflows. The node then says `!WARN link-rx-overrun dropped=<n>`.
+  `bundle_push.py` and `ota_push.py` both pace on replies.
 - It buffers nothing while the port is closed: output emitted then is lost.
 - USART0 is also Zephyr's console, so console/log/shell are off in `prj.conf`.
 
@@ -117,20 +124,31 @@ reboots and MCUboot rolls back. Verified on hardware: swap → TEST → READY �
 confirmed in ~11 s; a forced-unhealthy image (`CONFIG_MN_OTA_FORCE_UNHEALTHY`)
 rolled back to the previous image with no outside help.
 
-**Mesh OTA** — any node (a C6 works) sends the signed image over Thread:
+**Mesh OTA** — any node (a C6 works) sends a signed OTA **package**
+(`.mnpkg`, normative spec `../docs/OTA-PACKAGE.md`) over Thread:
 
 ```sh
-python3 ../tools/ota_push.py <sender-port> <target-ml-eid> build/X/firmware-zephyr/zephyr/zephyr.signed.bin
-# target: !OTA staged v0.7.0+4 (…, sha ok) — then, privileged, on the target:
-#   FORTH   ota-apply        (swap in TEST mode; confirms when READY)
+PY=~/zephyrproject/.venv/bin/python
+$PY ../tools/mnpkg.py build build/X/firmware-zephyr/zephyr/zephyr.signed.bin \
+    --chip efr32mg24 --board xiao-mg24 --variant dev-ble-resident \
+    --version 0.7.0+2 --fw-version 0.7.0-eh --key ../tools/keys/dev_release_ed25519.pem -o node.mnpkg
+$PY ../tools/ota_push.py <sender-port> <target-ml-eid> node.mnpkg
+# target: !OTA staged v0.7.0+2 <sha128> — then, privileged, on the target:
+#   FORTH   ota-status   ota-apply     (swap in TEST mode; confirms when healthy)
 ```
 
-The transfer is Type 6 with meta `ota:<sha256[0:16] hex>`; the target's
-receive sink (`mn_xfer_set_sink`, a no-op hook on IDF builds) writes chunks
-straight into slot1 and checks the SHA and the MCUboot header at the end.
-Measured: 400 KB C6 → MG24 in 101 s. Authenticity is MCUboot's ECDSA-P256
-check — **the build uses MCUboot's public DEV key; set
-`SB_CONFIG_BOOT_SIGNATURE_KEY_FILE` before any node leaves the bench.**
+The transfer is Type 6 with meta `mnpkg:1`. The receive sink
+(`mn_xfer_set_sink`) checks the 256-byte header the moment chunk 0 arrives
+(spec §4 checks 1–6: format, release key, signature, target, repartition,
+size) and refuses a bad package before its payload crosses the air; payload
+bytes go to slot1 at package offset − 256; at the end it runs checks 7–9
+(SHA-256 read back from slot1, MCUboot header, `min_running`). The sender
+only gets COMPLETE after all nine pass — otherwise `!XFER_FAIL <xid>
+refused:<n>`, n = the check. The shared verifier is `magnet_pkg.c`
+(host-tested by `../tools/pkgtest`). Authenticity = the package's release-key
+signature; MCUboot re-checks its own at boot.
+**Both the release keys (`../tools/keys/`) and MCUboot's key are DEV keys;
+replace them before any node leaves the bench.**
 
 Open (next): remote apply via an admin-signed mesh command (today apply is
 local-only by design), downgrade prevention, and the same sink on 8 MB C6s.

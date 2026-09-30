@@ -1,2 +1,17 @@
 /* App flash map — see mg24_partitions.dtsi (shared with MCUboot). */
 #include "mg24_partitions.dtsi"
+
+
+/* USART0 (the HCP host link) receives by LDMA, not by interrupt: its RX FIFO
+ * is 2 bytes, and the CPU stalls for longer than 2 character times at
+ * 115200 whenever flash is erased (an 8 KB page, ~15-20 ms: OTA staging,
+ * settings) or the BLE controller's radio interrupts run — measured 0.9 % of
+ * HCP lines corrupted with BLE up, and a lost XFER DATA line during OTA. */
+&dma0 {
+	status = "okay";
+};
+
+&usart0 {
+	dmas = <&dma0 DMA_REQSEL_USART0RXDATAV>, <&dma0 DMA_REQSEL_USART0TXBL>;
+	dma-names = "rx", "tx";
+};

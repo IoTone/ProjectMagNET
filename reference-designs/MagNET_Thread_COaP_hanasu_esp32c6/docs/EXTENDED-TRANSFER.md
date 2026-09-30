@@ -78,8 +78,12 @@ bitmap, not by envelope counter.
 0x03 STATUS (receiver → sender, CON)
   [0]=0x03 [1..2]=xfer_id [3..4]=window_base u16
   [5..12]=bitmap u64 LE-bit (bit i = base+i received) [13]=code
+  [14]=reason (OPTIONAL, only with code 2; absent = 14-byte frame)
   code: 0=in-progress (bitmap is the NACK/ACK picture), 1=complete,
-        2=abort/unsupported, 3=busy (a transfer is already inbound)
+        2=abort/unsupported/refused, 3=busy (a transfer is already inbound)
+  reason: why a receive SINK refused (e.g. an OTA package failing
+        OTA-PACKAGE §4 check n → reason n). Receivers of this frame MUST
+        accept len >= 14 and ignore bytes they do not understand.
 
 0x04 ABORT  (either direction)
   [0]=0x04 [1..2]=xfer_id [3]=reason
@@ -135,6 +139,7 @@ Events (class `xfer`, SUB/UNSUB as usual):
 | `timeout` | both | sender: 6 INIT tries, or 6 resend rounds, or 30 s idle. receiver: 30 s without a chunk |
 | `busy` | sender | the peer already has an inbound transfer (STATUS code 3) |
 | `refused` | sender | the peer rejected the INIT geometry (STATUS code 2) |
+| `refused:<n>` | both | a receive sink rejected the content with reason n — for an OTA package, the OTA-PACKAGE §4 check number (7 = `E_PKG_SHA`, …). Sent at the first bad chunk, or instead of COMPLETE after the last one |
 | `peer-abort` | both | the peer sent X_ABORT for this session |
 | `aborted` | both | this node's own host issued `XFER ABORT` |
 | `superseded` | receiver | the same peer opened a new transfer over this one — its abort was lost, or it restarted |

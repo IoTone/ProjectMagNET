@@ -34,22 +34,43 @@
 
 static const struct device *const s_uart = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 
-/* ---- RX: IRQ → ring buffer → link_getc ---- */
-RING_BUF_DECLARE(s_rx_ring, 512);
+/* ---- RX: LDMA → ring buffer → link_getc ----
+ * Received by DMA, not per-byte interrupts: the USART FIFO is 2 bytes and the
+ * CPU stalls longer than that at 115200 during flash erases and BLE radio
+ * work (see boards/xiao_mg24.overlay). Two 384-byte buffers ping-pong — each
+ * holds ~33 ms of line, so a stall up to ~66 ms loses nothing — and a 1 ms
+ * idle timeout hands partial buffers over promptly. */
+RING_BUF_DECLARE(s_rx_ring, 1024);
 static K_SEM_DEFINE(s_rx_sem, 0, 1);
+static uint8_t s_dma_buf[2][384];
+static uint8_t s_dma_next;
+/* The UART has no flow control: if the dispatcher falls > 1 KB behind the
+ * wire, bytes are lost. Counted here, reported by link_getc as a !WARN so a
+ * host knows its data was dropped (hosts should pace on replies; see
+ * tools/ota_push.py). */
+static atomic_t s_rx_dropped;
 
-static void uart_isr(const struct device *dev, void *ud) {
+static void uart_cb(const struct device *dev, struct uart_event *evt, void *ud) {
     ARG_UNUSED(ud);
-    uart_irq_update(dev);
-    while (uart_irq_rx_ready(dev)) {
-        uint8_t buf[32];
-        int n = uart_fifo_read(dev, buf, sizeof(buf));
-        if (n > 0) {
-            ring_buf_put(&s_rx_ring, buf, n);  /* full ring drops: host re-sends */
-            k_sem_give(&s_rx_sem);
-        } else {
-            break;
-        }
+    switch (evt->type) {
+    case UART_RX_RDY:
+    {
+        uint32_t put = ring_buf_put(&s_rx_ring, evt->data.rx.buf + evt->data.rx.offset,
+                                    evt->data.rx.len);
+        if (put < evt->data.rx.len) atomic_add(&s_rx_dropped, evt->data.rx.len - put);
+        k_sem_give(&s_rx_sem);
+    }
+        break;
+    case UART_RX_BUF_REQUEST:
+        uart_rx_buf_rsp(dev, s_dma_buf[s_dma_next], sizeof(s_dma_buf[0]));
+        s_dma_next ^= 1;
+        break;
+    case UART_RX_DISABLED:                  /* after an error/stop: start over */
+        s_dma_next = 1;
+        uart_rx_enable(dev, s_dma_buf[0], sizeof(s_dma_buf[0]), 1000);
+        break;
+    default:
+        break;
     }
 }
 
@@ -61,6 +82,13 @@ static void uart_isr(const struct device *dev, void *ud) {
  * HCP is text, so a NUL is never meaningful. */
 static int link_getc(void) {
     uint8_t c;
+    static atomic_val_t reported;
+    atomic_val_t dropped = atomic_get(&s_rx_dropped);
+    if (dropped != reported) {                   /* dispatcher context: may emit */
+        mn_emit_event("!WARN link-rx-overrun dropped=%ld (host: wait for each reply)",
+                      (long)(dropped - reported));
+        reported = dropped;
+    }
     for (;;) {
         if (ring_buf_get(&s_rx_ring, &c, 1) != 1) {
             k_sem_take(&s_rx_sem, K_MSEC(10));
@@ -88,8 +116,9 @@ static void report_heap(const char *label) {
 int main(void) {
     /* 1. transport up first so we can talk even if everything else stalls */
     if (!device_is_ready(s_uart)) return 0;
-    uart_irq_callback_user_data_set(s_uart, uart_isr, NULL);
-    uart_irq_rx_enable(s_uart);
+    uart_callback_set(s_uart, uart_cb, NULL);
+    s_dma_next = 1;
+    uart_rx_enable(s_uart, s_dma_buf[0], sizeof(s_dma_buf[0]), 1000);   /* 1 ms idle */
 
     raw_print("\r\n# MagNET Hanasu — Zephyr/MG24 (Z-B)\r\n");
     report_heap("boot");
