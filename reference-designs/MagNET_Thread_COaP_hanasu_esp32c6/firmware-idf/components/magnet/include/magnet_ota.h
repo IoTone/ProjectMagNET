@@ -49,6 +49,13 @@ bool mn_ota_pending_permanent(void);
 /* Health (OTA-PACKAGE §7.4) = READY and no persisted bundle failed to re-apply. */
 bool mn_ota_node_healthy(void);
 
+/* CLEARS_BUNDLES (OTA-PACKAGE §7.4). The platform notes every arm, local or
+ * remote; while that image is on trial main skips the bundle re-apply (health
+ * = READY, report bundles=3); the bundles are forgotten only once it confirms,
+ * so a rollback finds them intact. */
+void mn_ota_note_arm(const mn_pkg_hdr_t *h);
+bool mn_ota_bundles_suspended(void);      /* main: true → skip craw_role_bundle_apply_saved */
+
 /* Boot-time bundle re-apply result, set by main after craw_role_bundle_apply_saved. */
 void    mn_boot_bundles_set(int found, int failed);
 uint8_t mn_boot_bundles(void);

@@ -2176,10 +2176,12 @@ without OTA answers 7 rather than 3. Check 5 compares the package header (both
 platforms have one); `tools/mnpkg.py` refuses to build an MCUboot package whose
 embedded image version differs from `--version`, so the two cannot disagree.
 
-On success: `boot_request_upgrade(mode)`, reply `ACCEPTED`, reboot after a
-4–6 s jitter (lets the CoAP ACK and the Type 2 reply leave the radio). Rev 2.4:
-the draft said 1–3 s; the reply is CON and its first retransmit comes 2–3 s
-after a loss, so on the bench a lost first reply was cut off by the reboot.
+On success: `boot_request_upgrade(mode)`, reply `ACCEPTED`, and reboot **once
+the reply's CoAP ACK arrives** (+0.5 s), or at a 20 s cap if it never does.
+Rev 2.4: the draft said a 1–3 s jitter, then 4–6 s — both lost the reply on the
+bench whenever the first transmissions were (the reboot cut the CON retransmits
+off). Waiting for the ACK removes the race; the cap keeps a lost admin from
+stranding an armed node.
 
 Reply: **Type 2 M2M Response** to the sender, `ns 0x00 cmd 0x06`,
 `status u8 ‖ running version (8) ‖ identity pubkey (65)` = 74 bytes. Signed with
@@ -2210,7 +2212,7 @@ Rev 2.4: the pubkey is checked as for the apply reply; "other" replaces
 "previous" so a rollback report names the image that failed. Health is
 implemented on both platforms: the bundle loader counts saved bundles that fail
 to re-install at boot, and any failure blocks confirmation (→ rollback).
-`bundles = 3` is reserved until `CLEARS_BUNDLES` handling lands.
+`bundles = 3`: a `CLEARS_BUNDLES` image — bundles held back on trial, forgotten on confirm (OTA-PACKAGE §7.4, rev 1.4).
 
 Sent CON unicast to the admin that issued the apply (the target persists its
 device_id + ML-EID alongside the pending flag — NVS `magnet/otapend`, written
@@ -2331,15 +2333,21 @@ other's key. Every row observed on hardware:
 | 4 | Forced-unhealthy MG24 v+3 | TEST → not healthy in 20 s → MCUboot revert → `rolled-back v0.7.0+2 (failed v0.7.0+3)` |
 | 5 | Same apply resent after success | `E_NOT_STAGED` (binding to what is staged now) |
 | 5 | Captured apply **frame** replayed byte for byte (`OTA REPLAY`, test builds with `-DMN_TEST_REPLAY=1`) | at once: dropped by the counter high-water (`STATS rx dup` 0 → 1, no reply, never reached dispatch). After the target applied and rebooted (high-water table empty): reached dispatch, `E_NOT_STAGED` — the §13.7 binding is what stops it |
+| — | `CLEARS_BUNDLES`, image rolls back (MG24 with `hanasu-hello` saved) | trial boot: `saved bundles held back`; unhealthy → rollback → old image `persisted role bundle(s) re-applied`; report `rolled-back … bundles=1`; bundle still listed |
+| — | `CLEARS_BUNDLES`, image confirms | held back → confirmed → `1 saved bundle(s) forgotten`; report `confirmed … bundles=3`; `BUNDLE LIST` empty |
 | 6 | BLE host path: Mac → bonded BLE → MG24 `OTA APPLY` → C6 | `HCP-AUTH: bonded`; `!OTA_RESULT accepted` and `!OTA_REPORT confirmed v0.7.0+2 (was v0.7.0+1) bundles=1` both arrived as BLE notifications |
 | 7 | Package rejection matrix | step 1–3 runs + `tools/pkgtest` 25/25 |
 | 8 | MG24 admin → C6 target | accepted → ota_1 TEST → confirmed; MG24 got `confirmed v0.7.0+2 (was v0.7.0+1) bundles=1` — xray1's saved role bundle re-applied, so the bundle half of health was exercised |
 | 8 | Forced-unhealthy C6 image | reverted via IDF app rollback (step 3, local apply) |
 | — | `ADMIN REVOKE` (MG24 revokes its own key on the C6) | C6: `!WARN admin-revoked fp=959f2e624f2f11e2`; the next apply from the MG24 was silently dropped |
 
-Found on the way: with the draft's 1–3 s reboot delay the `accepted` reply was
-lost on 2 of 4 applies (the node rebooted inside the CON retransmit window);
-4–6 s fixed it (§13.3) — every apply since got its reply. Not covered: the
+Found on the way: with a fixed reboot delay (1–3 s, then 4–6 s) the `accepted`
+reply was lost 3 times (the node rebooted inside the CON retransmit window);
+rebooting on the reply's ACK fixed it (§13.3). And a Zephyr-port bug: the NVS
+shim allocated its key-list snapshot (~800 B) from the kernel heap, which BLE
+drains, so at runtime on the MG24 BLE build every NVS *enumeration* silently
+returned nothing — `BUNDLE LIST` was empty and `forget_all` forgot nothing,
+while boot (before BLE) worked. Moved to the libc arena. Not covered: the
 refusal of a privileged verb on an *unbonded* BLE link (the bench Mac is
 bonded to the MG24; that gate was validated in the BLE phase).
 

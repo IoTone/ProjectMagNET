@@ -241,6 +241,7 @@ static void w_ota_status(void) {
 
 static void w_ota_apply(void) {
     if (!s_ota.staged) { mn_emit_event("-ERR E_BAD_STATE nothing staged"); return; }
+    mn_ota_note_arm(&s_ota.hdr);
     esp_err_t err = esp_ota_set_boot_partition(s_ota.part);    /* re-verifies the image */
     if (err != ESP_OK) {
         mn_emit_event("-ERR E_INTERNAL esp_ota_set_boot_partition rc=%d", err);
