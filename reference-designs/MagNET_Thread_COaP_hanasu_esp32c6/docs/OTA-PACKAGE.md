@@ -1,9 +1,22 @@
 # MagNET OTA package format (`.mnpkg`) — v1
 
-**Status: normative, v1 — specified 2026-09-29, not yet implemented.**
+| | |
+|---|---|
+| **Wire format** | `format_version = 1` (the byte at header offset 4) |
+| **Document revision** | 1.0 — 2026-09-29 |
+| **Status** | Normative; approved; not yet implemented |
+| **Shared copy** | https://claude.ai/code/artifact/367a8f54-6808-4a1f-8b7c-34e80274e30b (commentable; this file is the source of truth) |
+| **Tag** | `mnpkg-spec-v1.0` |
+
 Companion to design proposal §13 (remote apply) and `docs/EXTENDED-TRANSFER.md`
 (the Type 6 transport that carries it). Keywords MUST / SHOULD / MAY as in
 RFC 2119.
+
+**Two version numbers, on purpose.** The *wire format* version is what a node
+checks; it changes only when bytes change meaning (§10). The *document
+revision* tracks this text: a revision that clarifies without changing any
+byte bumps the minor number (1.0 → 1.1); one that changes the wire format
+starts a new major (2.0, with `format_version = 2`).
 
 ## 1. Why a package, not a raw image
 
@@ -227,3 +240,9 @@ C0  [signature r 32][signature s 32]
 A reader MUST reject `format_version` ≠ 1. A future v2 MAY change
 `header_len`; v1 readers reject it at check 1, which is the intended failure.
 Fields are never repurposed; new ones take reserved bytes and a new version.
+
+## 11. Revision history
+
+| Revision | Date | Wire format | Change |
+|---|---|---|---|
+| 1.0 | 2026-09-29 | 1 | First approved revision (design proposal rev 2.3, §13). |
