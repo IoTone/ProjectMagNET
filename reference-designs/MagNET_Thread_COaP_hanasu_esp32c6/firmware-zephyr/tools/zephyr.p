@@ -149,6 +149,17 @@ define zcrash(logpath);
     zcrash_elf(logpath, 'mn')
 enddefine;
 
+;;; OTA package verifier (magnet_pkg.c) vs tools/mnpkg.py, every spec code
+define zpkgtest();
+    lvars l;
+    for l in zp_lines('set +e; cd $HOME/dev/projects/iotone/ProjectMagNET/reference-designs/'
+            sys_>< 'MagNET_Thread_COaP_hanasu_esp32c6 && $HOME/zephyrproject/.venv/bin/python '
+            sys_>< 'tools/pkgtest/run.py 2>&1') do
+        if issubstring('MISMATCH', 1, l) or issubstring('cases match', 1, l)
+        or issubstring('rror', 1, l) then npr(l) endif
+    endfor;
+enddefine;
+
 ;;; ESP/FreeRTOS/NVS API surface of a source file, ranked by use count
 define zinv(path);
     lvars l, parts;
@@ -160,4 +171,4 @@ define zinv(path);
     endfor;
 enddefine;
 
-npr('zephyr.p loaded: zb zb_new zb_sys zfl zram zcrash zcrash_elf zinv');
+npr('zephyr.p loaded: zb zb_new zb_sys zfl zpkgtest zram zcrash zcrash_elf zinv');
