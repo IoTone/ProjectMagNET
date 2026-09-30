@@ -1,7 +1,7 @@
 # MagNET Hanasu v2 - Design Proposal
 
-## Status: DRAFT (rev 2.2)
-## Date: 2026-03-27 (rev 2.1: 2026-06-14, rev 2.2: 2026-07-30)
+## Status: DRAFT (rev 2.3)
+## Date: 2026-03-27 (rev 2.1: 2026-06-14, rev 2.2: 2026-07-30, rev 2.3: 2026-09-29 — §13 OTA)
 ## Target Platform: ESP-IDF (prototypes on Arduino)
 
 > **Rev 2.1 note**: Sections 1–10 are the original v2 proposal. **Section 11 supersedes
@@ -394,6 +394,8 @@ use, so user commands belong at 0x03+.
 | 0x03 | rotate | 1 byte: new epoch | MUST be ADMIN\|SIGNED (§11.1.8) |
 | 0x04 | time_announce | 11 bytes: epoch `int64` BE ‖ tz offset minutes `int16` BE ‖ sender stratum `u8` | Mesh clock. Receivers adopt at stratum+1 and **MUST NOT re-broadcast** — Thread MPL already floods realm-local multicast. Stratum ≥ 4 MUST be refused. |
 | 0x05 | time_request | none | Pull. Responders MUST jitter (biased by stratum) and MUST cancel on hearing any 0x04, so one node answers regardless of mesh size. |
+| 0x06 | ota_apply | 30 bytes (§13.3) | **Proposed (rev 2.3).** MUST be ADMIN\|SIGNED, CON unicast. |
+| 0x07 | ota_report | 18 bytes (§13.4) | **Proposed (rev 2.3).** SIGNED by the reporting node. |
 
 Mesh time is **not** NTP: ~±1 s, no round-trip compensation, no date. It is
 channel-encrypted only, so any channel member can set it — acceptable because
@@ -1214,7 +1216,7 @@ Payload Capacity (15 app-fragments):       ~930 bytes (single-frame)
 1. **Key rotation**: Should channel keys rotate periodically? If so, what epoch granularity (hourly, daily)?
 2. **Node identity**: Should nodes have persistent identities beyond EUI-64? (e.g., user-assigned names stored in NVS)
 3. **Message persistence**: Should nodes store-and-forward messages for offline peers?
-4. **OTA updates**: Should the M2M binary transfer support firmware updates?
+4. **OTA updates**: Should the M2M binary transfer support firmware updates? **[PARTLY RESOLVED — rev 2.3: yes. Staging over Type 6 + MCUboot swap/rollback implemented and validated on the XIAO MG24; admin-signed remote apply proposed in §13.]**
 5. **Interop**: Should the M2M command protocol be documented as an open spec, or remain proprietary?
 6. **Power management**: Are any nodes battery-powered sleepy end devices? (Affects multicast reception — SEDs miss multicast by design.)
 7. **UART baud rate**: Should higher baud rates (230400, 460800) be supported for edge routing throughput? Would need NVS-persisted config.
@@ -2099,6 +2101,183 @@ external components into `components/` instead. (2) The IDF `openthread` compone
 space-containing `OPENTHREAD_BUILD_DATETIME` define is mis-quoted by PlatformIO and
 breaks every `openthread/*.cpp` (`invalid digit "9" in octal constant`); a pre-build
 script (`patch_openthread_datetime.py`) sanitizes it idempotently.
+
+---
+
+## 13. Over-the-air firmware update (rev 2.3 — resolves Open Q4)
+
+**Status:** §13.1–13.2 are implemented and hardware-validated on the XIAO MG24
+(Zephyr) build, 2026-09-29. §13.3 onward — **remote apply** — was approved
+2026-09-29 with every §13.9 recommendation, **extended to the ESP32-C6**.
+What travels over the air is now a signed **OTA package** — normative format
+in **`docs/OTA-PACKAGE.md`** — rather than a bare platform image.
+
+### 13.1 What exists (Z-F, `firmware-zephyr/`)
+
+| Piece | Behaviour |
+|---|---|
+| Flash map | MCUboot 48 KB · slot0 712 KB · slot1 712 KB · storage 64 KB (identity, bonds, channel survive updates) |
+| Boot | MCUboot **swap-using-move**, ECDSA-P256 image signature (MCUboot's DEV key today — §13.8) |
+| Health | Swapped-in image runs in TEST; confirmed once the node reaches READY; not READY in 10 min → reboot → MCUboot rolls back |
+| Staging over the mesh | Type 6 transfer with meta `ota:<sha256[0:16] hex>`; the target's receive sink (`mn_xfer_set_sink`) writes chunks into slot1 and, at completion, checks the SHA prefix and the MCUboot header → `!OTA staged vX.Y.Z+N` |
+| Apply | **Local only**: Forth `ota-apply` via the privileged `FORTH` verb (bonded BLE or serial) |
+| Superseded by | `docs/OTA-PACKAGE.md` v1: the bare image + `ota:<sha128>` meta above is the v0 transport, removed when packages land |
+
+Measured: 400 KB C6 → MG24 over Thread in 101 s (~3.9 KiB/s); swap + TEST
+boot + READY + confirm in ~11 s; forced-unhealthy image rolled back unaided.
+
+### 13.2 Why apply was kept separate from staging
+
+Staging is harmless by construction: anyone on the channel can already send a
+Type 6 transfer, slot1 is inert until marked pending, and MCUboot will not
+boot an image that is not signed with the firmware key. **Applying** reboots
+the node and changes what runs — that is the privileged step, and §11.1.7
+already names OTA as an ADMIN command. So the gap is exactly one thing: a way
+for an **allow-listed admin** to trigger apply on a node that has no host.
+
+### 13.3 Proposal: `system/ota_apply` (ns 0x00, cmd 0x06)
+
+A Type 1 M2M command on the existing admin plane — same machinery as
+`system/rotate` (0x03): **ENCRYPTED | SIGNED | ADMIN**, signature by the
+sender's identity key over `header ‖ ciphertext ‖ MIC`, verified against the
+receiver's admin allow-list *before* dispatch (`admin_verify`, §11.1.7).
+
+Delivery: **CON unicast** to the target's ML-EID (like every Type 6 frame;
+the E-B tables rule multicast out for anything that must arrive).
+
+```
+params (30 bytes):
+  target_id   4   device_id the command is for (must equal ours)
+  sha128     16   image_sha256[0:16] from the staged package header (OTA-PACKAGE §4)
+  version     8   major u8 ‖ minor u8 ‖ revision u16 BE ‖ build u32 BE
+  mode        1   0 = TEST (confirm-when-healthy)   1 = PERMANENT
+  flags       1   bit0 ALLOW_DOWNGRADE, others MUST be 0
+```
+
+Receiver, in order — any failure → reply with the code, change nothing:
+
+| # | Check | Code |
+|---|---|---|
+| 1 | frame is ADMIN\|SIGNED and signer allow-listed (existing, pre-dispatch) | *(silently dropped, as today)* |
+| 2 | `target_id` == our device_id | `E_NOT_TARGET` |
+| 3 | an image is staged and not being received | `E_NOT_STAGED` |
+| 4 | staged SHA prefix == `sha128` | `E_SHA_MISMATCH` |
+| 5 | slot1 MCUboot header version == `version` | `E_VERSION_MISMATCH` |
+| 6 | `version` > running, unless ALLOW_DOWNGRADE | `E_DOWNGRADE` |
+| 7 | this build supports OTA (C6 still on the pre-OTA partition table) | `E_UNSUPPORTED` |
+
+On success: `boot_request_upgrade(mode)`, reply `ACCEPTED`, reboot after a
+1–3 s jitter (lets the CoAP ACK and the Type 2 reply leave the radio).
+
+Reply: **Type 2 M2M Response** to the sender, `ns 0x00 cmd 0x06`,
+`status u8 ‖ running version (8)`. Signed with the target's identity key
+(SIGNED, not ADMIN) so the operator can trust which node said what.
+
+### 13.4 Proposal: `system/ota_report` (ns 0x00, cmd 0x07)
+
+After an apply, the result is only visible *after the reboot*, possibly to a
+node that has moved on. The target reports once, when its OTA state settles:
+
+```
+params (18 bytes): outcome u8 ‖ running version (8) ‖ previous version (8) ‖ reserved u8
+  outcome: 1 CONFIRMED (new image healthy)   2 ROLLED_BACK (new image never got READY)
+```
+
+Sent CON unicast to the admin that issued the apply (the target persists its
+device_id + ML-EID alongside the pending flag) — falling back to channel
+multicast NON if that address is unreachable. Signed with the target's
+identity key. The rollback case is detected on the boot *after* the revert:
+the old image sees an unconfirmed swap record and reports ROLLED_BACK.
+
+### 13.5 Operator surface
+
+Admin node (HCP, privileged → bonded BLE or serial):
+
+```
+OTA APPLY <peer-ipv6> <sha128-hex> <ver> [PERM] [DOWNGRADE]   → +OK sent
+  … !OTA_RESULT <id> accepted|<E_code> v<running>
+  … !OTA_REPORT <id> confirmed|rolled-back v<new> (was v<old>)   (after reboot)
+```
+
+`tools/ota_push.py` grows `--apply`: stage → `!XFER_SENT` → `OTA APPLY` →
+wait for the report.
+
+**Needed first (small):** today the sink verifies the SHA *inside*
+`on_done()`, after which the receiver sends COMPLETE regardless — so the
+sender cannot tell a verified stage from a corrupt one. Change `on_done` to
+return a verdict and send `XC_REFUSED` instead of `XC_COMPLETE` when it fails;
+the sender then sees `!XFER_FAIL refused`, and `!XFER_SENT` comes to mean
+"staged and verified".
+**Fleet rollout is sequential with a canary**: one node first, the next only
+after its CONFIRMED report — never a multicast apply (§13.9 Q2).
+
+### 13.6 Code placement
+
+- `magnet_core.c` (shared): dispatch 0x06/0x07 in the existing `MN_T_M2M_CMD`
+  case behind `is_admin`; the platform action goes through a hook,
+  `int mn_ota_apply(const mn_ota_req_t *)`. `OTA APPLY` sender side mirrors
+  `mn_rotate()`.
+- Package verification (OTA-PACKAGE §4) is shared C over `mn_verify` +
+  SHA-256, in a new `magnet_ota.c` (portable, both targets). Platform code
+  only writes the slot, checks its own image format, and requests the swap:
+  - `firmware-zephyr/src/ota.c` — MCUboot slot1 / `boot_request_upgrade`.
+  - `firmware-idf/components/magnet/magnet_ota_idf.c` — `esp_ota_*`, app
+    rollback, and the new 4 MB dual-slot partition table (OTA-PACKAGE §7.3;
+    every C6 needs **one USB reflash** to move onto it).
+- `magnet_link.c`: `OTA` verb, added to `verb_is_privileged()`.
+
+Est. cost: ~350 lines shared (apply/report + package verify), ~120 Zephyr,
+~150 IDF, `tools/mnpkg.py`. RAM: < 1 KB on each (256-byte header buffer +
+state); the MG24 BLE build has ~3 KB static left.
+
+### 13.7 Threats
+
+| Threat | Mitigation |
+|---|---|
+| Channel member triggers apply | Needs an allow-listed admin signature (check 1) |
+| Replay a captured apply | §11.1.6 counter high-water; *and* bound to `target_id` + `sha128` of what is staged *now* — a replay against a different or already-applied image fails check 3/4 |
+| LRU-evicted sender replays once (§11.1.6 caveat) | Same binding: the staged image must still match; at worst re-applies the identical image |
+| Rogue member overwrites slot1 after staging | Apply fails `E_SHA_MISMATCH`; admin restages. (DoS, not compromise) |
+| Malicious image | Package signature by a release key, checked before staging on every platform (the C6 has no other check — no secure boot); MCUboot re-checks its own signature on the MG24. Only as strong as those keys (§13.8) |
+| Downgrade to an old signed image with a known bug | Check 6; ALLOW_DOWNGRADE is an explicit, signed admin choice |
+| Bricked radio after update | TEST mode + confirm-when-READY + 10 min deadline → automatic rollback (validated) |
+| Power loss mid-transfer / mid-swap | Transfer: not staged, restage. Swap: MCUboot swap-move is power-fail safe |
+| Stolen admin key | **Gap: no revocation exists** (§11.1.7 has `ADMIN ADD` and `admin/grant` only) — §13.9 Q5 |
+
+### 13.8 Prerequisites before any node leaves the bench
+
+1. **Replace the DEV keys** — the OTA release key (OTA-PACKAGE §6) and
+   MCUboot's (`SB_CONFIG_BOOT_SIGNATURE_KEY_FILE`); keep the private halves off
+   build machines that don't sign releases.
+2. **Admin revocation** (`ADMIN REMOVE` locally; signed `admin/revoke` on the mesh).
+3. Decide §13.9 Q1–Q4.
+
+### 13.9 Decisions (approved 2026-09-29)
+
+1. **Default mode: TEST.** PERMANENT only when explicitly requested.
+2. **No multicast apply.** Unicast + canary, one node at a time.
+3. **Confirm deadline: 10 min.**
+4. **Downgrades refused** unless the signed apply sets ALLOW_DOWNGRADE (no
+   irreversible hardware security counters).
+5. **Admin revocation in scope** for this phase (`ADMIN REMOVE`, signed
+   `admin/revoke`).
+6. **ESP32-C6 included.** 4 MB parts suffice (2 × 1216 KB slots; image is
+   852 KB) — OTA-PACKAGE §7.3. The old "OTA needs 8 MB" note assumed 2 MB slots.
+
+### 13.10 Test plan (MG24 target, C6 admin)
+
+1. Unsigned / non-admin apply → silently dropped, image untouched.
+2. Wrong `target_id`, wrong SHA, wrong version, downgrade → each code, no reboot.
+3. Happy path: stage v+N from the C6, `OTA APPLY` from the C6 (MG24 has the C6's
+   key allow-listed) → ACCEPTED → swap → CONFIRMED report received.
+4. Rollback path: forced-unhealthy image → ROLLED_BACK report.
+5. Replay: capture the apply frame, resend after success → no second reboot.
+6. BLE companion build end to end (the RAM-tightest variant).
+7. Package rejection matrix (OTA-PACKAGE §4): wrong key, bad signature, C6
+   package to a MG24 and vice versa, XIAO-C6 package to a NanoC6, truncated
+   payload, flipped payload byte — each its code, nothing staged.
+8. C6 as the *target*: stage from the MG24, apply, confirm; then a
+   forced-unhealthy C6 image reverts via IDF app rollback.
 
 ---
 
