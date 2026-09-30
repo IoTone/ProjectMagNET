@@ -17,18 +17,27 @@ Only public halves enter the repo and the firmware.
 
 ## 1. Generate (once, on the signing machine — not a dev box)
 
-```sh
-# OTA release key (+ optionally a second one now, for rotation: "next")
-python3 mnpkg.py keygen --alg ed25519 -o ota_release.pem      --pub-out ota_release.pub.pem
-python3 mnpkg.py keygen --alg ed25519 -o ota_release_next.pem --pub-out ota_release_next.pub.pem
+Shell only — `openssl`, no Python — with `genkeys.sh` (copy it over; it is
+self-contained):
 
-# MCUboot key (MG24)
-imgtool keygen -t ecdsa-p256 -k mcuboot_release.pem
-imgtool getpub -k mcuboot_release.pem -e pem > mcuboot_release.pub.pem
+```sh
+sh genkeys.sh release-keys/                  # OpenSSL >= 1.1.1: Ed25519 OTA keys
+sh genkeys.sh --ota-p256 release-keys/       # stock macOS openssl (LibreSSL): P-256 OTA keys
 ```
 
-`keygen` writes the private key mode 600 and refuses to overwrite one. Back the
-private files up offline; **hand over only the three `*.pub.pem` files.**
+The stock macOS `openssl` is LibreSSL without Ed25519; the script says so and
+stops. Either install OpenSSL 3 (`brew install openssl@3`, then
+`OPENSSL=$(brew --prefix openssl@3)/bin/openssl sh genkeys.sh ...`) or use
+`--ota-p256`: P-256 package signatures (sig_alg 1) are fully supported, Ed25519
+is only preferred. The MCUboot key is always P-256.
+
+It writes `ota_release`, `ota_release_next` and `mcuboot_release` (`.pem`
+mode 600, `.pub.pem`), refuses to overwrite, and prints each OTA key's
+`key_id` — the same value `mnpkg.py` and the nodes compute. Equivalent with the
+Python tools: `mnpkg.py keygen --alg ed25519 -o K.pem --pub-out K.pub.pem` and
+`imgtool keygen -t ecdsa-p256 -k K.pem; imgtool getpub -k K.pem -e pem`.
+
+Back the private files up offline; **hand over only the three `*.pub.pem` files.**
 
 ## 2. Wire in the public halves (build machine)
 
