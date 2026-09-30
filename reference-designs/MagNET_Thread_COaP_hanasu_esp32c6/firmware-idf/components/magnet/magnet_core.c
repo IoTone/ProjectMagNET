@@ -946,6 +946,29 @@ static void counter_load(void) {
     counter_reserve();
 }
 
+#if MN_TEST_REPLAY
+/* TEST BUILDS ONLY (design §13.10 item 5): keep the last system/ota_apply
+ * frame exactly as it went on air so `OTA REPLAY` can resend the same bytes —
+ * same counter, same signature — the way an eavesdropper would. */
+static uint8_t s_replay[MN_ENV_MAX_FRAME];
+static size_t  s_replay_len;
+static char    s_replay_dst[46];
+
+static void replay_capture(uint8_t type, const uint8_t *payload, bool admin,
+                           const char *dst, const uint8_t *frame, size_t n) {
+    if (type != MN_T_M2M_CMD || !admin || !dst || payload[0] != 0x00 || payload[1] != 0x06)
+        return;
+    memcpy(s_replay, frame, n);
+    s_replay_len = n;
+    strlcpy(s_replay_dst, dst, sizeof(s_replay_dst));
+}
+
+int mn_test_replay(void) {
+    if (!s_replay_len) return -1;
+    return mn_ot_send(s_replay, s_replay_len, s_replay_dst, true);
+}
+#endif
+
 static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
                          const char *dst, bool con, bool admin,
                          uint8_t extra_flags) {
@@ -988,6 +1011,9 @@ static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
         n += 64;
     }
 
+#if MN_TEST_REPLAY
+    replay_capture(type, payload, admin, dst, frame, (size_t)n);
+#endif
     s_stats.tx_try++;
     int rc = mn_ot_send(frame, (size_t)n, dst, con);
     if (rc == 0) {
