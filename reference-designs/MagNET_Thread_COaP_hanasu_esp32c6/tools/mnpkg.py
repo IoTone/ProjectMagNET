@@ -250,6 +250,14 @@ def cmd_build(a):
         print("# payload:", check_payload(fmt, img))
     except PkgError as e:
         sys.exit(f"refusing: {e}")
+    # An MCUboot image carries its own version, and a node reports what it runs
+    # from there (design §13.4): the two must agree or a confirmed update would
+    # read as a rollback. (ESP-IDF images carry no comparable field.)
+    if fmt == FMT_MCUBOOT:
+        embedded = struct.unpack_from("<BBHI", img, 20)
+        if tuple(embedded) != tuple(parse_version(a.version)):
+            sys.exit(f"refusing: --version {a.version} but the MCUboot image says "
+                     f"v{fmt_version(embedded)} (rebuild with firmware-zephyr/VERSION set)")
     priv = load_private(a.key)
     if key_id(priv.public_key()) in dev_key_ids() and not a.variant.startswith("dev"):
         sys.exit("refusing: DEV release key with a non-dev variant (spec §6)")

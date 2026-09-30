@@ -20,6 +20,7 @@
 #include "nvs_flash.h"
 #include "forth_core.h"
 #include "craw_role_bundle.h"
+#include "magnet_ota.h"
 #include "magnet.h"
 
 /* Half the C6's 64 KB. The Forth heap only backs allot/create data —
@@ -146,6 +147,9 @@ int main(void) {
         const char **caps = mn_bundle_caps(&ncaps);
         if (craw_role_bundle_apply_saved(caps, ncaps) > 0)
             raw_print("# autorun: persisted role bundle(s) re-applied\r\n");
+        int found, failed;                   /* OTA health: a failed re-apply blocks confirm */
+        craw_role_bundle_boot_stats(&found, &failed);
+        mn_boot_bundles_set(found, failed);
     }
     if (mn_script_run() == 0) raw_print("# autorun: boot script executed\r\n");
 

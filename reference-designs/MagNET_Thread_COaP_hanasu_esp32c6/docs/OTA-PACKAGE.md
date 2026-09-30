@@ -4,7 +4,7 @@
 |---|---|
 | **Wire format** | `format_version = 1` (the byte at header offset 4) |
 | **Document revision** | 1.3 — 2026-09-30 |
-| **Status** | Normative; approved. Receive + verify + apply implemented on XIAO MG24 and XIAO ESP32C6; signed remote apply (§13) pending |
+| **Status** | Normative; approved. Implemented on XIAO MG24 and XIAO ESP32C6: receive + verify, local and admin-signed remote apply (proposal §13), bundle-aware health (§7.4). Pending: `CLEARS_BUNDLES` handling |
 | **Shared copy** | https://claude.ai/code/artifact/367a8f54-6808-4a1f-8b7c-34e80274e30b (commentable; this file is the source of truth) |
 | **Tag** | `mnpkg-spec-v1.3` (previous: `v1.2`, `v1.1`, `v1.0`) |
 

@@ -36,6 +36,7 @@
 
 #include "forth_core.h"
 #include "magnet_pkg.h"
+#include "magnet_ota.h"
 #include "magnet_xfer.h"
 
 #ifndef MN_PKG_BOARD
@@ -53,7 +54,7 @@
 #define NODE_HEALTHY() false
 #else
 #define OTA_CONFIRM_DEADLINE_S (10 * 60)
-#define NODE_HEALTHY() (mn_get_state() == MN_READY)
+#define NODE_HEALTHY() mn_ota_node_healthy()   /* READY + bundles re-applied (§7.4) */
 #endif
 #define OTA_POLL_MS   2000
 #define OTA_SECTOR    4096u
@@ -72,8 +73,9 @@ static void confirm_poll(TimerHandle_t t) {
     if (NODE_HEALTHY()) {
         esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
         xTimerStop(s_confirm_timer, 0);
-        if (err == ESP_OK) mn_emit_event("!OTA confirmed (node READY)");
+        if (err == ESP_OK) mn_emit_event("!OTA confirmed (node healthy)");
         else mn_emit_event("!WARN ota-confirm-failed rc=%d", err);
+        mn_ota_settled();                           /* §13.4 report, if an apply is on record */
         return;
     }
     if (esp_timer_get_time() >= s_deadline_us) {
@@ -97,7 +99,14 @@ static bool report_running(void) {
 }
 
 void mn_ota_boot(void) {
-    if (report_running()) {
+    bool pending = report_running();
+    if (pending && mn_ota_pending_permanent()) {   /* applied PERMANENT: no trial */
+        esp_ota_mark_app_valid_cancel_rollback();
+        mn_emit_event("# ota: PERMANENT apply — confirmed without a trial");
+        pending = false;
+    }
+    if (!pending) mn_ota_settled();                 /* e.g. the old image back after a rollback */
+    if (pending) {
         s_deadline_us = esp_timer_get_time() + OTA_CONFIRM_DEADLINE_S * 1000000LL;
         s_confirm_timer = xTimerCreate("mn_ota", pdMS_TO_TICKS(OTA_POLL_MS), pdTRUE,
                                        NULL, confirm_poll);
@@ -241,6 +250,19 @@ static void w_ota_apply(void) {
                   s_ota.part->label);
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();
+}
+
+/* §13.3 hooks for the core's admin-signed apply */
+bool mn_ota_platform_supported(void) { return true; }
+const mn_pkg_hdr_t *mn_ota_platform_staged(void) {
+    return (s_ota.staged && !s_ota.active) ? &s_ota.hdr : NULL;
+}
+void mn_ota_platform_running(mn_pkg_ver_t *v) { *v = s_running; }
+int mn_ota_platform_arm(uint8_t mode) {
+    (void)mode;       /* TEST vs PERMANENT is decided at boot: mn_ota_pending_permanent() */
+    esp_err_t err = esp_ota_set_boot_partition(s_ota.part);   /* re-verifies the image */
+    if (err != ESP_OK) mn_emit_event("!WARN ota-arm-failed rc=%d", err);
+    return err == ESP_OK ? 0 : -1;
 }
 
 void mn_ota_sink_init(void) {
