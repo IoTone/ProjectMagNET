@@ -2318,6 +2318,31 @@ state); the MG24 BLE build has ~3 KB static left.
 8. C6 as the *target*: stage from the MG24, apply, confirm; then a
    forced-unhealthy C6 image reverts via IDF app rollback.
 
+**Results (rev 2.4, 2026-09-30)** — XIAO MG24 (Zephyr, BLE-resident + MCUboot)
+and XIAO ESP32C6 xray1 (`esp32c6_xiao_ble_led_ota`), each allow-listing the
+other's key. Every row observed on hardware:
+
+| # | Case | Observed |
+|---|---|---|
+| 1 | Apply signed by a key the target does not allow-list | no reply, nothing logged, image untouched |
+| 2 | Nothing staged / wrong SHA / wrong version | `E_NOT_STAGED` / `E_SHA_MISMATCH` / `E_VERSION_MISMATCH`, no reboot |
+| 2 | Older version staged (v+1 over v+2) | `E_DOWNGRADE`; with `DOWNGRADE` → accepted → `confirmed v0.7.0+1 (was v0.7.0+2)` |
+| 3 | Happy path, C6 admin → MG24 | accepted → swap → TEST → confirmed; C6 got `!OTA_REPORT 959f2e62 confirmed v0.7.0+2 (was v0.7.0+1)` |
+| 4 | Forced-unhealthy MG24 v+3 | TEST → not healthy in 20 s → MCUboot revert → `rolled-back v0.7.0+2 (failed v0.7.0+3)` |
+| 5 | Same apply resent after success | `E_NOT_STAGED` (binding to what is staged now) |
+| 7 | Package rejection matrix | step 1–3 runs + `tools/pkgtest` 25/25 |
+| 8 | MG24 admin → C6 target | accepted → ota_1 TEST → confirmed; MG24 got `confirmed v0.7.0+2 (was v0.7.0+1) bundles=1` — xray1's saved role bundle re-applied, so the bundle half of health was exercised |
+| 8 | Forced-unhealthy C6 image | reverted via IDF app rollback (step 3, local apply) |
+| — | `ADMIN REVOKE` (MG24 revokes its own key on the C6) | C6: `!WARN admin-revoked fp=959f2e624f2f11e2`; the next apply from the MG24 was silently dropped |
+
+Found on the way: with the draft's 1–3 s reboot delay the `accepted` reply was
+lost on 2 of 4 applies (the node rebooted inside the CON retransmit window);
+4–6 s fixed it (§13.3). Not yet run: item 6's BLE-host path end to end (the
+builds tested *are* the BLE-resident variants, driven over serial), and a
+replay of a captured apply *frame* (item 5 covered the re-sent command).
+Staging a 1.17 MB C6 package took 737 s from the MG24 (385 s in step 3) —
+unexplained, open.
+
 ### 13.11 Admin revocation (rev 2.4 — §13.9 Q5)
 
 Keys are named by **fingerprint** = `SHA-256(65-byte pubkey)[0:8]`, which
