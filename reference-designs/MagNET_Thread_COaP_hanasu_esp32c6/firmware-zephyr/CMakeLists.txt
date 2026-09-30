@@ -25,6 +25,7 @@ target_sources(app PRIVATE
     compat/src/esp_misc_zephyr.c
     ${MN}/magnet_core.c
     ${MN}/magnet_envelope.c
+    ${MN}/magnet_pkg.c
     ${MN}/magnet_link.c
     ${MN}/magnet_forth.c
     ${MN}/magnet_xfer.c

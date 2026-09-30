@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "magnet_core.c"
         "magnet_envelope.c"
+        "magnet_pkg.c"       # OTA package verification (docs/OTA-PACKAGE.md)
         "magnet_crypto.c"
         "magnet_link.c"
         "magnet_forth.c"

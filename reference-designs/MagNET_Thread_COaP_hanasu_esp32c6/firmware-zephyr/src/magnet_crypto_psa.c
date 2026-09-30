@@ -505,3 +505,26 @@ void mn_crypto_psa_kat(char *out, size_t cap) {
     snprintf(out + n, cap - n, " pbkdf2-psa=not-built");
 #endif
 }
+
+/* ================= incremental SHA-256 (OTA package payloads) ============== */
+_Static_assert(sizeof(psa_hash_operation_t) <= sizeof(mn_sha256_t),
+               "mn_sha256_t too small for psa_hash_operation_t");
+
+int mn_sha256_start(mn_sha256_t *c) {
+    if (!crypto_up()) return -1;
+    psa_hash_operation_t *op = (psa_hash_operation_t *)c;
+    *op = psa_hash_operation_init();
+    return psa_hash_setup(op, PSA_ALG_SHA_256) == PSA_SUCCESS ? 0 : -1;
+}
+
+int mn_sha256_update(mn_sha256_t *c, const void *data, size_t len) {
+    return psa_hash_update((psa_hash_operation_t *)c, data, len) == PSA_SUCCESS ? 0 : -1;
+}
+
+int mn_sha256_finish(mn_sha256_t *c, uint8_t out[32]) {
+    psa_hash_operation_t *op = (psa_hash_operation_t *)c;
+    size_t n = 0;
+    psa_status_t st = psa_hash_finish(op, out, 32, &n);
+    if (st != PSA_SUCCESS) psa_hash_abort(op);
+    return (st == PSA_SUCCESS && n == 32) ? 0 : -1;
+}

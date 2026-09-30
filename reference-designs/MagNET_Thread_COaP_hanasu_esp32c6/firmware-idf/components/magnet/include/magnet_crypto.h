@@ -67,6 +67,14 @@ int mn_sign(const uint8_t *msg, size_t len, uint8_t sig64[64]);
 int mn_verify(const uint8_t pub65[65], const uint8_t *msg, size_t len,
               const uint8_t sig64[64]);
 
+/* ---- incremental SHA-256 (OTA package payloads: up to a whole app slot) ----
+ * Opaque storage big enough for the platform context (mbedTLS on IDF, PSA on
+ * Zephyr); each implementation static-asserts that it fits. 0 = ok. */
+typedef struct { uint64_t opaque[64]; } mn_sha256_t;
+int mn_sha256_start(mn_sha256_t *c);
+int mn_sha256_update(mn_sha256_t *c, const void *data, size_t len);
+int mn_sha256_finish(mn_sha256_t *c, uint8_t out[32]);
+
 #ifdef __cplusplus
 }
 #endif

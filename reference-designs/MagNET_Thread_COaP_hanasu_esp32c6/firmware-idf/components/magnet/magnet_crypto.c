@@ -285,3 +285,24 @@ int mn_verify(const uint8_t pub65[65], const uint8_t *msg, size_t len,
     mbedtls_ecp_group_free(&grp);
     return rc ? -1 : 0;
 }
+
+/* ================= incremental SHA-256 (OTA package payloads) ============== */
+_Static_assert(sizeof(mbedtls_sha256_context) <= sizeof(mn_sha256_t),
+               "mn_sha256_t too small for mbedtls_sha256_context");
+
+int mn_sha256_start(mn_sha256_t *c) {
+    mbedtls_sha256_context *m = (mbedtls_sha256_context *)c;
+    mbedtls_sha256_init(m);
+    return mbedtls_sha256_starts(m, 0) == 0 ? 0 : -1;
+}
+
+int mn_sha256_update(mn_sha256_t *c, const void *data, size_t len) {
+    return mbedtls_sha256_update((mbedtls_sha256_context *)c, data, len) == 0 ? 0 : -1;
+}
+
+int mn_sha256_finish(mn_sha256_t *c, uint8_t out[32]) {
+    mbedtls_sha256_context *m = (mbedtls_sha256_context *)c;
+    int rc = mbedtls_sha256_finish(m, out);
+    mbedtls_sha256_free(m);
+    return rc == 0 ? 0 : -1;
+}
