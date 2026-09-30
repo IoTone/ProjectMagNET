@@ -157,6 +157,9 @@ only gets COMPLETE after all nine pass — otherwise `!XFER_FAIL <xid>
 refused:<n>`, n = the check. The shared verifier is `magnet_pkg.c`
 (host-tested by `../tools/pkgtest`). Authenticity = the package's release-key
 signature; MCUboot re-checks its own at boot.
+**Release builds** use keys generated offline (public halves only here):
+`release.conf` + `-DMN_SIGN_OFFLINE=1` + the public MCUboot key, then
+`../tools/mcuboot_sign.py` on the signing machine — `../tools/keys/README.md`.
 **Both the release keys (`../tools/keys/`) and MCUboot's key are DEV keys;
 replace them before any node leaves the bench.**
 

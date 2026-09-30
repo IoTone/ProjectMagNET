@@ -19,4 +19,12 @@ config MN_OTA_FORCE_UNHEALTHY
 	  The running image never counts as healthy and the confirm deadline
 	  drops to 20 s, so a swapped-in image reboots and MCUboot reverts.
 
+config MN_PKG_RELEASE_KEYS
+	bool "OTA key store: release keys (magnet_pkg_keys_release.h)"
+	help
+	  Trust the release OTA keys generated from PUBLIC halves (see
+	  tools/keys/README.md) instead of the committed DEV keys. The build
+	  fails if the release header is missing or holds DEV keys. Set by
+	  release.conf.
+
 endmenu

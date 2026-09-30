@@ -1,0 +1,3 @@
+# Appended to the app image's IMAGE_CONF_SCRIPT by ../sysbuild.cmake (MN_SIGN_OFFLINE).
+set_config_string(${ZCMAKE_APPLICATION} CONFIG_MCUBOOT_SIGNATURE_KEY_FILE "")
+set_config_bool(${ZCMAKE_APPLICATION} CONFIG_MCUBOOT_GENERATE_UNSIGNED_IMAGE y)

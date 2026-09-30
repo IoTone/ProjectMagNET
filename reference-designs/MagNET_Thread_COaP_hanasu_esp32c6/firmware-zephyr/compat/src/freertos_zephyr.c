@@ -4,6 +4,7 @@
  */
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -45,7 +46,7 @@ static void reap_zombies(void) {
             *pp = t->next_zombie;
             k_spin_unlock(&s_zombie_lock, key);
             k_thread_stack_free(t->stack);
-            k_free(t);
+            free(t);
             key = k_spin_lock(&s_zombie_lock);
         } else {
             pp = &t->next_zombie;
@@ -73,10 +74,10 @@ static int map_prio(UBaseType_t prio) {
 BaseType_t xTaskCreate(TaskFunction_t fn, const char *name, uint32_t stack_bytes,
                        void *arg, UBaseType_t prio, TaskHandle_t *out) {
     reap_zombies();
-    struct mn_task *t = k_calloc(1, sizeof(*t));
+    struct mn_task *t = calloc(1, sizeof(*t));
     if (!t) return pdFAIL;
     t->stack = k_thread_stack_alloc(stack_bytes, 0);
-    if (!t->stack) { k_free(t); return pdFAIL; }
+    if (!t->stack) { free(t); return pdFAIL; }
     t->magic = MN_TASK_MAGIC;
     t->fn = fn;
     t->arg = arg;
@@ -113,7 +114,7 @@ struct mn_sem {
 };
 
 static SemaphoreHandle_t mutex_new(void) {
-    struct mn_sem *s = k_calloc(1, sizeof(*s));
+    struct mn_sem *s = calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->is_mutex = true;
     k_mutex_init(&s->m);
@@ -124,7 +125,7 @@ SemaphoreHandle_t xSemaphoreCreateMutex(void) { return mutex_new(); }
 SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) { return mutex_new(); }
 
 SemaphoreHandle_t xSemaphoreCreateBinary(void) {
-    struct mn_sem *s = k_calloc(1, sizeof(*s));
+    struct mn_sem *s = calloc(1, sizeof(*s));
     if (!s) return NULL;
     k_sem_init(&s->s, 0, 1);                 /* FreeRTOS binary starts empty */
     return s;
@@ -176,6 +177,11 @@ K_THREAD_STACK_DEFINE(s_tmr_stack, MN_TMR_STACK);
 static struct k_work_q s_tmr_q;
 static bool s_tmr_q_up;
 
+/* Control blocks (task, semaphore, timer) come from the libc arena, NOT the
+ * kernel heap: with BLE up the k_heap is exhausted at runtime, and a timer
+ * created then (the OTA reboot timer) came back NULL. Stacks stay on
+ * k_thread_stack_alloc (alignment + guard) and queue buffers on the k_heap —
+ * both are allocated at init, when there is room. */
 struct mn_timer {
     struct k_timer          kt;
     struct k_work           work;
@@ -206,7 +212,7 @@ TimerHandle_t xTimerCreate(const char *name, TickType_t period, UBaseType_t auto
                            map_prio(1), &cfg);
         s_tmr_q_up = true;
     }
-    struct mn_timer *t = k_calloc(1, sizeof(*t));
+    struct mn_timer *t = calloc(1, sizeof(*t));
     if (!t) return NULL;
     t->cb = cb;
     t->id = id;

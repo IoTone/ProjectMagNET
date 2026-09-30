@@ -366,6 +366,7 @@ typedef struct {
 } mn_evt_t;
 
 static QueueHandle_t s_evt_q = NULL;
+static volatile uint32_t s_rx_qdrop;     /* frames the OT side could not queue (STATS qdrop=) */
 
 void mn_post_rx(const uint8_t *data, size_t len,
                 const char *src_ipv6, bool was_multicast) {
@@ -377,7 +378,8 @@ void mn_post_rx(const uint8_t *data, size_t len,
     evt.from_recent = false;
     strlcpy(evt.src, src_ipv6, sizeof(evt.src));
     memcpy(evt.data, data, len);
-    xQueueSend(s_evt_q, &evt, 0);        /* full queue → drop (mesh is lossy anyway) */
+    if (xQueueSend(s_evt_q, &evt, 0) != pdTRUE)   /* full queue → drop (mesh is lossy) */
+        s_rx_qdrop++;                             /* ...but count it: STATS qdrop= */
 }
 
 void mn_post_rx_recent(const uint8_t *data, size_t len) {
@@ -1789,8 +1791,10 @@ static void reboot_cb(TimerHandle_t t) { (void)t; esp_restart(); }
 #define OTA_REBOOT_CAP_MS 20000
 static TimerHandle_t s_rb_timer;
 
-static void reply_done(void *ctx, bool acked) {   /* OT context: poke the timer only */
+static void reply_done(void *ctx, bool acked) {   /* OT context: post + poke the timer only */
     (void)ctx;
+    mn_post_note(acked ? "# ota: apply reply ACKed — rebooting"
+                       : "# ota: apply reply not ACKed — rebooting at the cap");
     if (acked && s_rb_timer) xTimerChangePeriod(s_rb_timer, pdMS_TO_TICKS(500), 0);
 }
 
@@ -1835,10 +1839,16 @@ static void ota_apply_rx(const uint8_t from[4], const char *src, const uint8_t *
     if (!s_rb_timer)
         s_rb_timer = xTimerCreate("mn_otarb", pdMS_TO_TICKS(OTA_REBOOT_CAP_MS), pdFALSE,
                                   NULL, reboot_cb);
-    if (!s_rb_timer || xTimerChangePeriod(s_rb_timer, pdMS_TO_TICKS(OTA_REBOOT_CAP_MS), 0) != pdPASS)
-        esp_restart();                            /* armed already: never strand it */
-    send_frame_cb(MN_T_M2M_RESP, pl, sizeof(pl), src, true, false, MN_F_SIGNED,
-                  reply_done, NULL);
+    bool timed = s_rb_timer &&
+                 xTimerChangePeriod(s_rb_timer, pdMS_TO_TICKS(OTA_REBOOT_CAP_MS), 0) == pdPASS;
+    int rc = send_frame_cb(MN_T_M2M_RESP, pl, sizeof(pl), src, true, false, MN_F_SIGNED,
+                           timed ? reply_done : NULL, NULL);
+    mn_emit_event("# ota: apply reply -> %s rc=%d%s", src, rc,
+                  timed ? "" : " (no timer: rebooting in 5 s)");
+    if (!timed) {       /* the slot is armed: never strand it — but the reply goes first */
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        esp_restart();
+    }
 }
 
 /* ---- report: queued by mn_ota_settled, sent by the pump once READY ---- */
@@ -2115,12 +2125,13 @@ void mn_stats_print(void) {
     mn_emit_event("# stats tx try=%lu ok=%lu err=%lu bytes=%llu",
                   (unsigned long)s_stats.tx_try, (unsigned long)s_stats.tx_ok,
                   (unsigned long)s_stats.tx_err, (unsigned long long)s_stats.tx_bytes);
-    mn_emit_event("# stats rx msgs=%lu dup=%lu err=%lu bytes=%llu",
+    mn_emit_event("# stats rx msgs=%lu dup=%lu err=%lu qdrop=%lu bytes=%llu",
                   (unsigned long)s_stats.rx_msgs, (unsigned long)s_stats.rx_dup,
-                  (unsigned long)s_stats.rx_err, (unsigned long long)s_stats.rx_bytes);
+                  (unsigned long)s_stats.rx_err, (unsigned long)s_rx_qdrop,
+                  (unsigned long long)s_stats.rx_bytes);
 }
 
-void mn_stats_reset(void) { memset(&s_stats, 0, sizeof(s_stats)); }
+void mn_stats_reset(void) { memset(&s_stats, 0, sizeof(s_stats)); s_rx_qdrop = 0; }
 
 /* ---- saturation stress (STRESS <secs> <len>) ---- */
 static volatile bool s_stress_running = false;

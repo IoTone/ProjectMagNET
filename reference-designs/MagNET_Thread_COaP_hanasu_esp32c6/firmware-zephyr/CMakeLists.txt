@@ -46,6 +46,9 @@ target_include_directories(app PRIVATE
 if(CONFIG_MN_OTA_FORCE_UNHEALTHY)   # test builds only; see src/ota.c
   target_compile_definitions(app PRIVATE MN_OTA_FORCE_UNHEALTHY=1)
 endif()
+if(CONFIG_MN_PKG_RELEASE_KEYS)      # release.conf; see tools/keys/README.md
+  target_compile_definitions(app PRIVATE MN_PKG_RELEASE_KEYS=1)
+endif()
 
 # BLE-GATT HCP binding: the Zephyr BT-host port when built with ble.conf,
 # otherwise the IDF file's own MN_ENABLE_BLE=0 no-op stubs.

@@ -2341,13 +2341,18 @@ other's key. Every row observed on hardware:
 | 8 | Forced-unhealthy C6 image | reverted via IDF app rollback (step 3, local apply) |
 | — | `ADMIN REVOKE` (MG24 revokes its own key on the C6) | C6: `!WARN admin-revoked fp=959f2e624f2f11e2`; the next apply from the MG24 was silently dropped |
 
-Found on the way: with a fixed reboot delay (1–3 s, then 4–6 s) the `accepted`
-reply was lost 3 times (the node rebooted inside the CON retransmit window);
-rebooting on the reply's ACK fixed it (§13.3). And a Zephyr-port bug: the NVS
+Found on the way: the `accepted` reply was lost on 6 applies to the MG24, every
+one of them after the node had already sent an OTA report. Root cause: the
+Zephyr compat layer allocated FreeRTOS timer control blocks from the kernel
+heap, which BLE exhausts at runtime, so the reboot timer could not be created,
+and the fallback rebooted before replying. Fixed: control blocks from the libc
+arena, and without a timer the node replies first, then reboots after 5 s.
+(Rebooting on the reply's ACK — §13.3 — stays: it is the right design, but it
+was not the cause.) 3/3 back-to-back applies got their reply afterwards. And a Zephyr-port bug: the NVS
 shim allocated its key-list snapshot (~800 B) from the kernel heap, which BLE
 drains, so at runtime on the MG24 BLE build every NVS *enumeration* silently
 returned nothing — `BUNDLE LIST` was empty and `forget_all` forgot nothing,
-while boot (before BLE) worked. Moved to the libc arena. Not covered: the
+while boot (before BLE) worked. Moved to the libc arena. Same root cause as the lost replies above. Not covered: the
 refusal of a privileged verb on an *unbonded* BLE link (the bench Mac is
 bonded to the MG24; that gate was validated in the BLE phase).
 

@@ -36,6 +36,7 @@
 
 #include "forth_core.h"
 #include "magnet_pkg.h"
+#include "magnet_pkg_keys.h"
 #include "magnet_ota.h"
 #include "magnet_xfer.h"
 
@@ -268,6 +269,10 @@ int mn_ota_platform_arm(uint8_t mode) {
 
 void mn_ota_sink_init(void) {
     mn_xfer_set_sink(&s_ota_sink);
+#if MN_PKG_KEYS_ARE_DEV
+    mn_emit_event("!WARN ota-dev-keys: trusts the committed DEV release keys — bench only "
+                  "(tools/keys/README.md)");
+#endif
     forth_register_word("ota-status", w_ota_status);
     forth_register_word("ota-apply", w_ota_apply);
 }
