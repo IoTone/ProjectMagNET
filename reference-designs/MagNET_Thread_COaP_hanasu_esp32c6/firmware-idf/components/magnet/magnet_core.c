@@ -830,7 +830,13 @@ void mn_core_init(void) {
         /* E-G: 12 deep — a catch-up response replays up to 12 frames back-to-
          * back from the OT task; an 8-deep queue dropped the tail */
         s_evt_q = xQueueCreate(12, sizeof(mn_evt_t));
-        xTaskCreate(pump_task, "mn_pump", 4096, NULL, 5, NULL);
+        /* 8 KB: the pump also runs xfer receive sinks, and the OTA sink
+         * verifies a package header (Ed25519 / P-256) at chunk 0 — 4 KB
+         * overflowed on the MG24 (MPU stack-guard fault, 2026-09-29). */
+#ifndef MN_PUMP_STACK
+#define MN_PUMP_STACK 8192
+#endif
+        xTaskCreate(pump_task, "mn_pump", MN_PUMP_STACK, NULL, 5, NULL);
     }
     if (!s_selftest_sem) s_selftest_sem = xSemaphoreCreateBinary();
     if (!s_forth_mutex)  s_forth_mutex  = xSemaphoreCreateMutex();

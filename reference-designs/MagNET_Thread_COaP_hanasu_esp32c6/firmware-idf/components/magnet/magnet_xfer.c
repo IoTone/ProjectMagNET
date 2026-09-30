@@ -165,15 +165,23 @@ static int send_init(void) {
     return mn_xfer_send_frame(pl, (size_t)12 + s_tx.meta_len, s_tx.peer);
 }
 
-static int send_status(const char *dst, uint16_t xid, uint16_t base,
-                       uint64_t bitmap, uint8_t code) {
-    uint8_t pl[14];
+/* reason != 0 appends byte [14] (optional; receivers of old firmware check
+ * only len >= 14 and ignore it). Used with XC_REFUSED by a refusing sink. */
+static int send_status_r(const char *dst, uint16_t xid, uint16_t base,
+                         uint64_t bitmap, uint8_t code, uint8_t reason) {
+    uint8_t pl[15];
     pl[0] = X_STATUS;
     put_u16(pl + 1, xid);
     put_u16(pl + 3, base);
     for (int i = 0; i < 8; i++) pl[5 + i] = (uint8_t)(bitmap >> (8 * i));
     pl[13] = code;
-    return mn_xfer_send_frame(pl, 14, dst);
+    pl[14] = reason;
+    return mn_xfer_send_frame(pl, reason ? 15 : 14, dst);
+}
+
+static int send_status(const char *dst, uint16_t xid, uint16_t base,
+                       uint64_t bitmap, uint8_t code) {
+    return send_status_r(dst, xid, base, bitmap, code, 0);
 }
 
 static int send_abort(const char *dst, uint16_t xid, uint8_t reason) {
@@ -196,6 +204,15 @@ static void tx_fail(const char *reason) {
 }
 
 static void rx_close(void) { s_rx.active = false; }
+
+/* A sink refused the transfer (bad package, no space, …): tell the sender
+ * with STATUS code 2 + reason, and end the session here. */
+static void rx_refuse(uint8_t reason) {
+    s_rx_sink = NULL;
+    send_status_r(s_rx.src, s_rx.xid, 0, 0, XC_REFUSED, reason);
+    xfer_event("!XFER_FAIL %04x refused:%u", s_rx.xid, reason);
+    rx_close();
+}
 
 static void rx_fail(const char *reason) {
     if (s_rx_sink) { s_rx_sink->on_done(false); s_rx_sink = NULL; }
@@ -446,10 +463,10 @@ static void on_data(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     s_rx.got++;
 
     if (s_rx_sink) {
-        if (s_rx_sink->on_chunk(idx, (uint32_t)idx * s_rx.chunk_len, pl + 5, want) < 0) {
-            send_abort(s_rx.src, s_rx.xid, 2);
-            rx_fail("sink-refused");
-            rx_close();
+        int why = s_rx_sink->on_chunk(idx, (uint32_t)idx * s_rx.chunk_len, pl + 5, want);
+        if (why) {
+            if (s_rx_sink) s_rx_sink->on_done(false);    /* let it release state */
+            rx_refuse((uint8_t)(why < 0 ? 255 : why));
             return;
         }
     } else {
@@ -457,7 +474,11 @@ static void on_data(const uint8_t sender_id[4], const uint8_t *pl, size_t len,
     }
 
     if (s_rx.got == s_rx.total_chunks) {
-        if (s_rx_sink) { s_rx_sink->on_done(true); s_rx_sink = NULL; }
+        if (s_rx_sink) {
+            int why = s_rx_sink->on_done(true);          /* e.g. OTA verify */
+            s_rx_sink = NULL;
+            if (why) { rx_refuse((uint8_t)(why < 0 ? 255 : why)); return; }
+        }
         xfer_event("!XFER_DONE %02x%02x%02x%02x %04x len=%lu",
                    s_rx.peer_id[0], s_rx.peer_id[1], s_rx.peer_id[2],
                    s_rx.peer_id[3], s_rx.xid, (unsigned long)s_rx.total_len);
@@ -496,7 +517,16 @@ static void on_status(const uint8_t sender_id[4], const uint8_t *pl, size_t len)
     s_tx.accepted         = true;
 
     if (code == XC_BUSY)    { tx_fail("busy");    return; }
-    if (code == XC_REFUSED) { tx_fail("refused"); return; }
+    if (code == XC_REFUSED) {
+        if (len >= 15 && pl[14]) {              /* a sink's reason (OTA §4 code) */
+            char why[16];
+            snprintf(why, sizeof(why), "refused:%u", pl[14]);
+            tx_fail(why);
+        } else {
+            tx_fail("refused");
+        }
+        return;
+    }
     if (code == XC_COMPLETE) {
         xfer_event("!XFER_SENT %04x len=%lu", s_tx.xid,
                    (unsigned long)s_tx.total_len);

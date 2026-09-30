@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | **Wire format** | `format_version = 1` (the byte at header offset 4) |
-| **Document revision** | 1.1 — 2026-09-29 |
+| **Document revision** | 1.2 — 2026-09-29 |
 | **Status** | Normative; approved; not yet implemented |
 | **Shared copy** | https://claude.ai/code/artifact/367a8f54-6808-4a1f-8b7c-34e80274e30b (commentable; this file is the source of truth) |
-| **Tag** | `mnpkg-spec-v1.1` (previous: `mnpkg-spec-v1.0`) |
+| **Tag** | `mnpkg-spec-v1.2` (previous: `mnpkg-spec-v1.1`, `mnpkg-spec-v1.0`) |
 
 Companion to design proposal §13 (remote apply) and `docs/EXTENDED-TRANSFER.md`
 (the Type 6 transport that carries it). Keywords MUST / SHOULD / MAY as in
@@ -233,6 +233,12 @@ update slot at offset − 256; header bytes are kept in RAM. The receiver sends
 `XC_COMPLETE` **only if §4 checks 1–9 passed** and `XC_REFUSED` otherwise, so
 the sender's `!XFER_SENT` means "staged and verified" (proposal §13.5).
 
+The refusal carries the failing **check number** as the STATUS frame's
+optional reason byte (`docs/EXTENDED-TRANSFER.md`: byte 14, present only with
+code 2). Checks 1–6 are refused at chunk 0, before the payload is sent; 7–9
+instead of COMPLETE after the last chunk. The sender reports
+`!XFER_FAIL <xid> refused:<n>` (a sender on older firmware: plain `refused`).
+
 The v0 MG24 transport (bare image, meta `ota:<sha128>`) is superseded and is
 removed when v1 lands.
 
@@ -342,5 +348,6 @@ Fields are never repurposed; new ones take reserved bytes and a new version.
 
 | Revision | Date | Wire format | Change |
 |---|---|---|---|
+| 1.2 | 2026-09-29 | 1 | §7.1: a refusal carries the failing check number (Type 6 STATUS optional reason byte); checks 1–6 refuse at chunk 0. Clarification — no package byte changes. |
 | 1.1 | 2026-09-29 | 1 | ESPIDFORTH alignment: `sig_alg 2` = Ed25519, preferred (§6); health includes persisted Forth bundles + `CLEARS_BUNDLES` flag (§7.4); relation to the RobotARme bundle OTA (§7.5); registry grown to every board in use — 4 more chips, 22 boards (§3.1). Additive: no v1.0 byte changes meaning; a v1.0 reader rejects the new values at check 1. |
 | 1.0 | 2026-09-29 | 1 | First approved revision (design proposal rev 2.3, §13). |

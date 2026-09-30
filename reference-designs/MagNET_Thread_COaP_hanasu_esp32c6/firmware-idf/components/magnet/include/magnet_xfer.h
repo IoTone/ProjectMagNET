@@ -50,13 +50,20 @@ void mn_xfer_tick(void);          /* 250 ms cadence while any session active  */
  * BEGIN and returns true to take the transfer, after which every verified,
  * de-duplicated chunk goes to on_chunk() (NOT the host) and on_done() closes
  * it. !XFER_BEGIN/!XFER_DONE/!XFER_FAIL events are still emitted. All calls
- * run on the pump task. No sink registered = unchanged behaviour. */
+ * run on the pump task. No sink registered = unchanged behaviour.
+ *
+ * Verdicts: on_chunk() and on_done(true) return 0 to go on, or a reason
+ * 1..255 to REFUSE — the receiver answers STATUS code 2 carrying that reason
+ * (OTA-PACKAGE §7.1: COMPLETE only after verification), so the sender's
+ * !XFER_SENT means "accepted" and a refusal arrives as
+ * "!XFER_FAIL <xid> refused:<reason>". on_done(false) = the transfer died
+ * (timeout, abort, superseded); its return value is ignored. */
 typedef struct {
     bool (*claim)(const uint8_t sender_id[4], const char *meta,
                   uint32_t total_len, uint16_t chunk_len);
-    int  (*on_chunk)(uint16_t idx, uint32_t offset,      /* <0 aborts it */
+    int  (*on_chunk)(uint16_t idx, uint32_t offset,
                      const uint8_t *data, size_t len);
-    void (*on_done)(bool complete);
+    int  (*on_done)(bool complete);
 } mn_xfer_sink_t;
 void mn_xfer_set_sink(const mn_xfer_sink_t *sink);
 
