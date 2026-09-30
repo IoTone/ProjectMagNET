@@ -30,7 +30,7 @@ ED = mnpkg.load_private(HERE.parent / "keys/dev_release_ed25519.pem")
 P256 = mnpkg.load_private(HERE.parent / "keys/dev_release_p256.pem")
 STRANGER = mnpkg.ed25519.Ed25519PrivateKey.generate()      # not in the store
 
-C6 = dict(chip=0x0001, board=0x0101, fmt=1, slot=0x130000)          # NanoC6, 1216 KB
+C6 = dict(chip=0x0001, board=0x0101, fmt=1, slot=0x1C0000)          # NanoC6, 1792 KB (OTA-PACKAGE §7.3 rev 1.3)
 MG = dict(chip=0x0002, board=0x0201, fmt=2, slot=712 * 1024 - 16384)
 
 

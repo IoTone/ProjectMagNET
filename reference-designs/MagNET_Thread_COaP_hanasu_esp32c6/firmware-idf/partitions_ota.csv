@@ -1,0 +1,18 @@
+# MagNET Hanasu — OTA partition table for 4 MB C6 parts (OTA-PACKAGE §7.3).
+#
+# Two 1792 KB app slots: the BLE+LED image is ~1.16 MB (65 % of a slot; the
+# Thread-only image ~852 KB). 1216 KB slots were tried first and left the BLE
+# image at 93 % — no room to grow. NVS stays
+# at 0x9000 / 24 KB exactly as in partitions.csv, so identity key, name,
+# channel and BLE bonds survive the move. Moving a node onto this table is
+# USB-only (a partition table cannot change over the air). `scripts`
+# (LittleFS) is reserved — no firmware uses it today (Forth scripts and role
+# bundles live in NVS) — so it shrinks 960 KB -> 384 KB and moves.
+#
+# Name,     Type, SubType,   Offset,    Size,      Flags
+nvs,        data, nvs,       0x9000,    0x6000,
+otadata,    data, ota,       0xf000,    0x2000,
+phy_init,   data, phy,       0x11000,   0x1000,
+ota_0,      app,  ota_0,     0x20000,   0x1C0000,
+ota_1,      app,  ota_1,     0x1E0000,  0x1C0000,
+scripts,    data, littlefs,  0x3A0000,  0x60000,

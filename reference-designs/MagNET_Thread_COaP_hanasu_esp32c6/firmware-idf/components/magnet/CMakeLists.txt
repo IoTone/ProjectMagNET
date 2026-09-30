@@ -3,6 +3,7 @@ idf_component_register(
         "magnet_core.c"
         "magnet_envelope.c"
         "magnet_pkg.c"       # OTA package verification (docs/OTA-PACKAGE.md)
+        "magnet_ota_idf.c"   # OTA receiver + rollback policy (only with MN_ENABLE_OTA)
         "magnet_crypto.c"
         "magnet_link.c"
         "magnet_forth.c"
@@ -26,4 +27,7 @@ idf_component_register(
         driver
         mbedtls            # HKDF/PBKDF2/CCM/base64 (magnet_crypto)
         bt                 # NimBLE (only when MN_ENABLE_BLE=1)
+        app_update         # esp_ota_* (only when MN_ENABLE_OTA=1)
+        bootloader_support # esp_image_verify
+        esp_partition
 )
