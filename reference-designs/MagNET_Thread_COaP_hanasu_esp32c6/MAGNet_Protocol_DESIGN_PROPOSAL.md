@@ -2179,8 +2179,10 @@ After an apply, the result is only visible *after the reboot*, possibly to a
 node that has moved on. The target reports once, when its OTA state settles:
 
 ```
-params (18 bytes): outcome u8 ‖ running version (8) ‖ previous version (8) ‖ reserved u8
-  outcome: 1 CONFIRMED (new image healthy)   2 ROLLED_BACK (new image never got READY)
+params (18 bytes): outcome u8 ‖ running version (8) ‖ previous version (8) ‖ bundles u8
+  outcome: 1 CONFIRMED (new image healthy)   2 ROLLED_BACK (new image never became healthy)
+  bundles: 0 none persisted   1 all re-applied   2 a re-apply failed   3 cleared (CLEARS_BUNDLES)
+  "healthy" = READY and persisted role bundles re-applied — OTA-PACKAGE §7.4
 ```
 
 Sent CON unicast to the admin that issued the apply (the target persists its
