@@ -241,6 +241,7 @@ static void w_ota_status(void) {
 
 static void w_ota_apply(void) {
     if (!s_ota.staged) { mn_emit_event("-ERR E_BAD_STATE nothing staged"); return; }
+    mn_ota_note_arm(&s_ota.hdr);
     int rc = boot_request_upgrade(BOOT_UPGRADE_TEST);
     if (rc) { mn_emit_event("-ERR E_INTERNAL boot_request_upgrade rc=%d", rc); return; }
     mn_emit_event("!OTA applying: rebooting into the staged image (TEST; confirms when healthy)");

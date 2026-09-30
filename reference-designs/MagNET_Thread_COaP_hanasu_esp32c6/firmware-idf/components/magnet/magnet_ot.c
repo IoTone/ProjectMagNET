@@ -238,7 +238,30 @@ static void on_ot_state_changed(otChangedFlags flags, void *ctx) {
 }
 
 /* ---- outbound (called from HCP/Forth tasks; takes the OT lock) ---- */
+static struct { mn_ot_done_fn fn; void *ctx; } s_done;
+
+static void coap_done(void *c, otMessage *m, const otMessageInfo *mi, otError r) {
+    (void)c; (void)m; (void)mi;
+    mn_ot_done_fn fn = s_done.fn;
+    s_done.fn = NULL;
+    if (fn) fn(s_done.ctx, r == OT_ERROR_NONE);
+}
+
+static int ot_send(const uint8_t *buf, size_t len, const char *dst_ipv6, bool confirmable,
+                   mn_ot_done_fn done, void *ctx);
+
 int mn_ot_send(const uint8_t *buf, size_t len, const char *dst_ipv6, bool confirmable) {
+    return ot_send(buf, len, dst_ipv6, confirmable, NULL, NULL);
+}
+
+int mn_ot_send_cb(const uint8_t *buf, size_t len, const char *dst_ipv6,
+                  mn_ot_done_fn done, void *ctx) {
+    if (!dst_ipv6) return -2;                     /* multicast is never acknowledged */
+    return ot_send(buf, len, dst_ipv6, true, done, ctx);
+}
+
+static int ot_send(const uint8_t *buf, size_t len, const char *dst_ipv6, bool confirmable,
+                   mn_ot_done_fn done, void *ctx) {
     if (!s_inst) return -1;                       /* radio not up yet */
 
     otIp6Address dst;
@@ -264,7 +287,9 @@ int mn_ot_send(const uint8_t *buf, size_t len, const char *dst_ipv6, bool confir
             memset(&mi, 0, sizeof(mi));
             mi.mPeerAddr = dst;
             mi.mPeerPort = OT_DEFAULT_COAP_PORT;
-            err = otCoapSendRequest(s_inst, msg, &mi, NULL, NULL);
+            if (done) { s_done.fn = done; s_done.ctx = ctx; }
+            err = otCoapSendRequest(s_inst, msg, &mi, done ? coap_done : NULL, NULL);
+            if (err != OT_ERROR_NONE && done) s_done.fn = NULL;
         }
         if (err != OT_ERROR_NONE) otMessageFree(msg);
     }
@@ -462,6 +487,13 @@ int mn_ot_send(const uint8_t *buf, size_t len, const char *dst_ipv6, bool confir
     mn_emit_event("# (no-ot build) would send %u bytes to %s",
                   (unsigned)len, dst_ipv6 ? dst_ipv6 : "multicast");
     return 0;
+}
+
+int mn_ot_send_cb(const uint8_t *buf, size_t len, const char *dst_ipv6,
+                  mn_ot_done_fn done, void *ctx) {
+    int rc = mn_ot_send(buf, len, dst_ipv6, true);
+    if (done) done(ctx, true);
+    return rc;
 }
 
 void mn_openthread_start(void) {

@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | **Wire format** | `format_version = 1` (the byte at header offset 4) |
-| **Document revision** | 1.3 — 2026-09-30 |
-| **Status** | Normative; approved. Implemented on XIAO MG24 and XIAO ESP32C6: receive + verify, local and admin-signed remote apply (proposal §13), bundle-aware health (§7.4). Pending: `CLEARS_BUNDLES` handling |
+| **Document revision** | 1.4 — 2026-09-30 |
+| **Status** | Normative; approved. Implemented on XIAO MG24 and XIAO ESP32C6: receive + verify, local and admin-signed remote apply (proposal §13), bundle-aware health and `CLEARS_BUNDLES` (§7.4) |
 | **Shared copy** | https://claude.ai/code/artifact/367a8f54-6808-4a1f-8b7c-34e80274e30b (commentable; this file is the source of truth) |
-| **Tag** | `mnpkg-spec-v1.3` (previous: `v1.2`, `v1.1`, `v1.0`) |
+| **Tag** | `mnpkg-spec-v1.4` (previous: `v1.3`, `v1.2`, `v1.1`, `v1.0`) |
 
 Companion to design proposal §13 (remote apply) and `docs/EXTENDED-TRANSFER.md`
 (the Type 6 transport that carries it). Keywords MUST / SHOULD / MAY as in
@@ -289,10 +289,14 @@ image that silently lost the node's role**. Under this rule that image is not
 confirmed, and the 10-minute deadline rolls it back.
 
 `CLEARS_BUNDLES` (flag bit 1) is for firmware that breaks the Forth vocabulary
-on purpose: on the first boot of that image the node forgets its persisted
-bundles *before* re-applying anything, health reduces to READY, and the
-operator redeploys bundles for the new vocabulary. `system/ota_report`
-carries the bundle outcome (proposal §13.4).
+on purpose. While that image is on trial the node does **not** re-apply its
+persisted bundles (health reduces to READY; `system/ota_report` says
+`bundles = 3`). Once the image is confirmed, the node **forgets** them, and the
+operator redeploys bundles for the new vocabulary. If the image instead rolls
+back, the bundles were never touched and the old image re-applies them as
+usual. (Rev 1.0–1.3 said "forget on first boot"; that lost the bundles on a
+rollback.) Nodes record the flag when the image is armed — local `ota-apply`
+or remote `system/ota_apply` — keyed by the image version.
 
 ### 7.5 Relation to ESPIDFORTH bundle OTA (RobotARme)
 
@@ -349,6 +353,7 @@ Fields are never repurposed; new ones take reserved bytes and a new version.
 
 | Revision | Date | Wire format | Change |
 |---|---|---|---|
+| 1.4 | 2026-09-30 | 1 | §7.4 `CLEARS_BUNDLES`: bundles are held back during the trial and forgotten only on confirm, so a rollback keeps them (1.0–1.3: forgotten on first boot). No package byte changes. |
 | 1.3 | 2026-09-30 | 1 | §7.3 C6 table corrected to 2 × 1792 KB slots, scripts 384 KB. Revs 1.0–1.2 sized slots from the Thread-only image (852 KB); the BLE+LED build is 1.16 MB and filled 93 % of a 1216 KB slot. No package byte changes. |
 | 1.2 | 2026-09-29 | 1 | §7.1: a refusal carries the failing check number (Type 6 STATUS optional reason byte); checks 1–6 refuse at chunk 0. Clarification — no package byte changes. |
 | 1.1 | 2026-09-29 | 1 | ESPIDFORTH alignment: `sig_alg 2` = Ed25519, preferred (§6); health includes persisted Forth bundles + `CLEARS_BUNDLES` flag (§7.4); relation to the RobotARme bundle OTA (§7.5); registry grown to every board in use — 4 more chips, 22 boards (§3.1). Additive: no v1.0 byte changes meaning; a v1.0 reader rejects the new values at check 1. |

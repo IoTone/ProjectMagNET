@@ -5,6 +5,7 @@
  */
 #include <zephyr/kernel.h>
 #include <zephyr/settings/settings.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -39,7 +40,7 @@ static void mkpath(char *out, const struct mn_nvs *h, const char *key) {
 esp_err_t nvs_open(const char *ns, nvs_open_mode_t mode, nvs_handle_t *out) {
     if (!ns || strlen(ns) >= NS_MAX) return ESP_ERR_INVALID_ARG;
     if (nvs_flash_init() != ESP_OK) return ESP_FAIL;
-    struct mn_nvs *h = k_malloc(sizeof(*h));
+    struct mn_nvs *h = malloc(sizeof(*h));
     if (!h) return ESP_ERR_NO_MEM;
     strcpy(h->ns, ns);
     h->rw = (mode == NVS_READWRITE);
@@ -47,7 +48,7 @@ esp_err_t nvs_open(const char *ns, nvs_open_mode_t mode, nvs_handle_t *out) {
     return ESP_OK;
 }
 
-void nvs_close(nvs_handle_t h) { k_free(h); }
+void nvs_close(nvs_handle_t h) { free(h); }
 esp_err_t nvs_commit(nvs_handle_t h) { ARG_UNUSED(h); return ESP_OK; }
 
 /* ---- read one exact key into a caller buffer ---- */
@@ -159,18 +160,23 @@ esp_err_t nvs_erase_all(nvs_handle_t h) {
     if (!h->rw) return ESP_ERR_INVALID_STATE;
     char sub[PATH_MAX_LEN];
     snprintf(sub, sizeof(sub), "mn/%s", h->ns);
-    struct ls_ctx *c = k_calloc(1, sizeof(*c));
+    struct ls_ctx *c = calloc(1, sizeof(*c));
     if (!c) return ESP_ERR_NO_MEM;
     settings_load_subtree_direct(sub, ls_cb, c);
     esp_err_t rc = ESP_OK;
     for (int i = 0; i < c->n; i++) {
         if (nvs_erase_key(h, c->names[i]) != ESP_OK) rc = ESP_FAIL;
     }
-    k_free(c);
+    free(c);
     return rc;
 }
 
 /* ---- iteration: snapshot the namespace's key list at find() time ---- */
+/* Allocations here come from the libc arena (malloc), NOT the kernel heap:
+ * with BLE up the k_heap has no room for this ~800-byte key list, and a failed
+ * allocation looked exactly like "no keys" — BUNDLE LIST came back empty and
+ * craw_role_bundle_forget_all() forgot nothing, at runtime only (boot, before
+ * BLE, worked). */
 struct mn_nvs_iter {
     struct ls_ctx keys;
     int           pos;
@@ -183,12 +189,12 @@ esp_err_t nvs_entry_find(const char *part, const char *ns, nvs_type_t type, nvs_
     *it = NULL;
     if (!ns || strlen(ns) >= NS_MAX) return ESP_ERR_INVALID_ARG;
     if (nvs_flash_init() != ESP_OK) return ESP_FAIL;
-    struct mn_nvs_iter *i = k_calloc(1, sizeof(*i));
+    struct mn_nvs_iter *i = calloc(1, sizeof(*i));
     if (!i) return ESP_ERR_NO_MEM;
     char sub[PATH_MAX_LEN];
     snprintf(sub, sizeof(sub), "mn/%s", ns);
     settings_load_subtree_direct(sub, ls_cb, &i->keys);
-    if (i->keys.n == 0) { k_free(i); return ESP_ERR_NVS_NOT_FOUND; }
+    if (i->keys.n == 0) { free(i); return ESP_ERR_NVS_NOT_FOUND; }
     strcpy(i->ns, ns);
     i->type = type;
     *it = i;
@@ -198,7 +204,7 @@ esp_err_t nvs_entry_find(const char *part, const char *ns, nvs_type_t type, nvs_
 esp_err_t nvs_entry_next(nvs_iterator_t *it) {
     if (!it || !*it) return ESP_ERR_INVALID_ARG;
     if (++(*it)->pos >= (*it)->keys.n) {
-        k_free(*it);
+        free(*it);
         *it = NULL;
         return ESP_ERR_NVS_NOT_FOUND;
     }
@@ -215,4 +221,4 @@ esp_err_t nvs_entry_info(const nvs_iterator_t it, nvs_entry_info_t *out) {
     return ESP_OK;
 }
 
-void nvs_release_iterator(nvs_iterator_t it) { k_free(it); }
+void nvs_release_iterator(nvs_iterator_t it) { free(it); }

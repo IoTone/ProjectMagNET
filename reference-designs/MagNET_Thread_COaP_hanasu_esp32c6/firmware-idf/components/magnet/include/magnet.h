@@ -235,6 +235,13 @@ void mn_post_note(const char *fmt, ...);
 /* dst_ipv6 == NULL → the default channel multicast group. */
 int         mn_ot_send(const uint8_t *buf, size_t len,
                        const char *dst_ipv6, bool confirmable);
+/* A CON unicast that reports its fate: done(ctx, true) on the CoAP ACK,
+ * done(ctx, false) once the last retransmit times out. done runs in OT
+ * context — post or poke a timer, never block. One send in flight at a time
+ * (a second call before the first resolves replaces its callback). */
+typedef void (*mn_ot_done_fn)(void *ctx, bool acked);
+int         mn_ot_send_cb(const uint8_t *buf, size_t len, const char *dst_ipv6,
+                          mn_ot_done_fn done, void *ctx);
 const char *mn_ot_role_name(void);
 void        mn_mesh_print(void);         /* Thread detail: partition, RLOC, EID,
                                             channel/PAN, neighbors w/ RSSI      */

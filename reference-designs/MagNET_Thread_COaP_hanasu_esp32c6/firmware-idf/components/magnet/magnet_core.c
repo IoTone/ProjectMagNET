@@ -15,6 +15,7 @@
 #include "magnet_bot.h"
 #include "magnet_xfer.h"
 #include "magnet_ota.h"
+#include "craw_role_bundle.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -969,9 +970,11 @@ int mn_test_replay(void) {
 }
 #endif
 
-static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
+/* send_frame_ex + an optional delivery callback (CON unicast only; see
+ * mn_ot_send_cb). */
+static int send_frame_cb(uint8_t type, const uint8_t *payload, size_t len,
                          const char *dst, bool con, bool admin,
-                         uint8_t extra_flags) {
+                         uint8_t extra_flags, mn_ot_done_fn done, void *ctx) {
     if (!payload || len == 0) return -1;
     if (len > MN_ENV_MAX_FRAME - MN_ENV_HDR_LEN - 8 - 64) return -2;
     if (s_counter + 1 >= s_counter_limit && counter_reserve() != 0)
@@ -1015,7 +1018,8 @@ static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
     replay_capture(type, payload, admin, dst, frame, (size_t)n);
 #endif
     s_stats.tx_try++;
-    int rc = mn_ot_send(frame, (size_t)n, dst, con);
+    int rc = done ? mn_ot_send_cb(frame, (size_t)n, dst, done, ctx)
+                  : mn_ot_send(frame, (size_t)n, dst, con);
     if (rc == 0) {
         s_stats.tx_ok++;
         s_stats.tx_bytes += len;
@@ -1030,6 +1034,12 @@ static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
         s_stats.tx_err++;
     }
     return rc;
+}
+
+static int send_frame_ex(uint8_t type, const uint8_t *payload, size_t len,
+                         const char *dst, bool con, bool admin,
+                         uint8_t extra_flags) {
+    return send_frame_cb(type, payload, len, dst, con, admin, extra_flags, NULL, NULL);
 }
 
 /* ---- channel management (derive/persist/switch) ---- */
@@ -1704,6 +1714,64 @@ static void pend_store(const ota_pend_t *p) {
     nvs_close(h);
 }
 
+/* ---- CLEARS_BUNDLES record (NVS "otaclr" = the image's version) ---- */
+static bool clr_load(mn_pkg_ver_t *v) {
+    nvs_handle_t h;
+    uint8_t b[8];
+    size_t n = sizeof(b);
+    bool ok = false;
+    if (nvs_open("magnet", NVS_READONLY, &h) == ESP_OK) {
+        ok = nvs_get_blob(h, "otaclr", b, &n) == ESP_OK && n == sizeof(b);
+        nvs_close(h);
+    }
+    if (ok) ver_get(b, v);
+    return ok;
+}
+static void clr_store(const mn_pkg_ver_t *v) {
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READWRITE, &h) != ESP_OK) return;
+    if (v) { uint8_t b[8]; ver_put(b, v); nvs_set_blob(h, "otaclr", b, sizeof(b)); }
+    else   nvs_erase_key(h, "otaclr");
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+void mn_ota_note_arm(const mn_pkg_hdr_t *h) {
+    clr_store((h->flags & MN_PKG_FLAG_CLEARS_BUNDLES) ? &h->version : NULL);
+}
+
+bool mn_ota_bundles_suspended(void) {
+    mn_pkg_ver_t v, run;
+    if (!clr_load(&v)) return false;
+    mn_ota_platform_running(&run);
+    if (mn_pkg_ver_cmp(&run, &v)) {      /* rolled back, or reflashed: bundles are ours again */
+        clr_store(NULL);
+        return false;
+    }
+    s_boot_bundles = MN_BUNDLES_CLEARED;
+    return true;
+}
+
+static int count_cb(const char *name, const char *version, void *ctx) {
+    (void)name; (void)version; (void)ctx;
+    return 0;                                   /* keep going: iterate() counts */
+}
+
+/* On confirm: a CLEARS_BUNDLES image that proved healthy drops the bundles
+ * it held back — they were written for the old vocabulary. */
+static void clr_settle(void) {
+    mn_pkg_ver_t v, run;
+    if (!clr_load(&v)) return;
+    mn_ota_platform_running(&run);
+    if (!mn_pkg_ver_cmp(&run, &v)) {
+        int n = craw_role_bundle_iterate(count_cb, NULL);     /* forget_all returns 0/-1 */
+        int rc = craw_role_bundle_forget_all();
+        mn_emit_event(rc == 0 ? "# ota: CLEARS_BUNDLES image confirmed — %d saved bundle(s) forgotten"
+                              : "!WARN ota: CLEARS_BUNDLES forget failed (%d saved)", n);
+    }
+    clr_store(NULL);
+}
+
 bool mn_ota_pending_permanent(void) {
     ota_pend_t p;
     mn_pkg_ver_t run, nv;
@@ -1714,6 +1782,17 @@ bool mn_ota_pending_permanent(void) {
 }
 
 static void reboot_cb(TimerHandle_t t) { (void)t; esp_restart(); }
+
+/* After ACCEPTED the node reboots once its reply is ACKed — a fixed delay lost
+ * the reply whenever two transmissions in a row were (bench, twice) — or at a
+ * 20 s cap that covers several CoAP retransmits if no ACK ever comes. */
+#define OTA_REBOOT_CAP_MS 20000
+static TimerHandle_t s_rb_timer;
+
+static void reply_done(void *ctx, bool acked) {   /* OT context: poke the timer only */
+    (void)ctx;
+    if (acked && s_rb_timer) xTimerChangePeriod(s_rb_timer, pdMS_TO_TICKS(500), 0);
+}
 
 static void ota_apply_rx(const uint8_t from[4], const char *src, const uint8_t *p) {
     mn_pkg_ver_t want, run;
@@ -1739,6 +1818,7 @@ static void ota_apply_rx(const uint8_t from[4], const char *src, const uint8_t *
         ver_put(rec.new_ver, &want);
         ver_put(rec.prev_ver, &run);
         pend_store(&rec);                         /* before arming: the report needs it */
+        mn_ota_note_arm(h);
         if (mn_ota_platform_arm(mode) != 0) { pend_store(NULL); st = MN_OTA_E_UNSUPPORTED; }
     }
     mn_emit_event("!OTA apply from %02x%02x%02x%02x: %s " VER_FMT " %s", from[0], from[1],
@@ -1748,15 +1828,17 @@ static void ota_apply_rx(const uint8_t from[4], const char *src, const uint8_t *
     uint8_t pl[4 + 9 + 65] = { 0x00, 0x06, 0x00, 9 + 65, st };
     ver_put(pl + 5, &run);
     memcpy(pl + 13, mn_pubkey(), 65);
-    send_frame_ex(MN_T_M2M_RESP, pl, sizeof(pl), src, true, false, MN_F_SIGNED);
-
-    if (st == MN_OTA_ACCEPTED) {
-        /* 4–6 s: this reply is CON, and its first retransmit comes 2–3 s
-         * after a loss — 1–3 s (the §13.3 draft) cut it off on the bench */
-        TimerHandle_t t = xTimerCreate("mn_otarb", pdMS_TO_TICKS(4000 + esp_random() % 2000),
-                                       pdFALSE, NULL, reboot_cb);
-        if (!t || xTimerStart(t, 0) != pdPASS) esp_restart();
+    if (st != MN_OTA_ACCEPTED) {
+        send_frame_ex(MN_T_M2M_RESP, pl, sizeof(pl), src, true, false, MN_F_SIGNED);
+        return;
     }
+    if (!s_rb_timer)
+        s_rb_timer = xTimerCreate("mn_otarb", pdMS_TO_TICKS(OTA_REBOOT_CAP_MS), pdFALSE,
+                                  NULL, reboot_cb);
+    if (!s_rb_timer || xTimerChangePeriod(s_rb_timer, pdMS_TO_TICKS(OTA_REBOOT_CAP_MS), 0) != pdPASS)
+        esp_restart();                            /* armed already: never strand it */
+    send_frame_cb(MN_T_M2M_RESP, pl, sizeof(pl), src, true, false, MN_F_SIGNED,
+                  reply_done, NULL);
 }
 
 /* ---- report: queued by mn_ota_settled, sent by the pump once READY ---- */
@@ -1772,6 +1854,7 @@ static void report_timer_cb(TimerHandle_t t) {
 
 void mn_ota_settled(void) {
     ota_pend_t p;
+    clr_settle();
     if (!pend_load(&p)) return;
     mn_pkg_ver_t run, nv, pv;
     mn_ota_platform_running(&run);

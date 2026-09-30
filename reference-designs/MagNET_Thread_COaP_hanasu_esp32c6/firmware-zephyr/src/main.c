@@ -145,11 +145,15 @@ int main(void) {
     {
         int ncaps = 0;
         const char **caps = mn_bundle_caps(&ncaps);
-        if (craw_role_bundle_apply_saved(caps, ncaps) > 0)
-            raw_print("# autorun: persisted role bundle(s) re-applied\r\n");
-        int found, failed;                   /* OTA health: a failed re-apply blocks confirm */
-        craw_role_bundle_boot_stats(&found, &failed);
-        mn_boot_bundles_set(found, failed);
+        if (mn_ota_bundles_suspended()) {     /* CLEARS_BUNDLES image on trial (§7.4) */
+            raw_print("# ota: CLEARS_BUNDLES image on trial — saved bundles held back\r\n");
+        } else {
+            if (craw_role_bundle_apply_saved(caps, ncaps) > 0)
+                raw_print("# autorun: persisted role bundle(s) re-applied\r\n");
+            int found, failed;               /* OTA health: a failed re-apply blocks confirm */
+            craw_role_bundle_boot_stats(&found, &failed);
+            mn_boot_bundles_set(found, failed);
+        }
     }
     if (mn_script_run() == 0) raw_print("# autorun: boot script executed\r\n");
 
