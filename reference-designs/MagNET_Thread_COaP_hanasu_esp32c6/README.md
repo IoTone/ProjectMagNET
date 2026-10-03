@@ -1,102 +1,64 @@
-# Overview
+# MagNET Hanasu
 
-P2P chat use case on top of Thread.  It uses multicast and IPv6.  It attempts to allow all nodes to receive all comms or use direct 1-1 messaging.
+Encrypted chat and machine-to-machine messaging over a self-healing **Thread**
+mesh (IEEE 802.15.4 / 6LoWPAN / IPv6, CoAP), on ESP32-C6 and Seeed XIAO MG24
+boards. Any host drives a node over USB serial, UART or BLE with one line
+protocol (HCP), or drops into an embedded Forth. Firmware updates travel over
+the mesh as signed packages, are applied by an admin, and roll back on their own
+if the new image is unhealthy.
 
-<img width="1409" height="354" alt="Image" src="https://github.com/user-attachments/assets/cba88407-7927-40db-8ccb-4cedbc4e3356" />
+**Documentation:** https://projectmagnet-github-docs.pages.dev/docs/hanasu/ —
+start there for concepts, getting started, the HCP reference, security, the
+wire protocol and the OTA operator guide.
 
-![Image](https://github.com/user-attachments/assets/6f3f04e0-5c9c-4770-a8f7-028827a047b4)
+Current firmware: **0.7.0-eh** (ESP32-C6 and XIAO MG24).
 
-## Use Cases
+## Repository layout
 
-- IoT lighting control
-- Private ad-hoc network chat
-- Swarm AI intelligence
+| Path | What |
+|---|---|
+| `firmware-idf/` | ESP32-C6 firmware (ESP-IDF via PlatformIO). `components/magnet/` is the shared MagNET core. See its README for envs, bring-up and bench notes |
+| `firmware-zephyr/` | XIAO MG24 firmware (Zephyr + MCUboot); compiles the same core from `firmware-idf/` |
+| `host-sdk/` | Host-side SDK (Python) |
+| `tools/` | Host tools: `hcp.py`, `ble_hcp.py`, `xfer.py`, `bundle_push.py`, `ota_push.py`, `mnpkg.py` (OTA packages), `mcuboot_sign.py`, `keys/` (DEV keys + `genkeys.sh` + the release-key procedure), `pkgtest/` |
+| `docs/` | Specs: `OTA-PACKAGE.md`, `EXTENDED-TRANSFER.md`, `MESH-TIME.md`, `BLE-PAIRING.md`, `BOT-MODE.md`, `NEKOBOT.md` |
+| `MAGNet_Protocol_DESIGN_PROPOSAL.md` | The design: requirements, protocol, crypto, HCP, the Forth migration (§12), OTA (§13), and every phase's test record |
+| `MagNET_Thread_COaP_hanasu_esp32c6.ino` | The original Arduino proof of concept (history; superseded by `firmware-idf/`) |
 
-## References
+## Quick start
 
-- https://github.com/espressif/arduino-esp32/tree/release/v3.0.x/libraries/OpenThread/examples/COAP
-- https://docs.espressif.com/projects/esp-idf/en/latest/esp32c6/api-reference/network/esp_openthread.html
+```sh
+# ESP32-C6 (XIAO): build and flash
+cd firmware-idf && pio run -e esp32c6_xiao -t upload
+# then, on the node's serial port (115200):  CAPS · STATUS · CHAT hello
+```
+
+For the MG24, other envs (BLE, companion, OTA), channels and pairing, follow
+Getting Started on the documentation site.
 
 ## Hardware
 
-- Any ESP32C6 (C5 might work but not tested)
-- Recommendations
-  - XIAO ESP32C6: https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/
-  - M5NanoC6 (preferred): https://docs.m5stack.com/en/core/M5NanoC6
+- **Seeed XIAO ESP32C6** — the bench workhorse; fits expansion boards.
+- **M5Stack NanoC6** — built-in RGB LED.
+- **Seeed XIAO MG24** — EFR32MG24 on Zephyr, with MCUboot.
 
-The M5NanoC6 is preferred because of built-in RGBs.  The XIAO ESP32C6 would be the better choice if you have expansion boards you are integrating with (it is a bit more versatile for plugging into a variety of existing hardware).  
+## History
 
-## Build
+Hanasu began as an Arduino proof of concept built from the ESP32 OpenThread CoAP
+lamp/switch examples, inspired by the OLPC laptop mesh and aimed at the
+[PONY Cyberdeck](https://github.com/IoTone/PONY-Cyberdeck-25/issues/7):
 
-- Depends on Board Manager: ESP32 3.0.6, M5Stack (2.1.2)
-- Depends on Library: M5Unified (0.2.5), Adafruit_Neopixel (1.24.4)
+- Milestone 1, a two-peer chat PoC — commit `59440363`.
+- Milestone 2, four-peer multicast chat — commit `828648da`.
 
-## Setup
+<img width="1409" height="354" alt="Arduino PoC chat" src="https://github.com/user-attachments/assets/cba88407-7927-40db-8ccb-4cedbc4e3356" />
 
-- Attach at least two nodes to one or more arduino IDEs
-- build and install the software
-- run the serial logger in the arduino
+The PoC's known limits — no application-layer security, broken DMs, 256-byte
+payloads, unstable leader election — led to the design proposal and an ESP-IDF
+rewrite (phases E-A to E-H, 2026-07/08), the Zephyr port to the XIAO MG24
+(2026-09), and signed over-the-air updates (2026-09). The proposal records each
+phase's hardware validation.
 
-## Testing
-
-- Use the UART in the arduino IDE to send "chat> some message"
-- You can also send raw text, but the clients currently will throw out anything that doesn't match the chat> prefix.
-- To send a DM: fd74:9ea0:9184:3064:dc9:2a4b:6777:b3ce chat> some message (replace the IPv6address with the target)
-- You could also use python or node.js to connect to the uart and send messages programatically over the uart.
-- Original code used this message to send lamp on/off: -> otLampCoapPUT(): coap put ff05::abcd Lamp con 0
-
-## Design Notes
-
-The inspiration for this project was the OLPC Mesh https://wiki.laptop.org/go/Mesh_Network_Details  which was a $100 laptop that included a p2p mesh networking feature.  For places where infrastructure was lacking, this was super interesting.  We have revived the $100 PC concept (probably inflated to $200 now) for Open Hardware for EDU STEM use cases as part of the "PONY" Cyberdeck project.  The mesh networking feature pursued is described and analyzed here: https://github.com/IoTone/PONY-Cyberdeck-25/issues/7
-
-### Milestone 1 - Initial 2 peer PoC
-
-DONE.  See commit ref: #59440363da3e284a7391a0f0b8a766c08f00fe6d
-
-### Milestone 2 - Multipeer (4) PoC
-
-All peers should be able to see all messages along with the sender.
-
-DONE.  See commit ref: #828648daa49961b0641ba3a481792488255d4315
-
-### Milestone 3 - Bug Fixes / Stability
-
-1-1 messaging should work
-Fix lighting protocol : ... for now add: lights switch 0/1 and lights color R,G,B
-Startup should search for existing networks properly
-
-NOT STARTED
-
-
-### Milestone 5 - Migration to Platform.io / ESP32-IDF
-
-Need to get this off of Arduino before doing anything at further scale.  Having a clean way to build once and install many times is preferred over the "compile/build" process, and toolchain mess.
-
-
-NOT STARTED
-
-
-### Milestone 4 - Scalability Testing
-
-Obtain 50 nodes and stage a 50 node test.  Each node should log all of its data to OTEL.
-
-NOT STARTED
-
-## Known Issues
-
-- The original code is based of the COAP Lamp / COAP Switch examples, and there are design choices made there originally that may affect this design
-- LLM was used to help debug multicast issues, and often in fixing one thing, another thing was broken
-- DMs using @IPV6 don't work.  This is a parsing bug in how the incoming handling messages are done.  Possibly also a sender issue.  But the messages are addressed properly, but not parsed properly.
-- The original "button press" to handle on off is broken.  When the code switched from "con" to "non" it was broken.
-- Sometimes no node or all nodes will become the leader
-- Messages payload must be < 256 bytes
-- There should be link level security, but no real application level security.  Any bad actor could join a network and flood or do something malicious, spoofing a friendly device or person.  
-- The current scale of this network isn't known, but expected to be limited to 256 nodes in theory.  
-- Sometimes the XIAO ESP32C6 will crash 3 times in a row on boot before starting up
-- No scalability testing for a busy communication network (not clear if the current parser will handle this properly if multiple messages are incoming)
-- Devices don't handle falling back to become leader cleanly if the leader goes offline
-- LEDs for the XIAO ESP32-C6 won't light other than the power, need to fix.
-- 
 ## Support
 
-- File bug reports or make PRs
+File bug reports or make PRs.

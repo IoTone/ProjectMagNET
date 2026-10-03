@@ -90,7 +90,7 @@ HCP runs on USART0, bridged to USB by the board's SAMD11:
 | | Thread | +BLE |
 |---|---|---|
 | Static RAM | 97.9 % | 98.8 % |
-| malloc arena | 80 KB | 56 KB |
+| malloc arena | 76 KB | 52 KB |
 | Forth heap | 32 KB | 16 KB |
 | malloc low-water (bundle re-apply + COMMIT) | 34 KB | 18.9 KB |
 
@@ -163,5 +163,5 @@ signature; MCUboot re-checks its own at boot.
 **Both the release keys (`../tools/keys/`) and MCUboot's key are DEV keys;
 replace them before any node leaves the bench.**
 
-Open (next): remote apply via an admin-signed mesh command (today apply is
-local-only by design), downgrade prevention, and the same sink on 8 MB C6s.
+Remote apply, downgrade refusal, `CLEARS_BUNDLES` and admin revocation are
+implemented on both targets (design proposal §13, results in §13.10).

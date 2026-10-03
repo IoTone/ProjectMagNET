@@ -1621,7 +1621,8 @@ int mn_rotate(void) {
  * Apply: an allow-listed admin sends system/ota_apply (ADMIN|SIGNED, CON
  * unicast). The checks bind it to what is staged NOW (target, SHA, version),
  * so a replayed or stale apply cannot switch images. On ACCEPTED the node
- * records who asked, arms the slot, answers, and reboots after 1–3 s.
+ * records who asked, arms the slot, answers, and reboots once the answer is
+ * ACKed (20 s cap; see reply_done).
  * Report: once the image settles — confirmed after its trial, or the old one
  * back after a rollback — the node tells that admin how it went. The record
  * lives in NVS so it survives the reboots in between.

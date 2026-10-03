@@ -54,7 +54,7 @@ endif()
 # otherwise the IDF file's own MN_ENABLE_BLE=0 no-op stubs.
 if(CONFIG_BT)
   target_sources(app PRIVATE src/magnet_ble_zephyr.c)
-  # The BT stack is paid for from the malloc arena (ble.conf: 56 KB), which
+  # The BT stack is paid for from the malloc arena (ble.conf: 52 KB), which
   # left a BLE-fed BUNDLE COMMIT 2.5 KB from OOM with a 32 KB Forth heap.
   # Forth heap is allot/create space only (used=0 on the bench) -> 16 KB.
   target_compile_definitions(app PRIVATE MN_ENABLE_BLE=1 MN_FORTH_HEAP_KB=16)

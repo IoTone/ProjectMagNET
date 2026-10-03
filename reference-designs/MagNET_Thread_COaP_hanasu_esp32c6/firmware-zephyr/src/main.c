@@ -168,7 +168,7 @@ int main(void) {
         extern void mn_ota_boot(void);
         extern void mn_ota_sink_init(void);
         mn_ota_boot();
-        mn_ota_sink_init();          /* mesh OTA: "ota:" transfers -> slot1 */
+        mn_ota_sink_init();          /* mesh OTA: "mnpkg:1" packages -> slot1 */
     }
 
 #if MN_BLE_RESIDENT
