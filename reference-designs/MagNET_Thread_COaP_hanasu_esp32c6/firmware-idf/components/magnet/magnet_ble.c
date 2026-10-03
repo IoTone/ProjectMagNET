@@ -435,7 +435,13 @@ int mn_ble_stop(void) {
 
 bool mn_ble_running(void) { return s_running; }
 
-bool mn_ble_link_secure(void) { return s_encrypted; }
+bool mn_ble_link_secure(void) {
+#if MN_TEST_BLE_UNBONDED     /* TEST BUILDS ONLY: every BLE link counts as unbonded */
+    return false;
+#else
+    return s_encrypted;
+#endif
+}
 
 #else  /* MN_ENABLE_BLE == 0 */
 

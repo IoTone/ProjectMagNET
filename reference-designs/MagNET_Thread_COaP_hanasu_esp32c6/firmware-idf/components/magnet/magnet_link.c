@@ -56,8 +56,17 @@ void mn_link_feed_line(const char *line) {
     char buf[MN_LINE_MAX];
     strlcpy(buf, line, sizeof(buf));
     s_from_ble = true;
-    if (s_mode == LINK_HCP) handle_hcp_line(buf);
-    else                    handle_forth_line(buf);
+    if (s_mode == LINK_HCP) {
+        handle_hcp_line(buf);
+    } else if (!mn_ble_link_secure()) {
+        /* The mode is node-wide: a node left in FORTH from the USB console
+         * would otherwise hand the REPL to any unbonded BLE client. Every
+         * Forth line is privileged, so it needs the same bond as the FORTH
+         * verb — and so does ".hcp", which changes the USB user's mode too. */
+        mn_write_line("-ERR E_NOT_BONDED forth mode needs a bonded link");
+    } else {
+        handle_forth_line(buf);
+    }
     s_from_ble = false;
 }
 
