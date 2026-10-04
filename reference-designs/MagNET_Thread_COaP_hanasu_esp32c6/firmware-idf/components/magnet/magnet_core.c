@@ -335,6 +335,9 @@ static void script_load(void);
 static void hook_invoke(const char *word, const uint8_t *payload, size_t len);
 static bool admin_verify(const uint8_t *signed_part, size_t len, const uint8_t sig[64]);
 static void epoch_apply(uint8_t e);
+static const uint8_t *frame_epoch_key(uint8_t e, uint8_t tmp[16], bool *ahead);
+static void epoch_set(uint8_t e, uint8_t from, bool caught_up);
+static void epoch_persist(void);
 static void admins_persist(void);
 /* §13.3–13.5 remote apply / report, admin revoke (defined near mn_rotate) */
 static void ver_get(const uint8_t *p, mn_pkg_ver_t *v);
@@ -490,14 +493,19 @@ static void handle_rx(const mn_evt_t *evt) {
         size_t ct_len = env.payload_len - 8;
         uint8_t nonce[13];
         mn_nonce_build(nonce, env.sender_id, env.counter, env.epoch, env.selector);
-        const uint8_t *key = (env.epoch == s_epoch) ? s_chan.epoch_key :
-                             (env.epoch == (uint8_t)(s_epoch - 1)) ? s_prev_epoch_key : NULL;
+        uint8_t ahead_key[16];
+        bool ahead;
+        const uint8_t *key = frame_epoch_key(env.epoch, ahead_key, &ahead);
         if (!key || mn_aead_decrypt(key, nonce, evt->data,
                                     env.payload, ct_len, pt,
                                     env.payload + ct_len) != 0) {
             s_stats.rx_err++;                                 /* bad MIC/epoch */
             return;
         }
+        /* §14 option A: the frame authenticated under a LATER epoch — we
+         * missed a ROTATE (offline, lost NON frame). Move forward, never back. */
+        if (ahead) epoch_set(env.epoch, s_epoch, true);
+        memset(ahead_key, 0, sizeof(ahead_key));
         env.payload = pt;
         env.payload_len = ct_len;
     } else if (s_chan.set) {
@@ -847,8 +855,9 @@ void mn_recent_print(void) {
             size_t ct_len = env.payload_len - 8;
             uint8_t nonce[13];
             mn_nonce_build(nonce, env.sender_id, env.counter, env.epoch, env.selector);
-            const uint8_t *key = (env.epoch == s_epoch) ? s_chan.epoch_key :
-                                 (env.epoch == (uint8_t)(s_epoch - 1)) ? s_prev_epoch_key : NULL;
+            uint8_t ahead_key[16];
+            bool ahead;            /* catch-up history never moves our epoch */
+            const uint8_t *key = frame_epoch_key(env.epoch, ahead_key, &ahead);
             if (!key || mn_aead_decrypt(key, nonce, frame, env.payload, ct_len, pt,
                                         env.payload + ct_len) != 0) continue;
             env.payload = pt;
@@ -1066,7 +1075,10 @@ static void chan_load(void) {
         s_chan.cred_path = (char)(path ? path : 'B');
         mn_root_expand(&s_chan);
         s_chan.set = true;
+        uint8_t e = 0;              /* §14 A: a reboot must not drop us to epoch 0 */
+        nvs_get_u8(h, "chepoch", &e);
         nvs_close(h);
+        if (e) epoch_set(e, 0, false);
         return;
     }
     /* first boot: derive the well-known default (§11.5) and cache it */
@@ -1082,6 +1094,7 @@ int mn_channel_set(const char *cred, size_t len, char *info, size_t cap) {
     s_epoch = 0;                                 /* fresh channel → epoch 0 */
     memset(s_prev_epoch_key, 0, sizeof(s_prev_epoch_key));
     chan_persist();
+    epoch_persist();
     mn_ot_set_mcast(s_chan.mcast_suffix);        /* no-op if radio not up */
     memset(s_dedup, 0, sizeof(s_dedup));         /* new channel, new peers */
     memset(s_peers, 0, sizeof(s_peers));
@@ -1601,10 +1614,53 @@ static bool admin_verify(const uint8_t *signed_part, size_t len, const uint8_t s
     return false;
 }
 
-static void epoch_apply(uint8_t e) {
-    memcpy(s_prev_epoch_key, s_chan.epoch_key, 16);   /* skew window (§11.1.8) */
+/* ---- channel epochs (§11.1.8, §14 option A) ----
+ * The epoch is persisted (NVS "chepoch") so a reboot keeps it, and a frame
+ * that authenticates under an epoch up to MN_EPOCH_AHEAD_MAX ahead moves us
+ * forward to it. Without both, a node rebooted or offline across a ROTATE was
+ * deaf to the mesh (bench, 2026-10-03). Epochs give no forward secrecy — every
+ * key derives from the stored root; see §14. */
+#define MN_EPOCH_AHEAD_MAX 16
+
+static void epoch_persist(void) {
+    nvs_handle_t h;
+    if (nvs_open("magnet", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "chepoch", s_epoch);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+/* The key a frame's epoch needs: current, previous, or — *ahead set — a
+ * candidate derived into tmp for an epoch 1..MN_EPOCH_AHEAD_MAX ahead. */
+static const uint8_t *frame_epoch_key(uint8_t e, uint8_t tmp[16], bool *ahead) {
+    *ahead = false;
+    if (e == s_epoch) return s_chan.epoch_key;
+    if (e == (uint8_t)(s_epoch - 1)) return s_prev_epoch_key;
+    uint8_t lead = (uint8_t)(e - s_epoch);
+    if (lead == 0 || lead > MN_EPOCH_AHEAD_MAX) return NULL;
+    mn_channel_t c = s_chan;
+    mn_chan_epoch_key(&c, e);
+    memcpy(tmp, c.epoch_key, 16);
+    memset(&c, 0, sizeof(c));
+    *ahead = true;
+    return tmp;
+}
+
+/* Move to epoch e: previous = key(e-1) (skew window), current = key(e). */
+static void epoch_set(uint8_t e, uint8_t from, bool caught_up) {
+    mn_channel_t c = s_chan;
+    mn_chan_epoch_key(&c, (uint8_t)(e - 1));
+    memcpy(s_prev_epoch_key, c.epoch_key, 16);
+    memset(&c, 0, sizeof(c));
     s_epoch = e;
     mn_chan_epoch_key(&s_chan, e);
+    epoch_persist();
+    if (caught_up)
+        mn_emit_event("!WARN epoch-advanced to %u (caught up from %u)", e, from);
+}
+
+static void epoch_apply(uint8_t e) {
+    epoch_set(e, s_epoch, false);
     mn_emit_event("!WARN epoch-rotated to %u", e);
 }
 

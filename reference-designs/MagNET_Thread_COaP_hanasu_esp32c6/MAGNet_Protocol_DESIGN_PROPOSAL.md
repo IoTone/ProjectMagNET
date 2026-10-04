@@ -1,6 +1,6 @@
 # MagNET Hanasu v2 - Design Proposal
 
-## Status: DRAFT (rev 2.5 proposal pending)
+## Status: DRAFT (rev 2.5)
 ## Date: 2026-03-27 (rev 2.1: 2026-06-14, rev 2.2: 2026-07-30, rev 2.3: 2026-09-29 — §13 OTA, rev 2.4: 2026-09-30 — §13 remote apply implemented)
 ## Target Platform: ESP-IDF (prototypes on Arduino)
 
@@ -2386,9 +2386,11 @@ revocation list; re-sending after a partition heals is the operator's job.
 
 ---
 
-## 14. Channel epochs: what rotation can and cannot do (rev 2.5 — PROPOSAL, decisions open)
+## 14. Channel epochs: what rotation can and cannot do (rev 2.5)
 
-**Status:** proposal for review, 2026-10-03. Nothing here is implemented yet.
+**Status (2026-10-03):** decided — see §14.6. Option A is **implemented and
+hardware-validated**; B/C are flagged as the design for professional deployments;
+D is deferred.
 §11.1.8 promised forward secrecy from epochs; the build does not deliver it, and
 it cannot as specified. This section records why, shows a related availability
 bug found on the bench, and lays out the options.
@@ -2456,6 +2458,33 @@ happened on the bench.
 3. Is it acceptable that, under B or C, joining after a rotation requires a
    provisioner instead of just the passphrase?
 4. Automatic rotation: wanted, and at what cadence?
+
+
+### 14.6 Decisions (2026-10-03)
+
+1. **A: yes — implemented.** `magnet_core.c`: the epoch is persisted (NVS
+   `chepoch`) on every change and restored at boot; a live frame that
+   authenticates under an epoch 1–16 ahead (`MN_EPOCH_AHEAD_MAX`) moves the node
+   forward (`!WARN epoch-advanced to <e> (caught up from <old>)`), never back;
+   the previous-epoch key is always key(e − 1), also after a jump; catch-up history
+   (`RECENT`) may decrypt a newer epoch but never moves the node's epoch.
+   `CHANNEL SET` resets to epoch 0 (persisted). Shared core: both targets.
+   A channel member can push the mesh forward by sending from a later epoch —
+   it holds the credential anyway, and forward-only adoption cannot break
+   decryption.
+   **Bench (XIAO C6 + XIAO MG24):** ROTATE → reboot the MG24 → it kept epoch 1,
+   chat both ways; ROTATE while the MG24 was rebooting (missed it) → on the first
+   frame it heard, `epoch-advanced to 2 (caught up from 1)`, chat both ways.
+2. **Threat model: node theft and passphrase leaks are real, but not for the
+   current use** — personal networks and chat. Flag for professional deployments,
+   where nodes may run something important: **use C** (fresh per-member epoch
+   keys, provisioned onboarding) **together with** flash encryption and secure
+   boot on the C6 (today nothing encrypts the stored root or verifies the C6
+   image beyond the OTA package signature). B alone is not enough there: a leaked
+   passphrase still exposes everything.
+3. **Onboarding cost:** follows from 2 — accepted only for professional
+   deployments; personal networks keep passphrase-only joining.
+4. **D (scheduled rotation): not yet.**
 
 ---
 
