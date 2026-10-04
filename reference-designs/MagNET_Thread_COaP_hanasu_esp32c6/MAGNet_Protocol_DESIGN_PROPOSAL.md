@@ -1,6 +1,6 @@
 # MagNET Hanasu v2 - Design Proposal
 
-## Status: DRAFT (rev 2.4)
+## Status: DRAFT (rev 2.5 proposal pending)
 ## Date: 2026-03-27 (rev 2.1: 2026-06-14, rev 2.2: 2026-07-30, rev 2.3: 2026-09-29 — §13 OTA, rev 2.4: 2026-09-30 — §13 remote apply implemented)
 ## Target Platform: ESP-IDF (prototypes on Arduino)
 
@@ -2383,6 +2383,79 @@ Limits: revocation removes a key; it cannot stop a thief who still holds a
 valid one from doing the same (§13.7). And a node that was offline when the
 revoke went out keeps the key until it is revoked again. There is no
 revocation list; re-sending after a partition heals is the operator's job.
+
+---
+
+## 14. Channel epochs: what rotation can and cannot do (rev 2.5 — PROPOSAL, decisions open)
+
+**Status:** proposal for review, 2026-10-03. Nothing here is implemented yet.
+§11.1.8 promised forward secrecy from epochs; the build does not deliver it, and
+it cannot as specified. This section records why, shows a related availability
+bug found on the bench, and lays out the options.
+
+### 14.1 What is built
+
+- `epoch_key[e] = HKDF(HKDF(root, "chan-base"), "epoch" ‖ e)` (`mn_chan_epoch_key`).
+  `root` is derived from the channel credential and **persisted in NVS** (`chroot`).
+- `e` is one byte in every envelope header (§11.1.4), so it is public.
+- `ROTATE` (admin-signed `system/rotate`, multicast NON) sets `e ← e + 1` on every
+  node that hears it. There is no automatic rotation.
+- The current epoch lives **in RAM only**; every boot starts at `e = 0`.
+- A receiver accepts frames for `e` or `e − 1` only (`handle_rx`).
+
+### 14.2 Two consequences
+
+**(a) No forward secrecy, by construction.** Whoever has the credential (or reads
+`chroot` out of a node's flash — there is no flash encryption) can compute
+`epoch_key[e]` for every `e`, and `e` is in each header. §11.1.8's promise that "a
+later passphrase compromise does not decrypt traffic from expired epochs" cannot
+hold for any scheme in which keys are a deterministic function of the credential
+and a public counter. Zeroizing old keys on the node changes nothing while the
+root that regenerates them stays in NVS.
+
+**(b) A reboot after a rotation strands the node (bug, bench-confirmed
+2026-10-03).** XIAO C6 + XIAO MG24, mutual chat working; C6 `ROTATE` → both at
+`e = 1`, chat still works both ways; reboot only the MG24 → it returns at `e = 0`:
+
+| Direction after the MG24 reboot | Result | Why |
+|---|---|---|
+| MG24 → C6 | delivered | the C6 still accepts `e − 1 = 0` |
+| C6 → MG24 | **dropped** | the MG24 accepts `0` and `255` only |
+
+The rebooted node can talk but is deaf; after a second rotation it is mute too. A
+node that was offline when the (unacknowledged) `ROTATE` went out is stranded the
+same way. Rebooting every node restores the mesh (all back to 0), which is what
+happened on the bench.
+
+### 14.3 Options
+
+| | What changes | Protects against | Costs |
+|---|---|---|---|
+| **A. Make rotation safe** | Persist `e` in NVS on every change; a receiver that sees a frame with `e' ∈ (e, e + W]` derives `epoch_key[e']`, and adopts `e'` only if the MIC verifies (forward only, W ≈ 16) | Fixes 14.2(b): reboots and missed rotations self-heal on the first valid frame | ~1 NVS write per rotation; one extra HKDF for a frame from the future. No security gain or loss |
+| **B. Ratchet, and stop storing the root** | `epoch_key[e+1] = HKDF(epoch_key[e], "ratchet")`; ordinary nodes persist only the current (and previous) epoch key, never `root`; old keys are erased | A **stolen node** reveals only its current epoch onward, not past traffic | A passphrase leak still reveals everything (the chain starts from it). After the first rotation, a new node cannot join with the passphrase alone: it must be handed the current epoch key by a provisioner (bonded BLE/USB) |
+| **C. Fresh keys per rotation** | `ROTATE` carries a random new epoch secret, sent by the admin to each member encrypted to that member's identity key (P-256 ECDH + AEAD), signed | A **leaked passphrase** no longer reveals traffic after the next rotation (forward and post-compromise secrecy) | The admin needs the member list and keys; one unicast per member; offline members must be re-provisioned; the passphrase stops being sufficient to join |
+| **D. Automatic rotation** | `e` advances on a schedule (e.g. daily from mesh time, §MESH-TIME) | Limits how long one key protects traffic | Needs A; with C, needs an admin online on schedule; the 8-bit `e` wraps after 256 rotations (the nonce counter keeps nonces unique, but keys repeat) |
+
+### 14.4 Recommendation
+
+1. **Do A now, whatever else is chosen.** 14.2(b) is a correctness bug: any
+   deployment that ever rotates will strand rebooted or offline nodes. Small, local,
+   no protocol change beyond accepting future epochs.
+2. **Correct §11.1.8** to say what epochs give: a way to cut off a *new* holder of
+   a stale credential only if the credential itself also changes (`CHANNEL SET`) —
+   not forward secrecy.
+3. **Choose B or C only for a stated threat.** Node theft → B. Passphrase leak must
+   not expose past traffic → C. Both change onboarding (the passphrase alone stops
+   admitting new nodes once a rotation has happened), which is the real decision.
+4. **D after A**, if a schedule is wanted at all.
+
+### 14.5 Decisions needed
+
+1. Implement A now? (recommended: yes)
+2. Threat model: is node theft in scope? Is a leaked passphrase?
+3. Is it acceptable that, under B or C, joining after a rotation requires a
+   provisioner instead of just the passphrase?
+4. Automatic rotation: wanted, and at what cadence?
 
 ---
 
