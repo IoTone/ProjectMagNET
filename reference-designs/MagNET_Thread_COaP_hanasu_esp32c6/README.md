@@ -13,6 +13,8 @@ wire protocol and the OTA operator guide.
 
 Current firmware: **0.7.0-eh** (ESP32-C6 and XIAO MG24).
 
+> **On hold since 2026-10-06** — see [STATUS.md](STATUS.md) for where things stand and what's next.
+
 ## Repository layout
 
 | Path | What |
