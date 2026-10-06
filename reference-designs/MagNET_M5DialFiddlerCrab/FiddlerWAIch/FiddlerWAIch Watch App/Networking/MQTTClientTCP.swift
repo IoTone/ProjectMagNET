@@ -156,9 +156,18 @@ final class MQTTClientTCP: ObservableObject {
         }
     }
 
+    /// Cancels a pending retry WITHOUT touching the attempt counter.
+    /// `scheduleReconnect` calls this first, so resetting the counter here meant the delay
+    /// was recomputed from 0 every time — the backoff table was never walked and the client
+    /// retried at the shortest delay forever. Only a genuine success or an explicit
+    /// connect/disconnect should clear the counter; use `resetBackoff()` for that.
     private func cancelReconnect() {
         reconnectTask?.cancel()
         reconnectTask = nil
+    }
+
+    private func resetBackoff() {
+        cancelReconnect()
         reconnectAttempt = 0
     }
 
@@ -191,6 +200,9 @@ final class MQTTClientTCP: ObservableObject {
                 if let data, !data.isEmpty {
                     self.handleInbound(data)
                 }
+                if let error {
+                    print("[MQTT] receive error: \(MQTTLog.describe(error))")
+                }
                 if error != nil || isComplete {
                     self.onNWStateChange(.cancelled)
                     return
@@ -203,19 +215,24 @@ final class MQTTClientTCP: ObservableObject {
     private func handleInbound(_ data: Data) {
         rxBuffer.append(data)
         while let (packet, consumed) = frameNextPacket(from: rxBuffer) {
-            rxBuffer.removeFirst(consumed)
+            // Data(_:) rather than removeFirst(_:) — removeFirst leaves the buffer as a
+            // slice whose startIndex is non-zero, and Data's Int subscript is absolute,
+            // so the next framing pass would read past the slice and trap.
+            rxBuffer = Data(rxBuffer.dropFirst(consumed))
             processPacket(packet)
         }
     }
 
     private func frameNextPacket(from buf: Data) -> (Data, Int)? {
+        // Index off startIndex, not 0: `buf` may be a slice of the rx buffer.
+        let base = buf.startIndex
         guard buf.count >= 2 else { return nil }
         var idx = 1
         var multiplier = 1
         var remaining = 0
         var loop = 0
         while idx < buf.count {
-            let b = buf[idx]
+            let b = buf[base + idx]
             idx += 1
             remaining += Int(b & 0x7F) * multiplier
             if (b & 0x80) == 0 { break }
@@ -226,7 +243,8 @@ final class MQTTClientTCP: ObservableObject {
         }
         let total = idx + remaining
         guard buf.count >= total else { return nil }
-        return (buf.prefix(total), total)
+        // Data(_:) re-bases the packet to startIndex 0 for the decoder.
+        return (Data(buf[base ..< (base + total)]), total)
     }
 
     private func processPacket(_ data: Data) {

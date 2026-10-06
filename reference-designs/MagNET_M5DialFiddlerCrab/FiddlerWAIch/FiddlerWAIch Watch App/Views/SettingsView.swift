@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var mac4Draft: String = ""
     @State private var showPublicWarning = false
+    @State private var pendingPublicPreset: BrokerPreset = .hivemqPublicTLS
     @State private var probeResult: String = "未実行"
     @State private var probing: Bool = false
     @ObservedObject private var mqttLog = MQTTLog.shared
@@ -165,7 +166,7 @@ struct SettingsView: View {
         .alert("settings.public_broker_warning_title", isPresented: $showPublicWarning) {
             Button("settings.public_broker_warning_confirm") {
                 settings.publicBrokerAcknowledged = true
-                settings.brokerPreset = .hivemqPublic
+                settings.brokerPreset = pendingPublicPreset
                 mqtt.resubscribe()
             }
             Button("settings.cancel", role: .cancel) {}
@@ -203,7 +204,8 @@ struct SettingsView: View {
     }
 
     private func select(preset: BrokerPreset) {
-        if preset == .hivemqPublic && !settings.publicBrokerAcknowledged {
+        if preset.isPublic && !settings.publicBrokerAcknowledged {
+            pendingPublicPreset = preset
             showPublicWarning = true
             return
         }
@@ -215,53 +217,11 @@ struct SettingsView: View {
         probing = true
         probeResult = "実行中"
         Task {
-            async let apple = probe(url: "http://captive.apple.com/hotspot-detect.html", label: "http")
-            async let hivemq = probe(url: "http://broker.hivemq.com:8000/mqtt", label: "hivemq-get")
-            async let wsTest = probeWebSocket(url: "ws://broker.hivemq.com:8000/mqtt", label: "ws")
-            let results = await [apple, hivemq, wsTest]
+            let results = await NetProbe.runAll()
             await MainActor.run {
                 probeResult = results.joined(separator: "\n")
                 probing = false
             }
-        }
-    }
-
-    private nonisolated func probeWebSocket(url: String, label: String) async -> String {
-        guard let u = URL(string: url) else { return "\(label):bad-url" }
-        return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
-            let task = URLSession.shared.webSocketTask(with: u, protocols: ["mqtt"])
-            task.resume()
-            // Try to receive — first receive triggers upgrade handshake.
-            task.receive { result in
-                switch result {
-                case .success:
-                    task.cancel(with: .normalClosure, reason: nil)
-                    cont.resume(returning: "\(label):OK")
-                case .failure(let err):
-                    let ns = err as NSError
-                    cont.resume(returning: "\(label):err\(ns.code)")
-                }
-            }
-            // Backup timeout
-            DispatchQueue.global().asyncAfter(deadline: .now() + 8) {
-                task.cancel(with: .abnormalClosure, reason: nil)
-            }
-        }
-    }
-
-    private nonisolated func probe(url: String, label: String) async -> String {
-        guard let u = URL(string: url) else { return "\(label):bad-url" }
-        var req = URLRequest(url: u)
-        req.timeoutInterval = 8
-        do {
-            let (_, resp) = try await URLSession.shared.data(for: req)
-            if let http = resp as? HTTPURLResponse {
-                return "\(label):\(http.statusCode)"
-            }
-            return "\(label):?"
-        } catch {
-            let ns = error as NSError
-            return "\(label):err\(ns.code)"
         }
     }
 }

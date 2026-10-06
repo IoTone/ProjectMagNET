@@ -67,7 +67,7 @@ final class MQTTClient: NSObject, ObservableObject, URLSessionDelegate, URLSessi
 
     func disconnect() {
         isIntentionallyDisconnecting = true
-        cancelReconnect()
+        resetBackoff()
         sendRaw(MQTTPacket.disconnect())
         teardownSocket()
         connection = .disconnected
@@ -99,7 +99,7 @@ final class MQTTClient: NSObject, ObservableObject, URLSessionDelegate, URLSessi
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         Task { @MainActor in
             if let error {
-                MQTTLog.shared.append("[MQTT-WS] task error: \(error.localizedDescription)")
+                MQTTLog.shared.append("[MQTT-WS] task error: \(MQTTLog.describe(error))")
             }
             self.onWebSocketClose()
         }
@@ -140,6 +140,7 @@ final class MQTTClient: NSObject, ObservableObject, URLSessionDelegate, URLSessi
         let delays: [UInt64] = [1, 2, 4, 8, 16, 30]
         let delay = delays[min(reconnectAttempt, delays.count - 1)]
         reconnectAttempt += 1
+        MQTTLog.shared.append("[MQTT-WS] reconnect in \(delay)s (attempt \(reconnectAttempt))")
         reconnectTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
             guard let self, !Task.isCancelled else { return }
@@ -147,9 +148,18 @@ final class MQTTClient: NSObject, ObservableObject, URLSessionDelegate, URLSessi
         }
     }
 
+    /// Cancels a pending retry WITHOUT touching the attempt counter.
+    /// `scheduleReconnect` calls this first, so resetting the counter here meant the delay
+    /// was recomputed from 0 every time — the backoff table was never walked and the client
+    /// retried at the shortest delay forever. Only a genuine success or an explicit
+    /// connect/disconnect should clear the counter; use `resetBackoff()` for that.
     private func cancelReconnect() {
         reconnectTask?.cancel()
         reconnectTask = nil
+    }
+
+    private func resetBackoff() {
+        cancelReconnect()
         reconnectAttempt = 0
     }
 
@@ -180,7 +190,8 @@ final class MQTTClient: NSObject, ObservableObject, URLSessionDelegate, URLSessi
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 switch result {
-                case .failure:
+                case .failure(let error):
+                    MQTTLog.shared.append("[MQTT-WS] receive error: \(MQTTLog.describe(error))")
                     self.onWebSocketClose()
                 case .success(let msg):
                     switch msg {
@@ -197,20 +208,25 @@ final class MQTTClient: NSObject, ObservableObject, URLSessionDelegate, URLSessi
     private func handleInbound(_ data: Data) {
         rxBuffer.append(data)
         while let (packet, consumed) = frameNextPacket(from: rxBuffer) {
-            rxBuffer.removeFirst(consumed)
+            // Data(_:) rather than removeFirst(_:) — removeFirst leaves the buffer as a
+            // slice whose startIndex is non-zero, and Data's Int subscript is absolute,
+            // so the next framing pass would read past the slice and trap.
+            rxBuffer = Data(rxBuffer.dropFirst(consumed))
             processPacket(packet)
         }
     }
 
     /// Peel the next complete MQTT packet off a buffer. Returns (packetBytes, consumedBytes) or nil if incomplete.
     private func frameNextPacket(from buf: Data) -> (Data, Int)? {
+        // Index off startIndex, not 0: `buf` may be a slice of the rx buffer.
+        let base = buf.startIndex
         guard buf.count >= 2 else { return nil }
         var idx = 1
         var multiplier = 1
         var remaining = 0
         var loop = 0
         while idx < buf.count {
-            let b = buf[idx]
+            let b = buf[base + idx]
             idx += 1
             remaining += Int(b & 0x7F) * multiplier
             if (b & 0x80) == 0 { break }
@@ -221,7 +237,8 @@ final class MQTTClient: NSObject, ObservableObject, URLSessionDelegate, URLSessi
         }
         let total = idx + remaining
         guard buf.count >= total else { return nil }
-        return (buf.prefix(total), total)
+        // Data(_:) re-bases the packet to startIndex 0 for the decoder.
+        return (Data(buf[base ..< (base + total)]), total)
     }
 
     private func processPacket(_ data: Data) {
@@ -231,9 +248,11 @@ final class MQTTClient: NSObject, ObservableObject, URLSessionDelegate, URLSessi
             if success {
                 connection = .connected
                 reconnectAttempt = 0
+                MQTTLog.shared.append("[MQTT-WS] CONNACK ok → subscribing \(MQTTConfig.topicPattern(mac4: currentMac4))")
                 subscribeTopic()
                 startPingTimer()
             } else {
+                MQTTLog.shared.append("[MQTT-WS] CONNACK refused by broker")
                 onWebSocketClose()
             }
         case .suback:

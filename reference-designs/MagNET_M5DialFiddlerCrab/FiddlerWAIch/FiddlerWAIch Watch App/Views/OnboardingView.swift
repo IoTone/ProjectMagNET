@@ -31,6 +31,7 @@ struct OnboardingView: View {
                         let trimmed = AppSettings.sanitizeMac4(mac4Draft)
                         if AppSettings.isValidMac4(trimmed) {
                             settings.mac4 = trimmed
+                            settings.publicBrokerAcknowledged = true
                             mqtt.resubscribe()
                         }
                     } label: {
@@ -40,6 +41,14 @@ struct OnboardingView: View {
                     }
                     .tint(Theme.hotPink)
                     .disabled(!AppSettings.isValidMac4(AppSettings.sanitizeMac4(mac4Draft)))
+
+                    // The default broker is public, so say so here — the confirmation
+                    // sheet in 設定 only fires when the user picks it by hand.
+                    Text("onboarding.public_broker_note")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Theme.yellow)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding()
             }

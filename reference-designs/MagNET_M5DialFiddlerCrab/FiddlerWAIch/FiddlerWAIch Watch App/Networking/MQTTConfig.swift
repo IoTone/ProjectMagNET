@@ -4,12 +4,15 @@ enum MQTTConfig {
     static let keepAliveSeconds: UInt16 = 60
     static let qos: UInt8 = 1
 
+    /// Everything before the `<mac4>/<sessionId>` tail.
+    static let topicPrefix = "iotj/cl/openwr/updates"
+
     static func topicPattern(mac4: String) -> String {
-        "iotj/cl/openwr/updates/\(mac4)/#"
+        "\(topicPrefix)/\(mac4)/#"
     }
 
     static func baseTopic(mac4: String) -> String {
-        "iotj/cl/openwr/updates/\(mac4)"
+        "\(topicPrefix)/\(mac4)"
     }
 }
 
