@@ -1,6 +1,6 @@
 # Hanasu — status: ON HOLD (2026-10-06)
 
-Work paused at a clean point. Everything below is committed; nothing is pushed.
+Work paused at a clean point. Everything below is committed and pushed.
 Resume from "Next, when resumed".
 
 ## Where it stands
@@ -23,9 +23,9 @@ Resume from "Next, when resumed".
   over only `ota_release.pub.pem`, `ota_release_next.pub.pem`,
   `mcuboot_release.pub.pem`. Until then every build trusts the committed DEV keys
   (`!WARN ota-dev-keys` at boot) — bench only.
-- **Push.** 18 Hanasu commits on `ProjectMagNET` `dev` (from `e292a767` to
-  `b268f0ad`) plus tags `mnpkg-spec-v1.0`..`v1.4`; 4 commits on
-  `projectmagnet.github.io` `main` (`f84c89a`..`89b8e98`).
+- **Pushed (2026-10-12):** all Hanasu commits on `ProjectMagNET` `dev`, tags
+  `mnpkg-spec-v1.0`..`v1.4`, and the docs-site Hanasu section on
+  `projectmagnet.github.io` `main`.
 
 ## Next, when resumed
 
