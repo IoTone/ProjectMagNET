@@ -256,6 +256,12 @@ static void axp192_init_i2c(void) {
         uint8_t adc_en = val.value() | 0x80;
         lgfx::i2c::writeRegister8(AXP192_I2C_PORT, AXP192_ADDR, 0x82, adc_en, 0xFF, 400000);
     }
+    // Mic power: the SPM1423 runs off AXP192 GPIO0 as an LDO, which M5GFX
+    // doesn't enable. 0x91[7:4] = 1.8 V + n*0.1 V (0xF0 = 3.3 V), 0x90 = 0x02
+    // (GPIO0 = LDO). Without it the mic reads a constant ~-30935 (found on
+    // HW 2026-10-06 bringing up M5StickCPlus_Hive_Ear).
+    lgfx::i2c::writeRegister8(AXP192_I2C_PORT, AXP192_ADDR, 0x91, 0xF0, 0x00, 400000);
+    lgfx::i2c::writeRegister8(AXP192_I2C_PORT, AXP192_ADDR, 0x90, 0x02, 0x00, 400000);
 }
 
 static void battery_read(void) {
@@ -593,7 +599,19 @@ static void record_task(void *param) {
     size_t got = 0;
     craw_mic_record(buf, max_samples, secs, &got, rec_progress_cb, nullptr);
 
-    int peak = craw_mic_peak(buf, got);
+    // PDM carries a large, drifting DC offset: remove it, then voice-band
+    // high-pass so the peak reflects sound rather than drift.
+    int dc = craw_mic_remove_dc(buf, got);
+    craw_mic_hpf_t hpf;
+    craw_mic_hpf_init(&hpf, 120.0f, craw_mic_sample_rate());
+    craw_mic_hpf_block(&hpf, buf, got);
+    // Skip the filter's first 50 ms (it rings on the residual drift step).
+    size_t skip = (size_t)craw_mic_sample_rate() / 20;
+    if (skip > got) skip = got;
+    int peak = craw_mic_peak(buf + skip, got - skip);
+    double sq = 0;
+    for (size_t i = skip; i < got; i++) sq += (double)buf[i] * buf[i];
+    int rms = got > skip ? (int)sqrt(sq / (double)(got - skip)) : 0;
     last_capture_secs = (float)got / (float)craw_mic_sample_rate();
     last_capture_peak = peak;
     recording = false;
@@ -611,7 +629,7 @@ static void record_task(void *param) {
         craw_mqtt_publish(mqtt_topic, ev, 0, false);
     }
 
-    ESP_LOGI(TAG, "record done: %.2f s, peak=%d", last_capture_secs, peak);
+    ESP_LOGI(TAG, "record done: %.2f s, peak=%d rms=%d (dc %d removed)", last_capture_secs, peak, rms, dc);
     heap_caps_free(buf);
     vTaskDelete(nullptr);
 }
