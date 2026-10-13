@@ -260,6 +260,15 @@ const mn_pkg_hdr_t *mn_ota_platform_staged(void) {
     return (s_ota.staged && !s_ota.active) ? &s_ota.hdr : NULL;
 }
 void mn_ota_platform_running(mn_pkg_ver_t *v) { *v = s_running; }
+bool mn_ota_platform_trial(void) {
+    esp_ota_img_states_t st = ESP_OTA_IMG_UNDEFINED;
+    esp_ota_get_state_partition(esp_ota_get_running_partition(), &st);
+    return st == ESP_OTA_IMG_PENDING_VERIFY;
+}
+const char *mn_ota_platform_slot(void) {
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    return run ? run->label : "?";
+}
 int mn_ota_platform_arm(uint8_t mode) {
     (void)mode;       /* TEST vs PERMANENT is decided at boot: mn_ota_pending_permanent() */
     esp_err_t err = esp_ota_set_boot_partition(s_ota.part);   /* re-verifies the image */

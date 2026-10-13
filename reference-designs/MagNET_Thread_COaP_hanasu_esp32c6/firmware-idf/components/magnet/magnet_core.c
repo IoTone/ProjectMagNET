@@ -1734,6 +1734,8 @@ __attribute__((weak)) bool mn_ota_platform_supported(void) { return false; }
 __attribute__((weak)) const mn_pkg_hdr_t *mn_ota_platform_staged(void) { return NULL; }
 __attribute__((weak)) void mn_ota_platform_running(mn_pkg_ver_t *v) { memset(v, 0, sizeof(*v)); }
 __attribute__((weak)) int mn_ota_platform_arm(uint8_t mode) { (void)mode; return -1; }
+__attribute__((weak)) bool mn_ota_platform_trial(void) { return false; }
+__attribute__((weak)) const char *mn_ota_platform_slot(void) { return "?"; }
 
 /* ---- boot bundle status (OTA-PACKAGE §7.4 health) ---- */
 static uint8_t s_boot_bundles = MN_BUNDLES_NONE;
@@ -1936,6 +1938,20 @@ void mn_ota_settled(void) {
     if (s_report_timer) xTimerStart(s_report_timer, 0);
 }
 
+void mn_ota_describe(char *buf, size_t cap) {
+    if (!cap) return;
+    buf[0] = '\0';
+    if (!mn_ota_platform_supported()) return;
+    mn_pkg_ver_t run;
+    mn_ota_platform_running(&run);
+    /* s_report_outcome is set once per boot by mn_ota_settled and never cleared */
+    const char *st = mn_ota_platform_trial()                ? "test"
+                   : s_report_outcome == MN_OTA_ROLLED_BACK ? "rolled-back"
+                   :                                          "confirmed";
+    snprintf(buf, cap, "%u.%u.%u+%u/%s/%s", run.major, run.minor, run.revision,
+             (unsigned)run.build, mn_ota_platform_slot(), st);
+}
+
 /* pump context */
 static void ota_report_try(void) {
     ota_pend_t p;
@@ -2069,9 +2085,11 @@ void mn_peers_print(void) {
 
 void mn_whoami_line(char *buf, size_t cap) {
     /* E-Phase D: real device_id = SHA256(Ed25519 pubkey)[0:4]. E-B/C: EUI-64 tail. */
-    snprintf(buf, cap, "id=%02x%02x%02x%02x name=%s fw=%s",
+    char ota[48];
+    mn_ota_describe(ota, sizeof(ota));
+    snprintf(buf, cap, "id=%02x%02x%02x%02x name=%s fw=%s%s%s",
              s_device_id[0], s_device_id[1], s_device_id[2], s_device_id[3],
-             s_name, MN_FW_VERSION);
+             s_name, MN_FW_VERSION, ota[0] ? " ota=" : "", ota);
 }
 
 /* ---- display name (NVS-persisted; announces on change when READY) ---- */
@@ -2116,6 +2134,9 @@ void mn_sysinfo_print(void) {
                   (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     mn_emit_event("# sys forth-heap used=%d free=%d",
                   forth_heap_used(), forth_heap_free());
+    char ota[48];
+    mn_ota_describe(ota, sizeof(ota));
+    mn_emit_event("# sys fw=%s ota=%s", MN_FW_VERSION, ota[0] ? ota : "none");
 }
 
 /* Build one Type-5 PING frame carrying the selftest magic. */

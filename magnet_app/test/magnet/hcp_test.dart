@@ -136,4 +136,29 @@ void main() {
       expect(e.text, 'psst');
     });
   });
+
+  group('WHOAMI ota=', () {
+    test('parses version, slot and state', () {
+      final OtaBuild? b = OtaBuild.fromWhoami(HcpClient.parseKv(
+          'id=e1256131 name=probe fw=0.7.0-eh ota=0.7.0+2/ota_0/confirmed'));
+      expect(b, isNotNull);
+      expect(b!.version, '0.7.0+2');
+      expect(b.slot, 'ota_0');
+      expect(b.onTrial, isFalse);
+      expect(b.rolledBack, isFalse);
+    });
+
+    test('trial and rollback states', () {
+      expect(OtaBuild.fromWhoami(<String, String>{'ota': '0.7.0+3/ota_1/test'})!.onTrial,
+          isTrue);
+      expect(OtaBuild.fromWhoami(<String, String>{'ota': '0.7.0+2/slot0/rolled-back'})!
+          .rolledBack, isTrue);
+    });
+
+    test('absent or malformed field is null (older / non-OTA firmware)', () {
+      expect(OtaBuild.fromWhoami(HcpClient.parseKv('id=1 name=x fw=0.7.0-eh')), isNull);
+      expect(OtaBuild.fromWhoami(<String, String>{'ota': '0.7.0+2'}), isNull);
+      expect(OtaBuild.fromWhoami(<String, String>{'ota': '0.7.0+2//confirmed'}), isNull);
+    });
+  });
 }

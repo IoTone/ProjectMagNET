@@ -228,9 +228,9 @@ static void handle_hcp_line(char *line) {
     else if (!strcmp(verb, "CAPS"))   emit_caps(tag);
     else if (!strcmp(verb, "HELP"))   emit_help(tag);
     else if (!strcmp(verb, "WHOAMI")) {
-        char line[96];
+        char line[160];
         mn_whoami_line(line, sizeof(line));
-        char body[128];
+        char body[192];
         snprintf(body, sizeof(body), "+OK %s", line);
         respond(tag, body);
     }

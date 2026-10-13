@@ -28,6 +28,37 @@ class HcpError implements Exception {
   String toString() => 'HcpError($code${message.isEmpty ? '' : ': $message'})';
 }
 
+/// The installed build an OTA-capable node reports as `WHOAMI ... ota=`
+/// (`0.7.0+2/ota_0/confirmed`). `fw=` is the protocol release and is the same
+/// on every build; this is what changes when a mesh update installs. Nodes
+/// that cannot take updates, and firmware older than the field, omit it.
+class OtaBuild {
+  const OtaBuild(this.version, this.slot, this.state);
+
+  /// `<maj.min.rev+build>`, as the package and MCUboot carry it.
+  final String version;
+
+  /// Running slot: `ota_0` / `ota_1` (ESP32-C6) or `slot0` (MG24).
+  final String slot;
+
+  /// `confirmed`, `test` (on trial — confirms once the node is READY) or
+  /// `rolled-back` (this boot is the old image after a failed update).
+  final String state;
+
+  bool get onTrial => state == 'test';
+  bool get rolledBack => state == 'rolled-back';
+
+  /// Null when [whoami] has no usable `ota` field.
+  static OtaBuild? fromWhoami(Map<String, String> whoami) {
+    final List<String> p = (whoami['ota'] ?? '').split('/');
+    if (p.length != 3 || p.any((String s) => s.isEmpty)) return null;
+    return OtaBuild(p[0], p[1], p[2]);
+  }
+
+  @override
+  String toString() => '$version/$slot/$state';
+}
+
 class HcpTimeout implements Exception {
   HcpTimeout(this.command);
   final String command;

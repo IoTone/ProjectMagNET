@@ -621,6 +621,7 @@ class _StatusCard extends StatelessWidget {
             const SizedBox(height: 10),
             _kv('Device id', who['id'] ?? '?'),
             _kv('Firmware', who['fw'] ?? '?'),
+            _buildRow(OtaBuild.fromWhoami(who)),
             _kv('Channel', channel['name'] ?? '?'),
             _kv('Selector', channel['selector'] ?? '?'),
             _kv('Peers', status['peers'] ?? '0'),
@@ -642,6 +643,37 @@ class _StatusCard extends StatelessWidget {
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  /// The installed build (WHOAMI `ota=`), flagged while it is on trial or
+  /// after a rollback. Older firmware and non-OTA builds show a dash.
+  Widget _buildRow(OtaBuild? b) {
+    if (b == null) return _kv('Build', '— (no OTA)');
+    final String note = b.onTrial
+        ? 'on trial — confirms when READY'
+        : b.rolledBack
+            ? 'update failed — old image restored'
+            : '';
+    final Color? color = b.onTrial
+        ? Colors.amber.shade800
+        : b.rolledBack
+            ? cs.error
+            : null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const SizedBox(width: 96, child: Text('Build', style: TextStyle(fontSize: 12))),
+          Expanded(
+            child: Text(
+              '${b.version}  ${b.slot}  ${b.state}${note.isEmpty ? '' : '\n$note'}',
+              style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: color),
+            ),
+          ),
+        ],
       ),
     );
   }

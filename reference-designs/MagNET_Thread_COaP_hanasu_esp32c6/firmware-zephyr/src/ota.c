@@ -262,6 +262,8 @@ void mn_ota_platform_running(mn_pkg_ver_t *v) {
         *v = (mn_pkg_ver_t){ h.h.v1.sem_ver.major, h.h.v1.sem_ver.minor,
                              h.h.v1.sem_ver.revision, h.h.v1.sem_ver.build_num };
 }
+bool mn_ota_platform_trial(void) { return !boot_is_img_confirmed(); }
+const char *mn_ota_platform_slot(void) { return "slot0"; }
 int mn_ota_platform_arm(uint8_t mode) {
     int rc = boot_request_upgrade(mode == MN_OTA_MODE_PERMANENT ? BOOT_UPGRADE_PERMANENT
                                                                 : BOOT_UPGRADE_TEST);

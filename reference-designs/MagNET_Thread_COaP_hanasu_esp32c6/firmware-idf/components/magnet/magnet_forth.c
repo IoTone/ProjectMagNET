@@ -57,7 +57,7 @@ static void w_mn_peers(void)  { mn_peers_print(); }
 
 /* mn-whoami ( -- ) */
 static void w_mn_whoami(void) {
-    char line[96];
+    char line[160];
     mn_whoami_line(line, sizeof(line));
     mn_emit_event("# %s", line);
 }

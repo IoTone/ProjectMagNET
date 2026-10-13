@@ -10,6 +10,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "magnet_pkg.h"
@@ -39,6 +40,13 @@ bool                mn_ota_platform_supported(void);
 const mn_pkg_hdr_t *mn_ota_platform_staged(void);        /* NULL: none, or still receiving */
 void                mn_ota_platform_running(mn_pkg_ver_t *v);
 int                 mn_ota_platform_arm(uint8_t mode);   /* make the staged slot boot next; 0 = ok */
+bool                mn_ota_platform_trial(void);         /* running image on trial (not yet confirmed) */
+const char         *mn_ota_platform_slot(void);          /* running slot: "ota_0", "slot0" */
+
+/* The running build as "<maj.min.rev+build>/<slot>/<state>", state = confirmed |
+ * test (on trial) | rolled-back (this boot is the old image after a failed
+ * apply). Empty on a build that cannot stage. WHOAMI's ota= and SYSINFO. */
+void mn_ota_describe(char *buf, size_t cap);
 
 /* ---- core, called by the platform ---- */
 /* The running image is settled: confirmed after a trial, or never on trial.
