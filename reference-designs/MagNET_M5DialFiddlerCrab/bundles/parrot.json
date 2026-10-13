@@ -1,0 +1,13 @@
+{
+  "name": "parrot",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [],
+  "deps": [],
+  "crc32": "aa033b72",
+  "sig_alg": "ed25519",
+  "sig": "3ac738a5f8ccc93f5b05e21f3e50a8c73876bac9aa398c0091c46973cde4880952035f786c9fb8d4a3c33753f614773f9d98067cd523887535aed147fb08a009",
+  "src_b64": "XCBSb2xlIDM6IFBhcnJvdCDigJQgZWNob2VzIHdoYXRldmVyIGFwcGVhcnMgaW4gcGFycm90OnNheSB0byBwYXJyb3Q6ZWNoby4KXCB2MC4xIHJlLWVjaG9lcyBlYWNoIHRpY2sgdW50aWwgdGhlIHJ1bGVyIGNsZWFycyBwYXJyb3Q6c2F5IChubyBzdHJpbmcKXCBjb21wYXJlIHdvcmQgaW4gdGhlIHN0dWIgY29yZSB5ZXQgdG8gZGV0ZWN0ICJhbHJlYWR5IGVjaG9lZCIpLgpcIGNhcHNfcmVxOiBbXSAgdGlja19tczogMjAwMAo6IHJvbGUtdGljawogICAgcyIgcGFycm90OnNheSIgaGt2LWdldCQgaWYKICAgICAgcyIgcGFycm90OmVjaG8iIGhrdi1wdXQkCiAgICB0aGVuIDsKOiByb2xlLXN0YXR1cyAuIiBwYXJyb3QgbGlzdGVuaW5nIG9uIHBhcnJvdDpzYXkiIGNyIDsK",
+  "tick_ms": 2000
+}

@@ -41,6 +41,20 @@ final class NetworkMonitor: ObservableObject {
         } else {
             interface = "—"
         }
-        print("[NET] path=\(pathStatus) iface=\(interface) gateways=\(path.gateways.count)")
+        // `iface=other` on its own says almost nothing — it's the fallback bucket, and both
+        // a tunnel and an unrecognised link land in it. The interface NAMES are what tell
+        // you which: `ipsec*` means the traffic is going through the paired iPhone over the
+        // companion tunnel rather than the watch's own Wi-Fi radio.
+        let names = path.availableInterfaces.map { "\($0.name)(\($0.type))" }.joined(separator: ",")
+        var flags: [String] = []
+        if path.isExpensive { flags.append("expensive") }
+        if path.isConstrained { flags.append("constrained") }
+        if #available(watchOS 9.0, *), path.status == .unsatisfied {
+            flags.append("reason=\(path.unsatisfiedReason)")
+        }
+        let detail = "[NET] path=\(pathStatus) iface=\(interface) gateways=\(path.gateways.count)"
+            + " avail=[\(names.isEmpty ? "none" : names)]"
+            + (flags.isEmpty ? "" : " \(flags.joined(separator: " "))")
+        MQTTLog.shared.append(detail)
     }
 }

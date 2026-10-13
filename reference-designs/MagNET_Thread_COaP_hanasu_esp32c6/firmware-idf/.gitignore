@@ -1,0 +1,12 @@
+# PlatformIO build tree (~1 GB with two envs built)
+.pio/
+
+# Generated sdkconfig caches — sdkconfig.defaults* are the source of truth.
+# (PlatformIO caches these; edits to defaults are ignored until the cache is
+# deleted and rebuilt — see README. Tracking them would make that worse.)
+sdkconfig.*
+!sdkconfig.defaults*
+
+# editor/tooling
+.vscode/
+__pycache__/

@@ -2,8 +2,10 @@
  * M5_Hive_Camera — OV2640 MagNET hive camera node.
  *
  * Targets:
- *   [env:esp32cam]  AI-Thinker ESP32-CAM (classic ESP32, UART0 console)
- *   [env:m5cams3]   M5Stack Unit CamS3    (ESP32-S3, native USB-serial-JTAG)
+ *   [env:esp32cam]  AI-Thinker ESP32-CAM   (classic ESP32, UART0 console)
+ *   [env:m5cams3]   M5Stack Unit CamS3     (ESP32-S3, native USB-serial-JTAG)
+ *   [env:m5camerax] M5Stack M5Camera X     (classic ESP32, CP2104 UART)
+ *   [env:atoms3r]   M5Stack AtomS3R CAM M12 (ESP32-S3R8, native USB-serial-JTAG)
  *
  * Preserves the stock ESP32 CameraWebServer behavior on the HTTP side
  * (/stream, /capture, /control, /status) while adding MagNET provisioning
@@ -43,6 +45,8 @@
 #include "craw_wifi.h"
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
+#include "craw_role_bundle.h"
+#include "craw_role_hive_words.h"
 #include "craw_camera.h"
 #include "../../include/magnet_gen.h"
 
@@ -69,8 +73,19 @@ static const char *TAG = "m5cam_hive";
   /* AI-Thinker's only addressable LED is the blinding white flash on
    * GPIO4 — not suitable for continuous status. Leave HAS_STATUS_LED
    * undefined; the status_led_* helpers compile to nothing. */
+#elif defined(CAMERA_BOARD_M5CAMERAX)
+  #define BOARD_ENUM  CRAW_CAMERA_BOARD_M5CAMERAX
+  #define BOARD_SLUG  "m5camerax"
+  /* M5Camera X has no status LED broken out (pins_m5camerax.h sets
+   * LED_GPIO -1). Leave HAS_STATUS_LED undefined. */
+#elif defined(CAMERA_BOARD_ATOMS3R)
+  #define BOARD_ENUM  CRAW_CAMERA_BOARD_ATOMS3R
+  #define BOARD_SLUG  "atoms3r"
+  /* AtomS3R CAM M12 has an onboard RGB (WS2812) that requires RMT,
+   * not a simple GPIO level — not wired as a status LED here.
+   * Leave HAS_STATUS_LED undefined. */
 #else
-  #error "Define CAMERA_BOARD_AI_THINKER or CAMERA_BOARD_M5CAMS3 via platformio.ini"
+  #error "Define CAMERA_BOARD_AI_THINKER, CAMERA_BOARD_M5CAMS3, CAMERA_BOARD_M5CAMERAX, or CAMERA_BOARD_ATOMS3R via platformio.ini"
 #endif
 
 #define FORTH_HEAP_SIZE (32 * 1024)
@@ -141,6 +156,7 @@ static bool     http_started           = false;
 static bool     mdns_published         = false;
 static bool     hive_started           = false;
 static bool     camera_ready           = false;
+static bool     camera_init_failed     = false;  /* one-shot: stop retrying after first failure */
 
 /* -------------------- mDNS advertisement -------------------- */
 static void mdns_publish(void) {
@@ -148,7 +164,14 @@ static void mdns_publish(void) {
     mdns_init();
     mdns_hostname_set(hostname);                /* → <hostname>.local */
     mdns_instance_name_set("MagNET Hive Camera");
-    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    /* TXT stream_port: MJPEG lives on its own httpd instance on :81
+     * (http_stream.c) so a parked viewer can't wedge the :80 control plane.
+     * Clients that only know _http find the stream via this key. */
+    mdns_txt_item_t http_txt[] = {
+        {"stream_port", "81"},
+    };
+    mdns_service_add(NULL, "_http", "_tcp", 80,
+                     http_txt, sizeof(http_txt)/sizeof(http_txt[0]));
     /* Advertise the MagNET node type too so hive-aware clients can find it
      * without knowing the http service. TXT: role=spy, caps=camera+jpeg. */
     mdns_txt_item_t node_txt[] = {
@@ -159,7 +182,7 @@ static void mdns_publish(void) {
     mdns_service_add(NULL, "_magnet-node", "_tcp", 0,
                      node_txt, sizeof(node_txt)/sizeof(node_txt[0]));
     mdns_published = true;
-    uprintf("[mDNS] %s.local  _http._tcp:80\r\n", hostname);
+    uprintf("[mDNS] %s.local  _http._tcp:80 (stream_port=81)\r\n", hostname);
 }
 
 /* -------------------- WiFi / BLE provisioning --------- */
@@ -308,6 +331,68 @@ static void derive_ids(void) {
     snprintf(node_id,  sizeof(node_id),  "MagNET-biologic-%02x%02x", mac[4], mac[5]);
 }
 
+/* -------- Role-bundle install pipeline (H8: the Eye lands here) --------
+ * Same worker pattern as the Scribes: the grant callback runs on the hive
+ * receive loop and must not block, so fetching + installing happens on a
+ * short-lived task. */
+typedef struct {
+    char bundle_key[CRAW_HIVE_KV_KEY_MAX + 1];
+    char role[CRAW_HIVE_ROLE_MAX + 1];
+} bundle_install_job_t;
+
+#define N_NODE_CAPS 2   /* CAPS = {"camera","jpeg",NULL} */
+
+static void bundle_install_worker(void *arg) {
+    bundle_install_job_t *job = (bundle_install_job_t *)arg;
+    char *json_buf = malloc(CRAW_HIVE_KV_VALUE_MAX + 1);
+    if (!json_buf) {
+        uprint("\r\n[bundle] worker malloc failed\r\n");
+        free(job); vTaskDelete(NULL); return;
+    }
+    uprintf("\r\n[bundle] fetching %s for role=%s...\r\n", job->bundle_key, job->role);
+    int rc = craw_hive_node_kv_get(job->bundle_key, json_buf,
+                                   CRAW_HIVE_KV_VALUE_MAX + 1, 5000);
+    if (rc == 0) {
+        craw_role_bundle_install_result_t result = {0};
+        int irc = craw_role_bundle_install_from_json(json_buf, CAPS, N_NODE_CAPS,
+                                                     &result);
+        if (irc == BUNDLE_OK) {
+            uprintf("[bundle] '%s' v%s installed (%u bytes src)\r\n",
+                    result.info.name, result.info.version,
+                    (unsigned)result.info.src_len);
+        } else {
+            uprintf("[bundle] install failed rc=%d field='%s'\r\n",
+                    irc, result.err_field);
+        }
+        /* H4: report the outcome into the hive KV so the ruler can tell a
+         * node RUNNING a role from one that failed to install it. */
+        {
+            char akey[CRAW_HIVE_KV_KEY_MAX + 1], aval[192];
+            snprintf(akey, sizeof(akey), "applied:%.24s", node_id);
+            if (craw_role_bundle_format_applied_json(&result, job->role,
+                                                     aval, sizeof(aval)) == 0)
+                craw_hive_node_kv_put(akey, aval);
+        }
+    } else {
+        uprintf("[bundle] kv-get '%s' failed rc=%d\r\n", job->bundle_key, rc);
+    }
+    free(json_buf); free(job); vTaskDelete(NULL);
+}
+
+static void on_role_grant(const char *role, const char *bundle_key,
+                          const char *scribe, void *ctx) {
+    (void)ctx; (void)scribe;
+    uprintf("\r\n[ROLE_GRANT] role=%s bundle=%s\r\n",
+            role, bundle_key ? bundle_key : "(none)");
+    if (!bundle_key) return;
+    bundle_install_job_t *job = malloc(sizeof(*job));
+    if (!job) return;
+    snprintf(job->role, sizeof(job->role), "%s", role);
+    snprintf(job->bundle_key, sizeof(job->bundle_key), "%s", bundle_key);
+    if (xTaskCreate(bundle_install_worker, "bundle", 6144, job, 3, NULL) != pdPASS)
+        free(job);
+}
+
 static void maybe_start_hive(void) {
     if (hive_started) return;
     if (!craw_wifi_is_connected()) return;
@@ -325,6 +410,8 @@ static void maybe_start_hive(void) {
         .secret         = secret_copy,
         .on_state       = on_hive_state,
         .on_state_ctx   = NULL,
+        .on_role_grant  = on_role_grant,
+        .on_role_grant_ctx = NULL,
     };
     if (craw_hive_node_start(&ncfg) == 0) {
         hive_started = true;
@@ -359,7 +446,7 @@ static void housekeeping_task(void *arg) {
                 uprintf("[SNTP] time synced: %s UTC\r\n", buf);
             }
         }
-        if (ble_torn_down && !camera_ready) {
+        if (ble_torn_down && !camera_ready && !camera_init_failed) {
             /* Now that the BLE stack is gone, internal RAM is unfragmented
              * and there's plenty of headroom for esp32-camera DMA.
              *
@@ -386,7 +473,9 @@ static void housekeeping_task(void *arg) {
                 uprintf("[cam] %s ready  (defaults VGA/q12, NVS overrides applied)  flash GPIO=%d\r\n",
                         craw_camera_board_name(), craw_camera_flash_gpio());
             } else {
-                uprintf("[cam] init failed rc=0x%x — check wiring / PSRAM\r\n", rc);
+                camera_init_failed = true;
+                uprintf("[cam] init failed rc=0x%x — sensor not detected.\r\n"
+                        "      Check wiring. Use 'cam-reinit' to retry after fixing.\r\n", rc);
             }
         }
         if (camera_ready && craw_wifi_is_connected() && !http_started) {
@@ -473,9 +562,18 @@ static void w_cam_xclk_mhz(void) {
     uprintf("\r\ncam-xclk-mhz=%d saved. Reboot to apply.\r\n", mhz);
 }
 
+/* ( -- ) Re-attempt camera init after a previous failure (e.g. cable re-seat). */
+static void w_cam_reinit(void) {
+    if (camera_ready) { uprint("\r\ncamera already ready\r\n"); return; }
+    if (!ble_torn_down) { uprint("\r\ncam-reinit: wait for BLE teardown first\r\n"); return; }
+    camera_init_failed = false;   /* unlock the housekeeping gate */
+    uprint("\r\nretrying camera init on next housekeeping tick...\r\n");
+}
+
 static void w_stream_url(void) {
     if (!http_started) { uprint("\r\n(no WiFi yet)\r\n"); return; }
-    uprintf("\r\nhttp://%s.local/stream\r\nhttp://%s/stream\r\n", hostname, ip_str);
+    /* MJPEG stream is on :81 (own httpd instance — see http_stream.c). */
+    uprintf("\r\nhttp://%s.local:81/stream\r\nhttp://%s:81/stream\r\n", hostname, ip_str);
 }
 
 static void w_prov_status(void) {
@@ -563,6 +661,7 @@ static void register_forth_words(void) {
     forth_register_word("cam-vflip",     w_cam_vflip);
     forth_register_word("cam-hmirror",   w_cam_hmirror);
     forth_register_word("cam-reset-settings", w_cam_reset_settings);
+    forth_register_word("cam-reinit",         w_cam_reinit);
     forth_register_word("cam-xclk-mhz",       w_cam_xclk_mhz);
     forth_register_word("kv-get",             w_kv_get);
     forth_register_word("kv-put",             w_kv_put);
@@ -609,6 +708,12 @@ void app_main(void) {
     /* Forth */
     forth_init(FORTH_HEAP_SIZE);
     register_forth_words();
+    craw_role_bundle_register_hive_words();   /* hkv-put$/hkv-get$/hkv-run */
+    craw_role_bundle_init();
+    {
+        int reapplied = craw_role_bundle_apply_saved(CAPS, N_NODE_CAPS);
+        if (reapplied > 0) uprintf("[bundle] %d persisted bundle(s) re-applied\r\n", reapplied);
+    }
     uprintf("Free heap: %lu bytes\r\n", (unsigned long)esp_get_free_heap_size());
 
     xTaskCreate(housekeeping_task, "keep", 6144, NULL, 3, NULL);

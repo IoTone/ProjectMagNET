@@ -1,12 +1,12 @@
 {
   "name": "spawn",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "min_proto": 1,
   "author": "iotone-dev",
   "caps_req": [],
   "deps": [],
-  "crc32": "c3e64bab",
-  "sig_alg": "hmac-sha256",
-  "sig": "548525d92297affe55cdfd26cce8715951d9b804fe03a1e9dc1c0fb3e4678e24",
-  "src_b64": "XCBSb2xlOiBzcGF3biDigJQgbWluaW1hbCAiSSBqb2luZWQgdGhlIGhpdmUiIGlkZW50aXR5IGJ1bmRsZS4KXCBJbnN0YWxscyBhIHNpbmdsZSBncmVldGluZyB3b3JkIGFuZCBhbm5vdW5jZXMgaXRzZWxmIG9uY2UgYXQgaW5zdGFsbCB0aW1lLgpcIGNhcHNfcmVxOiBbXSAod29ya3Mgb24gYW55IG5vZGUpCgo6IGhlbGxvLXNwYXduIC4iIEhlbGxvIGZyb20gdGhlIHNwYXduIHJvbGUiIGNyIDsKaGVsbG8tc3Bhd24K"
+  "crc32": "5a8af737",
+  "sig_alg": "ed25519",
+  "sig": "a52598c40e0e5ea9b281e2e625529849491fd60510b04997c5008b8a4e41095f8fc09f214faa8e3417ee02b20fd5bd12ef22da3a32b6d67e55b06eae225fe603",
+  "src_b64": "XCBSb2xlOiBzcGF3biDigJQgbWluaW1hbCAiSSBqb2luZWQgdGhlIGhpdmUiIGlkZW50aXR5IGJ1bmRsZS4KXCBBbm5vdW5jZXMgaXRzZWxmIG9uY2UgYXQgaW5zdGFsbCB2aWEgdGhlIEg1IHJvbGUtaW5pdCBob29rIChubyB0b3AtbGV2ZWwKXCBleGVjdXRpb24g4oCUIGluc3RhbGwtdGltZSBiZWhhdmlvciBiZWxvbmdzIGluIHJvbGUtaW5pdCkuClwgY2Fwc19yZXE6IFtdICh3b3JrcyBvbiBhbnkgbm9kZSkKCjogaGVsbG8tc3Bhd24gLiIgSGVsbG8gZnJvbSB0aGUgc3Bhd24gcm9sZSIgY3IgOwo6IHJvbGUtaW5pdCAgIGhlbGxvLXNwYXduIDsKOiByb2xlLXN0YXR1cyAuIiBzcGF3biBpZGxlIiBjciA7Cg=="
 }

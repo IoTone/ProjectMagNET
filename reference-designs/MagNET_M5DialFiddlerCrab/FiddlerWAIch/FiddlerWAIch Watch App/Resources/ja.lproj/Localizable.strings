@@ -15,6 +15,7 @@
 "onboarding.title"                      = "ようこそ";
 "onboarding.device_id_prompt"           = "デバイスIDを入力";
 "onboarding.save"                       = "保存";
+"onboarding.public_broker_note"         = "初期設定は公開サーバー（HiveMQ）です。通信は世界中から見える可能性があります。設定で変更できます。";
 
 "settings.title"                        = "設定";
 "settings.device_id"                    = "デバイスID";
@@ -28,7 +29,8 @@
 
 "broker.localhost"                      = "ローカル";
 "broker.custom"                         = "プライベート";
-"broker.hivemq_public"                  = "HiveMQ 公開";
+"broker.hivemq_public"                  = "HiveMQ 公開 (ws)";
+"broker.hivemq_public_tls"              = "HiveMQ 公開 (wss)";
 
 "feedback.haptics"                      = "振動";
 "feedback.audio"                        = "音";

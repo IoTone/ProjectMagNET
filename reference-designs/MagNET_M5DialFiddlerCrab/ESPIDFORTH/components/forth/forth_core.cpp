@@ -6,8 +6,8 @@
  * replaced with the full ESP32forth v7.0.8.0 engine once the Arduino
  * dependencies are stripped out.
  *
- * The raw ESP32forth source is preserved in ESP32forth.ino alongside
- * this file for reference during the porting effort.
+ * The raw ESP32forth source is preserved in third_party/esp32forth/
+ * (at the repository root) for reference during the porting effort.
  *
  * Supported words:
  *   Numbers (decimal, hex with 0x prefix)
@@ -40,14 +40,48 @@
 #include "esp_mac.h"
 #include "esp_idf_version.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"   // EXT_RAM_BSS_ATTR (empty unless BSS-in-PSRAM is on)
+
+/* ----- Engine serialization (0.5.0) -----
+ * The engine has never been reentrant, and its callers stopped being
+ * single-threaded long ago: a console REPL task, a bundle-install worker,
+ * and (with the role lifecycle) a periodic tick task all evaluate. One
+ * recursive mutex at the public entry points serializes them — recursive so
+ * an FFI word that re-enters forth_eval() cannot deadlock its own task.
+ * Host (non-ESP) builds are single-threaded tests; the lock compiles away. */
+#ifdef ESP_PLATFORM
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+static SemaphoreHandle_t s_engine_lock = NULL;
+static void engine_lock(void)   { if (s_engine_lock) xSemaphoreTakeRecursive(s_engine_lock, portMAX_DELAY); }
+static void engine_unlock(void) { if (s_engine_lock) xSemaphoreGiveRecursive(s_engine_lock); }
+#else
+static void engine_lock(void)   {}
+static void engine_unlock(void) {}
+#endif
 
 // ----- Configuration -----
+// Overridable per build (-DMAX_WORD_LEN=32 …) for RAM-tight targets: the
+// dictionary is MAX_WORDS × ~(MAX_WORD_LEN + 12) bytes of BSS. Defaults are
+// what every existing ESP build uses.
+#ifndef MAX_STACK
 #define MAX_STACK     256
+#endif
+#ifndef MAX_RSTACK
 #define MAX_RSTACK    256
+#endif
+#ifndef MAX_WORD_LEN
 #define MAX_WORD_LEN  64
+#endif
+#ifndef MAX_WORDS
 #define MAX_WORDS     512
+#endif
+#ifndef MAX_INPUT
 #define MAX_INPUT     256
+#endif
+#ifndef MAX_DICT_CODE
 #define MAX_DICT_CODE 4096
+#endif
 
 // ----- Types -----
 typedef intptr_t cell_t;
@@ -80,10 +114,19 @@ static int     dsp = -1;  // data stack pointer
 static cell_t  rstack[MAX_RSTACK];
 static int     rsp = -1;  // return stack pointer
 
-static DictEntry dictionary[MAX_WORDS];
+/* dictionary[] + code[] are the two big static consumers (~38 KB + 16 KB).
+ * On boards that enable CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY (e.g.
+ * m5camerax, where esp32-camera needs a 32 KB contiguous *internal* DMA ring
+ * that this BSS would otherwise crowd out), EXT_RAM_BSS_ATTR places them in
+ * PSRAM. Everywhere else the attribute expands to nothing and they stay in
+ * internal BSS exactly as before. Both are task-context-only interpreter
+ * data (never touched from ISRs), so PSRAM-through-cache is safe; lookups
+ * get marginally slower, which a REPL/hive-script workload won't notice.
+ * The hot VM state (dstack/rstack/pointers) deliberately stays internal. */
+static EXT_RAM_BSS_ATTR DictEntry dictionary[MAX_WORDS];
 static int dict_count = 0;
 
-static cell_t  code[MAX_DICT_CODE];  // compiled code space
+static EXT_RAM_BSS_ATTR cell_t code[MAX_DICT_CODE];  // compiled code space
 static int     code_ptr = 0;
 
 static uint8_t *heap_mem = nullptr;
@@ -92,6 +135,9 @@ static int      heap_used_bytes = 0;
 
 static int  (*io_getchar)(void) = nullptr;
 static void (*io_putchar)(int)  = nullptr;
+
+/* Bumped by every "? ..." diagnostic. See forth_error_count(). */
+static int error_count = 0;
 
 static bool running = true;
 static bool compiling = false;
@@ -128,6 +174,17 @@ static inline cell_t rpop(void) {
 }
 
 // ----- I/O Helpers -----
+/* A NULL output hook must mean "discard", never "crash".
+ *
+ * put_string() always guarded, but w_dot/w_cr/w_emit/w_words called io_putchar
+ * DIRECTLY and unguarded, so a host that had not called forth_set_io() died on
+ * an Instruction access fault the first time anything printed — including the
+ * error message for an unknown word, which is exactly when a new embedder finds
+ * out. Route every character through put_char(). */
+static void put_char(int c) {
+    if (io_putchar) io_putchar(c);
+}
+
 static void put_string(const char *s) {
     if (!io_putchar) return;
     while (*s) io_putchar(*s++);
@@ -183,9 +240,9 @@ static void w_or(void)      { cell_t b = pop(); cell_t a = pop(); push(a | b); }
 static void w_xor(void)     { cell_t b = pop(); cell_t a = pop(); push(a ^ b); }
 static void w_invert(void)  { push(~pop()); }
 
-static void w_dot(void)     { put_number(pop()); io_putchar(' '); }
-static void w_cr(void)      { io_putchar('\n'); }
-static void w_emit(void)    { io_putchar((int)pop()); }
+static void w_dot(void)     { put_number(pop()); put_char(' '); }
+static void w_cr(void)      { put_char('\n'); }
+static void w_emit(void)    { put_char((int)pop()); }
 
 static void w_dots(void) {
     put_string("<");
@@ -193,7 +250,7 @@ static void w_dots(void) {
     put_string("> ");
     for (int i = 0; i <= dsp; i++) {
         put_number(dstack[i]);
-        io_putchar(' ');
+        put_char(' ');
     }
 }
 
@@ -202,14 +259,14 @@ static void w_words(void) {
     for (int i = 0; i < dict_count; i++) {
         int len = strlen(dictionary[i].name);
         if (col + len + 1 > 72) {
-            io_putchar('\n');
+            put_char('\n');
             col = 0;
         }
         put_string(dictionary[i].name);
-        io_putchar(' ');
+        put_char(' ');
         col += len + 1;
     }
-    io_putchar('\n');
+    put_char('\n');
 }
 
 static void w_bye(void) {
@@ -240,6 +297,14 @@ static void w_store(void)   { cell_t *addr = (cell_t *)pop(); *addr = pop(); }
 static void w_fetch(void)   { cell_t *addr = (cell_t *)pop(); push(*addr); }
 static void w_cstore(void)  { uint8_t *addr = (uint8_t *)pop(); *addr = (uint8_t)pop(); }
 static void w_cfetch(void)  { uint8_t *addr = (uint8_t *)pop(); push(*addr); }
+
+// ( c-addr u -- ) print u bytes starting at c-addr
+static void w_type(void) {
+    cell_t u = pop();
+    const char *s = (const char *)pop();
+    if (!s) return;
+    for (cell_t i = 0; i < u; i++) put_char(s[i]);
+}
 
 // ----- Dictionary Helpers -----
 static void add_primitive(const char *name, word_fn_t fn, bool imm = false) {
@@ -307,6 +372,7 @@ static bool parse_number(const char *word, cell_t *val) {
 #define CODE_LOOP     (-6)   // loop increment, next cell is branch target
 #define CODE_PLOOP    (-7)   // +loop increment, next cell is branch target
 #define CODE_DOTQUOTE (-8)   // next cell is string length, then chars
+#define CODE_SQUOTE   (-9)   // s" : next cell is length, then chars; pushes (addr len)
 
 static void execute_code(int start) {
     int ip = start;
@@ -355,7 +421,16 @@ static void execute_code(int start) {
         } else if (op == CODE_DOTQUOTE) {
             int len = (int)code[ip++];
             const char *str = (const char *)&code[ip];
-            for (int i = 0; i < len; i++) io_putchar(str[i]);
+            for (int i = 0; i < len; i++) put_char(str[i]);
+            ip += (len + sizeof(cell_t) - 1) / sizeof(cell_t);
+        } else if (op == CODE_SQUOTE) {
+            // Push address of the inline string and its length, then skip it.
+            // The string lives in the (persistent) code array, so the address
+            // is stable for the life of the colon definition.
+            int len = (int)code[ip++];
+            const char *str = (const char *)&code[ip];
+            push((cell_t)str);
+            push((cell_t)len);
             ip += (len + sizeof(cell_t) - 1) / sizeof(cell_t);
         } else if (op >= 0 && op < dict_count) {
             execute_word((int)op);
@@ -517,6 +592,34 @@ static void interpret_token(const char *token) {
         return;
     }
 
+    // Handle s" — push ( c-addr u ) for the string up to the closing ".
+    // Works in both modes. Interpret mode copies into a small rotating set of
+    // transient buffers so the address survives long enough to be consumed on
+    // the same line (e.g.  s" hi" type  or  s" hi" mn-chat ).
+    if (strcasecmp(token, "s\"") == 0) {
+        char str[256];
+        int len = read_until('"', str, sizeof(str));
+        if (compiling) {
+            code[code_ptr++] = CODE_SQUOTE;
+            code[code_ptr++] = len;
+            int cells_needed = (len + sizeof(cell_t) - 1) / sizeof(cell_t);
+            memset(&code[code_ptr], 0, cells_needed * sizeof(cell_t));
+            memcpy(&code[code_ptr], str, len);
+            code_ptr += cells_needed;
+        } else {
+            static char sbuf[4][256];
+            static int  sbuf_idx = 0;
+            char *dst = sbuf[sbuf_idx];
+            sbuf_idx = (sbuf_idx + 1) & 3;
+            if (len > 255) len = 255;
+            memcpy(dst, str, len);
+            dst[len] = '\0';
+            push((cell_t)dst);
+            push((cell_t)len);
+        }
+        return;
+    }
+
     // Handle ( comment
     if (strcmp(token, "(") == 0) {
         char dummy[256];
@@ -610,6 +713,7 @@ static void interpret_token(const char *token) {
             code[code_ptr++] = val;
             return;
         }
+        error_count++;
         put_string("? compile: ");
         put_string(token);
         put_string("\n");
@@ -629,6 +733,7 @@ static void interpret_token(const char *token) {
         return;
     }
 
+    error_count++;
     put_string("? ");
     put_string(token);
     put_string("\n");
@@ -1073,6 +1178,9 @@ static void w_test(void) {
 extern "C" {
 
 int forth_init(int heap_size_bytes) {
+#ifdef ESP_PLATFORM
+    if (!s_engine_lock) s_engine_lock = xSemaphoreCreateRecursiveMutex();
+#endif
     heap_mem = (uint8_t *)malloc(heap_size_bytes);
     if (!heap_mem) return -1;
     heap_total = heap_size_bytes;
@@ -1149,6 +1257,7 @@ int forth_init(int heap_size_bytes) {
     add_primitive("@", w_fetch);
     add_primitive("c!", w_cstore);
     add_primitive("c@", w_cfetch);
+    add_primitive("type", w_type);
 
     add_primitive("mem", w_mem);
     add_primitive("free-heap", w_free_heap);
@@ -1199,13 +1308,15 @@ void forth_repl(int (*get_char)(void), void (*put_char)(int)) {
             continue;  /* Ignore \n, handle \r only (terminals send \r\n) */
         }
         if (ch == '\r') {
-            io_putchar('\r');
-            io_putchar('\n');
+            put_char('\r');
+            put_char('\n');
             line[pos] = '\0';
             if (pos > 0) {
+                engine_lock();
                 interpret_line(line);
-                io_putchar('\r');
-                io_putchar('\n');
+                engine_unlock();
+                put_char('\r');
+                put_char('\n');
             }
             pos = 0;
             if (running) {
@@ -1219,17 +1330,89 @@ void forth_repl(int (*get_char)(void), void (*put_char)(int)) {
             }
         } else if (ch >= 32 && pos < MAX_INPUT - 1) {
             line[pos++] = (char)ch;
-            io_putchar(ch);  // echo
+            put_char(ch);  // echo
         }
     }
 
     put_string("Bye!\n");
 }
 
+void forth_set_io(int (*get_char)(void), void (*put_char)(int)) {
+    io_getchar = get_char;
+    io_putchar = put_char;
+}
+
 int forth_eval(const char *text) {
     if (!heap_mem) return -1;
+    engine_lock();
     interpret_line(text);
+    engine_unlock();
     return 0;
+}
+
+int forth_word_exists(const char *name) {
+    if (!name || !heap_mem) return 0;
+    engine_lock();
+    int idx = find_word(name);
+    engine_unlock();
+    return idx >= 0;
+}
+
+void forth_save(forth_savepoint_t *sp) {
+    if (!sp) return;
+    sp->dict_count = dict_count;
+    sp->code_ptr   = code_ptr;
+    sp->heap_used  = heap_used_bytes;
+}
+
+void forth_restore(const forth_savepoint_t *sp) {
+    if (!sp) return;
+    /* Truncation only — never grow. Restoring "forward" onto a dictionary that
+     * has since shrunk would expose entries whose code has been overwritten. */
+    if (sp->dict_count < dict_count) dict_count      = sp->dict_count;
+    if (sp->code_ptr   < code_ptr)   code_ptr        = sp->code_ptr;
+    if (sp->heap_used  < heap_used_bytes) heap_used_bytes = sp->heap_used;
+    /* A failed definition can leave the interpreter mid-compile; a rollback
+     * that left `compiling` set would swallow the next line of input. */
+    compiling = false;
+}
+
+int forth_error_count(void) { return error_count; }
+
+int forth_eval_rollback(const char *text, size_t len,
+                        char *fail_line, size_t fail_cap) {
+    if (fail_line && fail_cap) fail_line[0] = '\0';
+    if (!text || !heap_mem) return -1;
+
+    /* Private copy: strtok_r mutates, and callers want the original intact
+     * so a successfully-applied bundle can be persisted verbatim. */
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) return -1;
+    memcpy(copy, text, len);
+    copy[len] = '\0';
+
+    engine_lock();
+    forth_savepoint_t sp;
+    forth_save(&sp);
+    int errs_before = error_count;
+
+    /* Line at a time: stopping at the FIRST bad line means the failure names
+     * the actual problem instead of the last line of the file. */
+    int rc = 0;
+    char *save = NULL;
+    for (char *line = strtok_r(copy, "\r\n", &save); line;
+         line = strtok_r(NULL, "\r\n", &save)) {
+        interpret_line(line);
+        if (error_count != errs_before) {
+            if (fail_line && fail_cap) snprintf(fail_line, fail_cap, "%s", line);
+            rc = 1;
+            break;
+        }
+    }
+    free(copy);
+    if (rc != 0) forth_restore(&sp);
+    engine_unlock();
+    return rc;
 }
 
 int forth_heap_used(void) {
@@ -1242,7 +1425,9 @@ int forth_heap_free(void) {
 
 int forth_register_word(const char *name, forth_word_fn fn) {
     if (dict_count >= MAX_WORDS) return -1;
+    engine_lock();
     add_primitive(name, fn);
+    engine_unlock();
     return 0;
 }
 

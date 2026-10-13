@@ -42,9 +42,10 @@ JSON object. All fields required unless noted.
 | `caps_req` | array of strings | Capabilities the role needs. The node refuses install if its own caps don't cover this list. (E.g. spy bundle requires `camera` — refused on a Scribe.) |
 | `deps` | array of strings | Other bundles the role expects to be installed first. Empty for v1; the install pipeline doesn't enforce ordering yet. |
 | `crc32` | hex string | CRC-32 of the **decoded** Forth source. Independent of signature, defends against base64 corruption in transit. |
-| `sig_alg` | string | Signature algorithm. v1 supports `hmac-sha256`. v2 will add `ed25519`. |
+| `sig_alg` | string | Signature algorithm: `hmac-sha256` (v1) or `ed25519` (v2, implemented 2026-08-14). |
 | `sig` | hex string | Signature over the canonical signing input (below). Length depends on alg. |
 | `src_b64` | base64 string | Forth source code, base64-encoded. Decoded length ≤ 4096 bytes for v1 (single-frame KV value cap). |
+| `tick_ms` | integer, optional | H5 lifecycle: cadence for the host-driven `role-tick` timer. Default 1000, clamped to 100..60000. Like `caps_req`, sits **outside** the v1 canonical signing input — a known limitation of the fixed six-field signature. |
 
 ### Canonical signing input
 
@@ -61,8 +62,12 @@ sig = HMAC-SHA256(shared_key, signing_input)  # 32 bytes hex-encoded
 
 For `sig_alg = "ed25519"` (v2):
 ```
-sig = Ed25519-Sign(author_privkey, signing_input)  # 64 bytes hex-encoded
+sig = Ed25519-Sign(author_privkey, signing_input)  # 64 bytes hex-encoded (128 hex chars)
 ```
+
+Note the deliberate difference from the WaveC6LED OTA server convention (which signs
+the hex SHA256 of the payload): role bundles sign the **canonical pipe-string
+directly** — same input for both algorithms, only the primitive changes.
 
 ## Trust model
 
@@ -70,11 +75,24 @@ sig = Ed25519-Sign(author_privkey, signing_input)  # 64 bytes hex-encoded
 
 Bundles are signed with the same 32-byte `CRAW_HIVE_DEV_SECRET` used for hive-protocol HMACs. **This means anyone who can verify can also sign** — the model is "nodes trust holders of the shared secret to publish bundles." Adequate for development and demo deployments where all hardware ships with the same key. Inadequate for production: a leak of one node's firmware leaks the publisher key.
 
-### v2 (planned) — Ed25519 with per-author public keys
+### v2 — Ed25519 with per-author public keys (implemented 2026-08-14, punch-list H3)
 
 Each `author` has a 32-byte public key baked into the node's firmware via `components/craw_role_bundle/keys.h`. Authors hold private keys offline. Adding a new trusted author requires reflash. This matches the threat model where individual nodes can be physically compromised but firmware integrity is preserved (signed boot, etc.).
 
-The `sig_alg` field exists from v1 specifically so a single node can support both schemes during the migration: receive v1 bundles signed with HMAC, and v2 bundles signed with Ed25519, choosing the verification path at runtime.
+The `sig_alg` field exists from v1 specifically so a single node can support both schemes during the migration: receive v1 bundles signed with HMAC, and v2 bundles signed with Ed25519, choosing the verification path at runtime. Implementation notes:
+
+- The trust store may hold one entry **per (author, algorithm)** pair; lookup matches
+  both. The dev store carries `iotone-dev` twice — HMAC (legacy) and Ed25519.
+- Verification goes through the shared **`magnet_crypto`** component (vendored
+  TweetNaCl — mbedTLS ships no EdDSA), the same implementation the WaveC6LED OTA
+  path uses.
+- The dev keypair: public half in `keys.h` (`CRAW_ROLE_BUNDLE_DEV_ED25519_PUB`),
+  private seed in `scripts/dev_ed25519.key` — committed on purpose as a DEV key,
+  same posture as the dev HMAC secret. Production authors keep seeds offline.
+- `scripts/sign_bundle.py --alg ed25519` signs with the dev seed by default, or
+  `--key-file <hex-seed>` for a production key. It uses the `cryptography` package
+  when importable and otherwise a bundled pure-Python RFC 8032 fallback; both
+  produce identical (deterministic) signatures.
 
 ## Install pipeline
 
@@ -90,10 +108,37 @@ The `sig_alg` field exists from v1 specifically so a single node can support bot
 | CRC32 over decoded source matches `crc32` | `BUNDLE_ERR_CRC` | Source mutated after signing (shouldn't happen if sig passed; double-defends) |
 | Check `caps_req` ⊂ node's `caps` | `BUNDLE_ERR_CAPS` | Spy bundle on a Scribe-only node |
 | Compare `version` against persisted last-version for `name` | `BUNDLE_ERR_VERSION` | Downgrade attempted (allowed only with explicit `--allow-downgrade` flag, future) |
-| `forth_eval_n(decoded_src, decoded_len)` | `BUNDLE_ERR_EVAL` | Forth syntax error or runtime fault |
+| Savepoint → line-at-a-time `forth_eval` → restore on first error | `BUNDLE_ERR_EVAL` | Undefined word or syntax error anywhere in the source. **The dictionary is rolled back to its pre-install state** — no partial definitions survive, and any word a partial install had shadowed is visible again. The failing source line is reported in `result->err_detail`. |
 | Persist envelope to NVS | `BUNDLE_ERR_NVS` | NVS write fails (rare; bundle is still active in RAM) |
 
 On success, the bundle's Forth words are registered in the global vocabulary and its top-level body has been executed once. The node persists `name`, `version`, and the full envelope so the same role auto-resumes on next boot without re-fetching.
+
+The eval step's rollback (added 2026-08-14, punch-list H2) relies on `forth_save()` /
+`forth_restore()` / `forth_error_count()` from ESPIDFORTH ≥ 0.3.0. The mechanism is a
+truncation of the append-only dictionary's fill cursors — it undoes *definitions*, not
+side effects: stack contents and any C-side state mutated through FFI words during the
+partial install are not restored. Bundles that mutate state before their last definition
+line should be written to tolerate that (or defer side effects to `role-init`, once the
+role lifecycle convention lands).
+
+## Apply-result reporting (punch-list H4, 2026-08-14)
+
+After every install attempt triggered by `ROLE_GRANT` — success *or* failure — the node
+publishes the outcome into the hive KV so the ruler can distinguish a node **running**
+a role from one that failed to install it:
+
+```
+key   = applied:<node_id>            (KV key cap is 32 chars, so the earlier
+                                      role:<id>:applied sketch didn't fit)
+value = {"name":"eye","version":"1.0.0","ok":true,"ts":1755180000}
+value = {"name":"eye","ok":false,"err":-9,"field":"src",
+         "at":": BAD-WORD MISSING-THING ;","ts":1755180000}
+```
+
+`craw_role_bundle_format_applied_json()` builds the value (sanitizing the failing line
+for JSON embedding); the node main sends it via `craw_hive_node_kv_put()`. Visible on
+the ruler through the existing `kv-list` / `kv-get` words. The `at` field carries the
+failing source line captured by the rollback path.
 
 ## NVS persistence
 
@@ -116,30 +161,63 @@ python sign_bundle.py /tmp/spy.forth \
   --author iotone-dev \
   --caps-req "camera,jpeg" \
   > spy.json
+
+# v2 — Ed25519 (preferred; dev key picked up automatically):
+python sign_bundle.py /tmp/spy.forth --alg ed25519 \
+  --name spy --version 1.0.0 --author iotone-dev \
+  --caps-req "camera,jpeg" > spy.json
 ```
 
 The output `spy.json` is ready to either:
 - POST to a Scribe via `KV_PUT key=bundle:spy`, or
 - Embed in a Ruler firmware as a bootstrap fallback (Step 3+).
 
-## Forth role conventions
+## Forth role conventions — the H5 lifecycle (2026-08-14)
 
-A role bundle's Forth source is just regular ESPIDFORTH. Conventional structure:
+Bundles cannot loop, and they don't need to: a bundle defines up to four
+conventional words and the **host firmware owns the timer**.
+
+| Word | Called when | Contract |
+|---|---|---|
+| `role-init` | once, at install (after the source evals) | Set up state. **Failure rolls the whole bundle back** — a role that cannot set up must not half-exist. |
+| `role-tick` | every `tick_ms` from a host task | **Must return promptly.** One unit of work. The task is sequential, so an overrunning tick delays the next one (and increments a counter) — it never stacks. |
+| `role-stop` | before this role is replaced, or on shutdown | Release anything `role-init` claimed. Called while the *old* definitions are still live. |
+| `role-status` | on demand (REPL, ruler query) | Print or push one status line. |
+
+All four are optional — a one-shot bundle simply omits `role-tick`. Words are invoked
+by **name** through `forth_eval()`, so redefinition and rollback are always respected.
+One active tick role per node (v1). Requires ESPIDFORTH ≥ 0.5.0 (`forth_word_exists`
++ internally-serialized engine) and craw_role_bundle ≥ 0.3.0.
 
 ```forth
-\ Role: spy v1.0.0 — periodic camera snapshot loop.
-\ Calls FFI words registered by the host firmware.
-
-: spy-snap-once   cam-snap drop ;
-: spy-loop        begin spy-snap-once 5000 ms again ;
-
-\ The bundle is evaluated once at install time. To run a loop, either:
-\   - schedule it as a forth task (when supported)
-\   - or define the words and let the host firmware invoke them on a timer.
-spy-snap-once   \ one-shot capture as install-time confirmation
+\ Role: spy-snapper — periodic capture through the lifecycle.
+: snap        cam-snap drop ;
+: role-init   snap ;          \ one confirmation capture at install
+: role-tick   snap ;          \ periodic; cadence = envelope tick_ms
+: role-status ." spy-snapper ticking" cr ;
 ```
 
-Bundles SHOULD avoid blocking forever at top level — the install task is shared and a runaway bundle blocks subsequent installs. Either define words and return, or use cooperative yields.
+Note what this contains no trace of: no loop, no sleep, no blocking. That is the
+property that makes a bundle safe to hot-swap.
+
+Top-level execution at install time still works but is discouraged — put install-time
+behavior in `role-init`, where a failure is rolled back and reported.
+
+### Hive KV words for bundles (H8)
+
+The per-node `kv-get` / `kv-put` REPL words are interactive (they prompt on the
+console) and would hang a `role-tick`. Bundles use the stack-based trio instead,
+registered by `craw_role_bundle_register_hive_words()` on every bundle-capable node:
+
+| Word | Stack effect | Semantics |
+|---|---|---|
+| `hkv-put$` | `( v-addr v-len k-addr k-len -- )` | Fire-and-forget KV_PUT |
+| `hkv-get$` | `( k-addr k-len -- v-addr v-len -1 \| 0 )` | Value into a static buffer (≤ 256 bytes — DRAM-tight hosts; longer values truncate) |
+| `hkv-run` | `( k-addr k-len -- )` | Fetch; if non-empty: **clear the key, then evaluate the value as Forth** — at-most-once command execution. The generalized `boombox:cmd` pattern: hive commands are Forth phrases. |
+
+`hkv-run` is what makes Worker/Beeper/Pet/Warrior one-liners: the Ruler leaves a
+Forth phrase in the role's command key (`s" 1200 100 buzz" s" beeper:cmd" hkv-put$`
+from any node, or `kv-set` on the ruler), and the role's next tick executes it.
 
 ## Versioning the format itself
 

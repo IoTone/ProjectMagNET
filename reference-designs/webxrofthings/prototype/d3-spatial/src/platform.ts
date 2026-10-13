@@ -35,6 +35,11 @@
  * Spectacles build stops masquerading):
  *   - Snap Spectacles : userAgent contains "Spectacles"  (NOT TRIPPED TODAY)
  *   - Meta Quest 3    : userAgent contains "OculusBrowser" and "Quest"
+ *   - Android XR      : Chromium on Android, NO "OculusBrowser" token
+ *                       (e.g. "Android 10 ... Chrome/138" on the
+ *                       Samsung/Google Android XR glasses) — Chromium-based,
+ *                       so it renders WebGL float-texture Gaussian splats
+ *                       fine, unlike Spectacles' WebKit runtime.
  */
 
 /** Test-only override of the UA the detectors below see. `null` = use the
@@ -76,12 +81,32 @@ export function isQuest(): boolean {
 }
 
 /**
+ * `true` when running on an Android XR device — a Chromium browser on
+ * Android that is NOT Quest's OculusBrowser. The reference device reports
+ * "Android 10 … Chrome/138". Unlike Spectacles (WebKit, can't render
+ * mkkellogg Gaussian splats), Android XR is Chromium and renders splats
+ * fine, so the splat-gallery treats it like Quest/desktop rather than
+ * falling back to the flat-image carousel.
+ *
+ * Caveat: a plain Android phone's Chrome also matches this. That's fine
+ * for the only thing the flag currently gates — "is this runtime
+ * splat-capable?" — where the answer is "yes" for any Chromium-on-Android.
+ * If a future call site needs to distinguish glasses from a phone, switch
+ * to a runtime probe (XR session features) per the file header.
+ */
+export function isAndroidXR(): boolean {
+  const s = ua();
+  return /Android/i.test(s) && /Chrome/i.test(s) && !isQuest();
+}
+
+/**
  * Short name useful for debug HUDs. Returns 'desktop' for any non-XR-
  * recognised UA (the smoke harness, dev preview, etc.).
  */
-export function platformName(): 'spectacles' | 'quest' | 'desktop' {
+export function platformName(): 'spectacles' | 'quest' | 'androidxr' | 'desktop' {
   if (isSpectacles()) return 'spectacles';
   if (isQuest())      return 'quest';
+  if (isAndroidXR())  return 'androidxr';
   return 'desktop';
 }
 

@@ -1,0 +1,15 @@
+{
+  "name": "eye",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [
+    "camera"
+  ],
+  "deps": [],
+  "crc32": "2d36f3d1",
+  "sig_alg": "ed25519",
+  "sig": "7e7998ea6edffffbf99a074902caac788a70ac096e788f8d24edb18c69ac838cf3ce29823e03d557ead5707e917d9c999ea210171f623786e4b3bace69b1ed0b",
+  "src_b64": "XCBSb2xlIDExOiBFeWUg4oCUIGNhcHR1cmUgb24gYSBjYWRlbmNlLCB0ZWxsIHRoZSBoaXZlLgpcIEhvc3Q6IE01X0hpdmVfQ2FtZXJhIChjYW0tc25hcCArIGhrdiB3b3JkcykuClwgY2Fwc19yZXE6IFsiY2FtZXJhIl0gIHRpY2tfbXM6IDUwMDAKdmFyaWFibGUgZXllLXNlcQo6IHJvbGUtaW5pdCAgIDAgZXllLXNlcSAhICBjYW0tc25hcCBkcm9wIDsKOiByb2xlLXRpY2sKICAgIGNhbS1zbmFwIGRyb3AKICAgIGV5ZS1zZXEgQCAxICsgZXllLXNlcSAhCiAgICBzIiBzbmFwIiBzIiBleWU6bGFzdCIgaGt2LXB1dCQgOwo6IHJvbGUtc3RhdHVzIC4iIGV5ZSBzZXE9IiBleWUtc2VxIEAgLiBjciA7Cg==",
+  "tick_ms": 5000
+}

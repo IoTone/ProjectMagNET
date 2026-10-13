@@ -1,0 +1,52 @@
+# Waveshare ESP32-C6-LCD-1.47 — 4 MB flash, 512 KB HP SRAM, no PSRAM.
+# The Touch variant (ESP32-C6-Touch-LCD-1.47, C6FH8, 8 MB flash) builds from
+# the same tree: pick it under "MagNET board" (CONFIG_MAGNET_BOARD_WAVEC6TOUCH=y).
+# The 4 MB partition table fits either part.
+#
+# IDF >= 5.1.4 REQUIRED for the C6FH8 (chip rev v0.2): under 5.1.1 the analog
+# register bus never clears its busy bit during early clock init and the board
+# boot-loops on TG0_WDT_HPSYS before app_main — with PC in
+# esp_rom_regi2c_write_mask. Built and verified with v5.4.4 (2026-09-10).
+CONFIG_IDF_TARGET="esp32c6"
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Custom table (partitions.csv): 3 MB app + ~960 KB spiffs. The default 1 MB app
+# was already 90% full at D2 with WiFi + HTTP + cJSON linked, and D3 adds
+# mbedTLS. Still a SINGLE app slot — Forth bundles are source, not app images,
+# so no ota_0/ota_1 pair is needed.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Console: LEAVE AT THE DEFAULT (UART). Setting
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y makes USB-serial-JTAG the *only* console,
+# and IDF 5.1.1 then fails to build:
+#   esp_hw_support/sleep_modes.c:153: 'CONFIG_ESP_CONSOLE_UART_BAUDRATE'
+#   undeclared
+# because sleep_modes.c references it unconditionally while the USB-only path
+# never defines it. Do not "fix" this by re-adding the flag.
+#
+# It costs us nothing: the REPL writes through usb_serial_jtag_write_bytes()
+# directly rather than through the console, exactly as ESPIDFORTH does, so the
+# USB-C port is the working I/O path regardless of what the console is set to.
+# The secondary console below puts ESP_LOGx on USB too.
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# D1: WiFi ON. The ESPIDFORTH C6 config had this disabled "to conserve memory"
+# and networking on this target was unproven, so the first job of D1 is to turn
+# it on and MEASURE rather than assume it fits in 512 KB alongside Forth.
+CONFIG_ESP_WIFI_ENABLED=y
+# R3: BLE ON, NimBLE host (the only host IDF supports on the C6). The relay
+# pipe advertises from boot. Measured cost on this board: see the boot log's
+# "heap after ble" line — budget ~45 KB of internal RAM.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+# ATT MTU: frames follow the negotiated value; ask for the max.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517

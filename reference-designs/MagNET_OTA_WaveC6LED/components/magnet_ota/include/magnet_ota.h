@@ -1,0 +1,102 @@
+/*
+ * magnet_ota — the OTA supervisor.
+ *
+ * Native C with a thin Forth vocabulary over it, because ESPIDFORTH's ESP-IDF
+ * engine is a STUB scheduled for replacement by the full ESP32forth v7.0.8.0.
+ * Logic written against the stub's internals gets rewritten at that swap; logic
+ * in C behind a handful of registered words survives it, and only the
+ * registration shim moves.
+ */
+#pragma once
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
+struct magnet_transport;
+#include "esp_err.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    OTA_ERROR  = -1,
+    OTA_NOOP   = 0,
+    OTA_UPDATE = 1,
+} ota_action_t;
+
+typedef struct {
+    long release_id;
+    char version[32];
+    char name[64];
+    char sha256[72];
+    long size_bytes;          /* from check-in release.file_size_bytes; 0 = unknown */
+    char download_url[256];
+    char signature_url[256];
+    long expires_unix;
+} ota_release_t;
+
+esp_err_t    ota_init(void);
+
+/*
+ * Perform a check-in. ONE CALLER ONLY — the poll task in main.c owns this.
+ * Anything else asks via ota_request_checkin().
+ *
+ * Two tasks calling it concurrently was not merely a race: the poll task
+ * succeeded every 60 s while an identical console-issued request failed to TCP
+ * connect, on a device answering pings in 6 ms. Rather than explain why two
+ * esp_http_client users on this chip behave differently, there is now one.
+ */
+ota_action_t ota_checkin(void);
+
+/* Ask the poll task to check in now. Returns immediately; watch ota_last_status()
+ * or the [checkin] log line for the outcome. */
+void         ota_request_checkin(void);
+
+/* Blocks until nudged or until timeout_ms elapses. Poll task only. */
+bool         ota_wait_checkin_request(uint32_t timeout_ms);
+
+/* Valid only after ota_checkin() returned OTA_UPDATE. */
+const ota_release_t *ota_pending(void);
+
+/* Last outcome in words, for the screen and the console. */
+const char  *ota_last_status(void);
+
+/* R3: "ip" or "relay" — whichever the NEXT request would use. */
+const char  *ota_transport_name(void);
+
+/* R2 — mDNS discovery of the server (mdns_discover.c). DISCOVER runs a
+ * one-shot `_robotarme._tcp` query and caches the winner until reboot or the
+ * next call; DISCOVERED-URL is that cache or NULL. transport_ip falls back to
+ * it only when NVS `server_url` is unset — an explicit URL always wins. */
+bool         ota_discover_server(uint32_t timeout_ms);
+const char  *ota_discovered_url(void);
+
+/* D3: fetch the pending release and PROVE it before anything may run it.
+ * Signature descriptor first, then the body, then SHA256, then Ed25519. */
+bool         ota_fetch_and_verify(struct magnet_transport *tx, const ota_release_t *rel);
+const char  *ota_verify_status(void);
+/* Fetch + verify whatever the last check-in flagged. Poll task / console. */
+bool         ota_fetch_pending(void);
+const uint8_t *ota_bundle(size_t *len);
+
+/* D4: evaluate a VERIFIED bundle, roll back on failure, report the outcome. */
+bool         ota_apply(struct magnet_transport *tx, const ota_release_t *rel);
+const char  *ota_apply_status(void);
+
+/* Re-evaluate the bundle persisted by the last successful apply (H4: the
+ * dictionary is RAM — without this a power cycle silently reverts behaviour
+ * while the device still reports itself up to date). Call once at boot,
+ * after forth_init() + word registration, before the check-in loop.
+ * Returns 1 re-applied, 0 nothing persisted, -1 persisted bundle failed
+ * (rolled back; next check-in converges on a fresh release). */
+int          ota_apply_saved(void);
+/* Fetch, verify, apply and report whatever the last check-in flagged. */
+bool         ota_apply_pending(void);
+
+/* Register the OTA-* words. The ONLY file that changes when the Forth engine
+ * is swapped for the full ESP32forth. */
+void         ota_register_forth_words(void);
+
+#ifdef __cplusplus
+}
+#endif

@@ -45,4 +45,21 @@ final class MQTTMessageTests: XCTestCase {
     func testEmptyTopicSegmentsRejected() {
         XCTAssertNil(MQTTMessage.parse(topic: "justone", payload: "0|m|0|0|0|h"))
     }
+
+    /// `#` matches the parent level too, so the bare base topic shows up on the
+    /// subscription. It has no session segment and must not become a session.
+    func testParentTopicWithoutSessionSegmentRejected() {
+        XCTAssertNil(MQTTMessage.parse(topic: "iotj/cl/openwr/updates/b7a4",
+                                       payload: "2|unknown|-1|-1|0|MacBook-BR0"))
+    }
+
+    func testForeignTopicPrefixRejected() {
+        XCTAssertNil(MQTTMessage.parse(topic: "somewhere/else/b7a4/id1",
+                                       payload: "2|opus|1|2|0|h"))
+    }
+
+    func testExtraTopicSegmentsRejected() {
+        XCTAssertNil(MQTTMessage.parse(topic: "iotj/cl/openwr/updates/b7a4/id1/extra",
+                                       payload: "2|opus|1|2|0|h"))
+    }
 }

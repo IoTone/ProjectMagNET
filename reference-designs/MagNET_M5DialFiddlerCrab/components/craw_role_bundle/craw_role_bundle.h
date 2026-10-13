@@ -1,6 +1,6 @@
 #ifndef CRAW_ROLE_BUNDLE_H
 #define CRAW_ROLE_BUNDLE_H
-#define CRAW_ROLE_BUNDLE_VERSION "0.1.0"
+#define CRAW_ROLE_BUNDLE_VERSION "0.5.0"
 
 // craw_role_bundle — Phase-4 Milestone-C step 2.
 //
@@ -35,7 +35,7 @@ typedef enum {
     BUNDLE_ERR_CRC        = -6,  // crc32 over source doesn't match envelope
     BUNDLE_ERR_CAPS       = -7,  // node caps don't cover bundle caps_req
     BUNDLE_ERR_VERSION    = -8,  // refused downgrade
-    BUNDLE_ERR_EVAL       = -9,  // forth_eval_n returned non-zero
+    BUNDLE_ERR_EVAL       = -9,  // Forth eval failed; install rolled back, no trace left
     BUNDLE_ERR_NVS        = -10, // failed to persist envelope (still installed)
     BUNDLE_ERR_INTERNAL   = -11, // memory / runtime
 } craw_role_bundle_err_t;
@@ -53,6 +53,7 @@ typedef struct {
     craw_role_bundle_err_t  status;
     craw_role_bundle_info_t info;       // populated when status==BUNDLE_OK
     char                    err_field[24];   // diagnostic: which field failed
+    char                    err_detail[80];  // on BUNDLE_ERR_EVAL: the failing source line
 } craw_role_bundle_install_result_t;
 
 // One-time setup. Idempotent.
@@ -60,7 +61,11 @@ void craw_role_bundle_init(void);
 
 // Validate + install the bundle. node_caps is an array of cap strings the
 // node advertises (e.g. {"camera","jpeg"}) of length n_caps. On BUNDLE_OK
-// the bundle's Forth source has been forth_eval_n()'d and persisted to NVS.
+// the bundle's Forth source has been evaluated into the dictionary and
+// persisted to NVS. Evaluation is line-at-a-time behind a dictionary
+// savepoint: on the first failing line the install stops, the dictionary is
+// rolled back to its pre-install state (BUNDLE_ERR_EVAL, failing line in
+// result->err_detail), and no partial definitions survive.
 // Pass result=NULL if you don't need the diagnostic detail.
 int craw_role_bundle_install_from_json(const char *json,
                                        const char **node_caps, int n_caps,
@@ -70,6 +75,33 @@ int craw_role_bundle_install_from_json(const char *json,
 // so a node auto-resumes its last role without re-fetching from the hive.
 // Returns the number of bundles successfully reapplied.
 int craw_role_bundle_apply_saved(const char **node_caps, int n_caps);
+
+/* Result of the last craw_role_bundle_apply_saved(): bundles found, and how
+ * many of those failed to re-install (OTA health, OTA-PACKAGE §7.4). */
+void craw_role_bundle_boot_stats(int *found, int *failed);
+
+// The hkv-put$ / hkv-get$ / hkv-run Forth words moved to the separate
+// craw_role_hive_words component (H6) so this engine has no craw_hive
+// dependency and ports to non-WiFi transports (Hanasu/Thread).
+
+// ---- Role lifecycle (punch-list H5) ----
+// Bundles may define role-init / role-tick / role-stop / role-status. The
+// HOST owns the timer: after a successful install, if role-tick exists it is
+// invoked every tick_ms (envelope field; default 1000, clamped 100..60000)
+// from a dedicated task. role-init runs once at install and a failure rolls
+// the whole bundle back. One active tick role per node.
+
+// Stop the active role: halts the tick task (bounded wait) and calls the
+// bundle's role-stop word if defined. Called automatically before a new
+// bundle installs; callable directly for shutdown paths.
+void craw_role_bundle_role_stop(void);
+
+// Ticks that ran past their period since the current role started (the
+// task is sequential, so overruns delay — they never stack).
+int craw_role_bundle_tick_overruns(void);
+
+// Name of the currently ticking role, or NULL if none.
+const char *craw_role_bundle_tick_role(void);
 
 // Erase a single role's persisted bundle (does NOT undo a running bundle's
 // effects on the live Forth vocabulary — those persist until reboot).
@@ -83,6 +115,22 @@ int craw_role_bundle_forget_all(void);
 typedef int (*craw_role_bundle_iter_cb_t)(const char *name, const char *version,
                                           void *ctx);
 int craw_role_bundle_iterate(craw_role_bundle_iter_cb_t cb, void *ctx);
+
+// Format the hive apply-report value (punch-list H4). Convention:
+//   key   = "applied:<node_id>"        (the hive KV key cap is 32 chars, so
+//                                       the review's role:<id>:applied form
+//                                       doesn't fit — prefix-grouped instead)
+//   value = {"name","version","ok":true,"ts"}                on success
+//           {"name","ok":false,"err","field","at","ts"}      on failure
+// role_fallback names the role when the envelope never parsed (result->info
+// is only populated on BUNDLE_OK). The failing line ("at") is sanitized for
+// JSON embedding. Returns 0, or -1 if buf is too small.
+// The caller sends it: craw_hive_node_kv_put(key, value) — which finally
+// lets the ruler distinguish a node RUNNING a role from one that failed to
+// install it.
+int craw_role_bundle_format_applied_json(const craw_role_bundle_install_result_t *r,
+                                         const char *role_fallback,
+                                         char *buf, size_t buf_len);
 
 // Compute the canonical signing input for a bundle. Caller-allocated buf;
 // returns required length (excluding NUL) or -1 on error. Useful for

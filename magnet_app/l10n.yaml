@@ -1,0 +1,15 @@
+# R4 / U5 — Flutter l10n codegen config.
+#
+# The generator reads every `lib/l10n/app_<locale>.arb`, generates
+# `lib/gen/app_localizations*.dart`, and exposes them via the
+# `AppLocalizations` class which the app reads via
+# `AppLocalizations.of(context)!.someString`.
+#
+# Template locale is English; everything else is checked against it.
+
+arb-dir: lib/l10n
+template-arb-file: app_en.arb
+output-localization-file: app_localizations.dart
+output-class: AppLocalizations
+output-dir: lib/gen
+nullable-getter: false

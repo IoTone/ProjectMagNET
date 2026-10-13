@@ -1,0 +1,460 @@
+/*
+ * MagNET OTA client — Waveshare ESP32-C6-LCD-1.47 ("WaveC6LED")
+ *
+ * D0: Forth REPL over USB-serial-JTAG, ST7789 status screen, RGB LED.
+ * D1: WiFi + NVS-backed provisioning; SSID and IP on screen.
+ * Derived from ESPIDFORTH's src/main.c.
+ */
+#include <stdio.h>
+#include "sdkconfig.h"
+#include <stdarg.h>
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_system.h"
+#include "esp_heap_caps.h"
+#include "driver/usb_serial_jtag.h"
+#include "forth_core.h"
+#include "forth_version.h"
+#include "magnet_ui.h"
+#include "magnet_cfg.h"
+#include "craw_wifi.h"
+#include "console.h"
+#include "magnet_ota.h"
+#include "magnet_relay.h"
+#include "esp_wifi.h"
+
+/* 100 KB dictionary. No PSRAM on this board, and 512 KB of HP SRAM has to also
+ * hold WiFi + TLS from D1 onward, so this stays modest until measured. */
+#define FORTH_HEAP_SIZE (100 * 1024)
+
+/*
+ * usb_serial_jtag_write_bytes() returns the number of bytes it ACCEPTED, which
+ * can be fewer than asked for — the TX buffer is 256 bytes and it does not
+ * block until the rest drains. Treating it as all-or-nothing silently truncates
+ * long output: `show`, whose longest single write is ~60 bytes, worked
+ * perfectly while `help` at ~230 bytes vanished completely and looked like a
+ * command-dispatch bug.
+ *
+ * Loop until the string is actually gone. Same lesson as blit() on the display
+ * side: an API that reports partial completion has to be driven to completion.
+ */
+static void usb_print(const char *s) {
+    /* CHUNK BELOW THE TX BUFFER. usb_serial_jtag_write_bytes() does not do a
+     * partial write when asked for more than its buffer holds (256 bytes here)
+     * — it returns 0. So a 291-byte help text vanished ENTIRELY while every
+     * short string sailed through, which reads as a command-dispatch bug and
+     * sent me auditing strcmp() twice before counting the string.
+     *
+     * Retrying the same oversized request does not help; the request itself has
+     * to be smaller. 128 leaves room for whatever is already queued. */
+    enum { CHUNK = 128 };
+    size_t left = strlen(s);
+    const uint8_t *p = (const uint8_t *)s;
+    int stalls = 0;
+    while (left > 0) {
+        size_t want = left < CHUNK ? left : CHUNK;
+        int n = usb_serial_jtag_write_bytes(p, want, pdMS_TO_TICKS(100));
+        if (n > 0) { p += n; left -= (size_t)n; stalls = 0; continue; }
+        if (++stalls > 20) break;      /* host gone; do not wedge the console */
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+static void usb_printf(const char *fmt, ...) {
+    char buf[160];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    usb_print(buf);
+}
+
+static int repl_getchar(void) {
+    uint8_t c;
+    int n = usb_serial_jtag_read_bytes(&c, 1, pdMS_TO_TICKS(10));
+    return (n <= 0) ? -1 : c;
+}
+
+static void repl_putchar(int c) {
+    uint8_t ch = (uint8_t)c;
+    usb_serial_jtag_write_bytes(&ch, 1, pdMS_TO_TICKS(100));
+}
+
+/* The status screen. Everything the device knows about itself, in the order a
+ * human standing in front of it wants to read it. Redrawn wholesale rather than
+ * diffed — at 172x320 with no framebuffer, a full repaint is cheap and there is
+ * no partial-update state to get wrong. */
+static void draw_status(const char *state, uint16_t state_colour,
+                        unsigned long heap_free) {
+    char line[32];
+    ui_clear(UI_BG);
+
+    ui_fill(0, 0, UI_W, 3, UI_CYAN);
+    ui_text(6, 12, "ROBOTARME", UI_CYAN, UI_BG, 2);
+    ui_text(6, 32, "OTA CLIENT", UI_DIM, UI_BG, 1);
+
+    ui_fill(6, 48, UI_W - 12, 1, UI_DIM);
+
+    ui_text(6, 60, "DEVICE", UI_DIM, UI_BG, 1);
+    ui_text(6, 74, CONFIG_MAGNET_BOARD_NAME, UI_WHITE, UI_BG, 2);
+
+    ui_text(6, 104, "FIRMWARE", UI_DIM, UI_BG, 1);
+    snprintf(line, sizeof(line), "E4TH %s", ESPIDFORTH_VERSION_STRING);
+    ui_text(6, 118, line, UI_AMBER, UI_BG, 2);
+
+    ui_text(6, 148, "STATE", UI_DIM, UI_BG, 1);
+    ui_text(6, 162, state, state_colour, UI_BG, 2);
+
+    /* Check-in outcome in words. An operator in front of the device should be
+     * able to tell "up to date" from "cannot reach the server" without a
+     * serial cable — that distinction is the whole point of having a screen. */
+    ui_text(6, 190, "CHECK-IN", UI_DIM, UI_BG, 1);
+    ui_text(6, 204, ota_last_status(), UI_CYAN, UI_BG, 1);
+
+    /* FREE RAM sat at y=200/214, ON TOP of the CHECK-IN block above — the
+     * two were added in different phases and nobody rendered the whole
+     * screen until tools/screen_render.c existed. Rows now: 228/242. */
+    ui_text(6, 228, "FREE RAM", UI_DIM, UI_BG, 1);
+    snprintf(line, sizeof(line), "%lu KB", heap_free / 1024);
+    ui_text(6, 242, line, UI_WHITE, UI_BG, 2);
+
+    /* Network. An unprovisioned device says so in words rather than leaving a
+     * blank for the reader to interpret. */
+    ui_text(6, 270, "NETWORK", UI_DIM, UI_BG, 1);
+    {
+        char ip[32];
+        if (relay_available()) {
+            /* R3/R4: a proxy is attached; it is where the next request goes
+             * even if WiFi is also up. Say so — the operator holding the
+             * phone (or the cable) should see the device agree. */
+            bool ble = strcmp(relay_pipe_name(), "ble") == 0;
+            ui_text(6, 284, ble ? "BLE RELAY" : "USB RELAY", UI_GREEN, UI_BG, 1);
+            ui_text(6, 298, ble ? pipe_ble_name() : "VIA HOST", UI_WHITE, UI_BG, 1);
+        } else if (craw_wifi_is_connected() && craw_wifi_get_ip_str(ip, sizeof ip)) {
+            char ssid[CFG_MAX];
+            cfg_get(CFG_WIFI_SSID, ssid, sizeof ssid);
+            ui_text(6, 284, ssid[0] ? ssid : "WIFI", UI_GREEN, UI_BG, 1);
+            ui_text(6, 298, ip, UI_WHITE, UI_BG, 1);
+        } else if (cfg_get(CFG_WIFI_SSID, line, sizeof line)) {
+            ui_text(6, 284, "CONNECTING", UI_AMBER, UI_BG, 1);
+            ui_text(6, 298, line, UI_DIM, UI_BG, 1);
+        } else {
+            ui_text(6, 284, "NOT PROVISIONED", UI_DIM, UI_BG, 1);
+            ui_text(6, 298, "SET WIFI SSID", UI_DIM, UI_BG, 1);
+        }
+    }
+
+    ui_fill(0, UI_H - 3, UI_W, 3, UI_CYAN);
+}
+
+/* Redraw on every state change rather than polling: the status screen should
+ * never be a stale claim about the network. */
+static void wifi_event(craw_wifi_event_t ev, void *ctx) {
+    unsigned long freeb = (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    switch (ev) {
+    case CRAW_WIFI_EVENT_CONNECTED: {
+        /* TURN OFF MODEM SLEEP.
+         *
+         * IDF defaults to WIFI_PS_MIN_MODEM, which parks the radio between
+         * beacons. On this AP that produced ~300 ms pings and then outright
+         * unreachability: the board held a valid IP and reported "connected"
+         * while inbound TCP connects failed and it stopped answering ICMP
+         * entirely — which reads as a dead server rather than a sleeping radio.
+         *
+         * This device is mains-powered over USB-C and its whole job is to be
+         * reachable, so there is nothing to save and a lot to lose. If a
+         * battery variant ever appears, power save belongs behind a config
+         * flag, not back as the default. */
+        esp_wifi_set_ps(WIFI_PS_NONE);
+        char ip[32] = "";
+        craw_wifi_get_ip_str(ip, sizeof ip);
+        usb_printf("[wifi] connected, ip %s, heap %lu\r\n", ip, freeb);
+        draw_status("ONLINE", UI_GREEN, freeb);
+        led_rgb(0, 40, 8);
+        break;
+    }
+    case CRAW_WIFI_EVENT_DISCONNECTED:
+        usb_print("[wifi] disconnected\r\n");
+        draw_status("OFFLINE", UI_AMBER, freeb);
+        led_rgb(40, 16, 0);
+        break;
+    case CRAW_WIFI_EVENT_CONNECT_FAILED:
+        usb_print("[wifi] connect FAILED\r\n");
+        draw_status("WIFI FAIL", UI_RED, freeb);
+        led_rgb(48, 0, 0);
+        break;
+    }
+}
+
+/*
+ * The check-in poll. A device that only checks in when someone types a command
+ * is not an OTA client — the whole proposition is that it updates unattended.
+ *
+ * 60 s by default, per docs/prototype-demo-plan.md. The server enforces its own
+ * 5 s per-device cooldown and answers 429 below that, so this interval is the
+ * device being polite rather than the only thing preventing a hammering.
+ */
+#define CHECKIN_PERIOD_MS (60 * 1000)
+
+static void checkin_task(void *arg) {
+    bool settled = false;
+    int  consecutive_failures = 0;
+    /* Give up on a release that has failed repeatedly, rather than re-fetching
+     * and re-failing every minute forever. A bundle with a typo is not going to
+     * start working; retrying it just burns bandwidth, fills the operator's
+     * apply-result history with identical failures, and buries any NEW problem
+     * in the noise. Cleared when the server offers a DIFFERENT release, which is
+     * exactly the signal that someone has fixed it. */
+    long poisoned_release = 0;
+    int  poison_count = 0;
+    /* Let WiFi associate before the first attempt, so a fresh boot does not
+     * open with a spurious "unreachable" on screen. */
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    for (;;) {
+        if (!craw_wifi_is_connected() && !relay_available()) {
+            /* R3: a relay proxy is as good as a network. Without either,
+             * retry SOON, not after a full period. Association typically
+             * completes ~10 s after boot, well past the first tick; sleeping
+             * the whole 60 s here made a healthy device look dead for a minute
+             * after every power-on. */
+            settled = false;
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
+        if (!settled && !relay_available()) {
+            /* (Relay needs no settling: the proxy's network is the proxy's
+             * problem, and a phone that just attached is ready now.)
+             * GOT_IP is not the same as "the network works". A check-in issued
+             * ~2 s after DHCP reliably failed to connect while the identical
+             * request 15 s later succeeded — ARP for the gateway and the route
+             * to the server still have to settle. Firing too early painted
+             * UNREACHABLE on the screen of a device that was perfectly fine,
+             * which is a worse lie than saying nothing yet. */
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            settled = true;
+        }
+        {
+            led_rgb(0, 0, 40);                       /* blue: talking */
+            ota_action_t a = ota_checkin();
+            unsigned long freeb =
+                (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            switch (a) {
+            case OTA_UPDATE: {
+                draw_status("UPDATE", UI_AMBER, freeb);
+                led_rgb(48, 28, 0);
+                /* Fetch, verify, apply, report — unattended. This is the whole
+                 * proposition: nobody types anything. */
+                {
+                    const ota_release_t *pr = ota_pending();
+                    long rid = pr ? pr->release_id : 0;
+                    if (rid != poisoned_release) {   /* a different release: fresh start */
+                        poisoned_release = 0;
+                        poison_count = 0;
+                    }
+                    if (rid && rid == poisoned_release && poison_count >= 3) {
+                        usb_printf("[ota] release %ld failed %d times — not retrying "
+                                   "until a different release is offered\r\n",
+                                   rid, poison_count);
+                        draw_status("APPLY FAIL", UI_RED, freeb);
+                        led_rgb(56, 0, 0);
+                        break;
+                    }
+                }
+                usb_print("[ota] fetching + verifying...\r\n");
+                if (ota_apply_pending()) {
+                    poisoned_release = 0; poison_count = 0;
+                    usb_printf("[ota] %s\r\n", ota_apply_status());
+                    draw_status("APPLIED", UI_GREEN,
+                                heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                    /* Apply sequence: three green pulses, so the change is
+                     * visible from across the room and not only on the LCD. */
+                    for (int k = 0; k < 3; ++k) {
+                        led_rgb(0, 60, 20); vTaskDelay(pdMS_TO_TICKS(120));
+                        led_rgb(0, 0, 0);   vTaskDelay(pdMS_TO_TICKS(120));
+                    }
+                    led_rgb(0, 32, 8);
+                } else {
+                    const ota_release_t *pr = ota_pending();
+                    poisoned_release = pr ? pr->release_id : 0;
+                    poison_count++;
+                    usb_printf("[ota] apply failed (%d): %s / %s\r\n", poison_count,
+                               ota_verify_status(), ota_apply_status());
+                    draw_status("APPLY FAIL", UI_RED,
+                                heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                    led_rgb(56, 0, 0);
+                }
+                break;
+            }
+            case OTA_NOOP:
+                draw_status("ONLINE", UI_GREEN, freeb);
+                led_rgb(0, 32, 8);
+                break;
+            default:
+                draw_status("CHECKIN ERR", UI_RED, freeb);
+                led_rgb(48, 0, 0);
+                break;
+            }
+            usb_printf("[checkin] %s (via %s)\r\n", ota_last_status(), ota_transport_name());
+
+            /*
+             * SILENT ASSOCIATION LOSS WATCHDOG.
+             *
+             * The board can sit reporting "connected" with a valid IP while the
+             * link is actually dead: no disconnect event fires, craw_wifi still
+             * says connected, and it stops answering pings entirely. Observed
+             * repeatedly — it works from a cold boot and degrades, which reads
+             * as a server fault and cost two rounds of checking the server's
+             * threads and connection table. The server was clean both times.
+             *
+             * So do not trust is_connected() as proof of reachability. Three
+             * consecutive failures means the association is a fiction; tear it
+             * down and rebuild it. A device that wedges until someone walks over
+             * and power-cycles it is not an unattended OTA client.
+             */
+            if (a == OTA_ERROR) {
+                if (++consecutive_failures >= 3) {
+                    usb_print("[wifi] 3 failed check-ins — forcing reassociation\r\n");
+                    draw_status("RECONNECT", UI_AMBER, freeb);
+                    led_rgb(40, 20, 0);
+                    char ssid[CFG_MAX], pass[CFG_MAX];
+                    if (cfg_get(CFG_WIFI_SSID, ssid, sizeof ssid)) {
+                        cfg_get(CFG_WIFI_PASS, pass, sizeof pass);
+                        craw_wifi_disconnect();
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                        craw_wifi_connect(ssid, pass);
+                    }
+                    consecutive_failures = 0;
+                    settled = false;      /* re-settle before the next attempt */
+                }
+            } else {
+                consecutive_failures = 0;
+            }
+
+            /* A failure retries in 10 s rather than 60. A transient blip should
+             * not leave the screen showing an error for a full minute after the
+             * problem has gone. */
+            /* Sleep until the period elapses OR the console nudges us. */
+            ota_wait_checkin_request(a == OTA_ERROR ? 10000 : CHECKIN_PERIOD_MS);
+            continue;
+        }
+        ota_wait_checkin_request(CHECKIN_PERIOD_MS);
+    }
+}
+
+void app_main(void) {
+    usb_serial_jtag_driver_config_t cfg = {
+        .tx_buffer_size = 256,
+        .rx_buffer_size = 256,
+    };
+    usb_serial_jtag_driver_install(&cfg);
+
+    /* Let the USB host enumerate before we start talking into the void. */
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    usb_print("\r\n\r\n============================================\r\n");
+    usb_print("  MagNET OTA client - " CONFIG_MAGNET_BOARD_NAME "\r\n");
+    usb_printf("  ESPIDFORTH v%s\r\n", ESPIDFORTH_VERSION_STRING);
+    usb_printf("  Build: %s %s\r\n", ESPIDFORTH_BUILD_DATE, ESPIDFORTH_BUILD_TIME);
+    usb_print("============================================\r\n");
+    usb_printf("free heap: %lu bytes\r\n",
+               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+    if (ui_init() == ESP_OK) {
+        usb_print("display: ST7789 172x320 up\r\n");
+        draw_status("BOOTING", UI_AMBER,
+                    heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    } else {
+        usb_print("display: FAILED\r\n");
+    }
+    {
+        esp_err_t le = led_init();
+        if (le == ESP_OK) {
+            led_rgb(40, 24, 0);                 /* amber: booting */
+            usb_print("led: WS2812 on GPIO8 up\r\n");
+        } else if (le == ESP_ERR_NOT_SUPPORTED) {
+            usb_print("led: none on this board\r\n");
+        } else {
+            usb_print("led: FAILED\r\n");
+        }
+    }
+
+    int rc = forth_init(FORTH_HEAP_SIZE);
+    if (rc != 0) {
+        usb_printf("forth_init failed (rc=%d)\r\n", rc);
+        return;
+    }
+    unsigned long freeb = (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    usb_printf("forth ready, %lu bytes free\r\n", freeb);
+
+    /* IDLE, not READY: nothing is provisioned yet and the device is not doing
+     * anything on anyone's behalf. Overstating readiness on a status display is
+     * how a demo goes wrong in front of people. */
+
+
+    /* Vendor settings are authoritative now — no sweep. Status screen, and a
+     * big F so a glance still confirms the glyph renderer is upright. */
+    draw_status("IDLE", UI_GREEN, freeb);
+    led_rgb(0, 24, 8);
+
+    /* --- D1: connectivity ------------------------------------------------ */
+    ESP_ERROR_CHECK(cfg_init());
+    craw_wifi_init("wavec6led", wifi_event, NULL);
+    usb_printf("heap after wifi init: %lu bytes\r\n",
+               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+    {
+        char ssid[CFG_MAX], pass[CFG_MAX];
+        if (cfg_get(CFG_WIFI_SSID, ssid, sizeof ssid)) {
+            cfg_get(CFG_WIFI_PASS, pass, sizeof pass);
+            usb_printf("connecting to %s...\r\n", ssid);
+            draw_status("WIFI", UI_AMBER,
+                        heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            led_rgb(40, 24, 0);
+            craw_wifi_connect(ssid, pass);
+        } else {
+            usb_print("no wifi credentials — use: set wifi_ssid <name>\r\n");
+        }
+    }
+
+    /* OTA supervisor + its Forth words. Registering here rather than inside
+     * ota_init() keeps the engine dependency visible at the call site. */
+    /* Give Forth its output hook. console_run() replaced forth_repl() in D1 and
+     * nothing has set this since, so every Forth print went nowhere — and the
+     * unguarded io_putchar calls in w_dot/w_cr/w_emit turned that into an
+     * Instruction access fault the moment anything printed. Both ends are fixed;
+     * this is the one that matters, because silent Forth is useless anyway. */
+    forth_set_io(repl_getchar, repl_putchar);
+
+    ota_init();
+    ota_register_forth_words();
+
+    /* R3: the BLE relay pipe. Up from boot, always advertising: a device that
+     * is only reachable when someone remembers to enable BLE is not a device
+     * a phone can rescue. Costs ~45 KB of internal RAM (measured below). */
+    if (pipe_ble_init() == ESP_OK)
+        usb_printf("ble relay: advertising as %s\r\n", pipe_ble_name());
+    else
+        usb_print("ble relay: unavailable in this build\r\n");
+    /* R4: the serial relay pipe rides this same console; a host attaches by
+     * sending "!A". usb_print is already chunked below the TX buffer, which
+     * a 200-char base64 line needs. */
+    pipe_serial_init(usb_print);
+
+    /* H4: bring back whatever the last successful apply installed — the
+     * dictionary is RAM, and a reboot must not silently revert the device
+     * while CFG_APPLIED_ID keeps telling the server it's up to date. */
+    {
+        int saved = ota_apply_saved();
+        if (saved > 0)       usb_print("ota: persisted bundle re-applied\r\n");
+        else if (saved < 0)  usb_print("ota: persisted bundle FAILED at boot (rolled back)\r\n");
+    }
+    usb_printf("heap after ota init: %lu bytes\r\n",
+               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
+    /* 8 KB: esp_http_client needs several KB of frames of its own. */
+    xTaskCreate(checkin_task, "checkin", 8192, NULL, 4, NULL);
+
+    console_run(repl_getchar, repl_putchar, usb_print);
+    forth_deinit();
+}

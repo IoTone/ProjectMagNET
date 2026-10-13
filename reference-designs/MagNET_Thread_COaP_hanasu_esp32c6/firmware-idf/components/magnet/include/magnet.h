@@ -1,0 +1,255 @@
+/*
+ * magnet.h — MagNET Hanasu node core (E-Phase B: plaintext mesh chat)
+ *
+ * This is the C layer that owns the protocol, transport, and (later) crypto.
+ * The Forth engine sits ABOVE this as a control/scripting surface and calls
+ * the same mn_* functions the HCP dispatcher calls (design proposal §12).
+ *
+ * E-PHASE B SCOPE: v2.1 envelope (plaintext), unified single-role Thread node,
+ * CoAP /magnet resource, multicast + unicast chat, peer table. Crypto,
+ * channels-by-passphrase, and identity keys remain stubs until E-Phase D.
+ */
+#ifndef MAGNET_H
+#define MAGNET_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ---- Transport char I/O (provided by main: USB-serial-JTAG, later BLE/WS) ---- */
+typedef int  (*mn_getc_fn)(void);
+typedef void (*mn_putc_fn)(int);
+
+/* Lifecycle states (design proposal §4.6 / §11.3). */
+typedef enum {
+    MN_BOOTING = 0,
+    MN_CONFIGURING,
+    MN_ATTACHING,
+    MN_READY,
+    MN_DEGRADED,
+} mn_state_t;
+
+/* ---- Bringup (call order matters — see main.c / §12.5) ---- */
+void mn_core_init(void);                 /* peer table, dedup cache, event pump */
+void mn_register_forth_vocab(void);      /* register mn-* FFI words with ESPIDFORTH    */
+void mn_link_start(mn_getc_fn g, mn_putc_fn p); /* start dispatcher + TX writer (HCP)  */
+void mn_openthread_start(void);          /* bring up esp_openthread (no-op if disabled) */
+
+/* ---- State ---- */
+mn_state_t  mn_get_state(void);
+void        mn_set_state(mn_state_t s);  /* emits an !STATE event */
+const char *mn_state_name(mn_state_t s);
+
+/* ---- Serialized output (the ONE writer all lines go through) ---- */
+/* Thread-safe: takes the TX mutex, writes the whole line + CRLF atomically.
+ * Used for HCP responses (+/-), async events (!), and comments (#). This is
+ * what guarantees an event never interleaves mid-line with a response.
+ * MUST NOT be called from OpenThread/lwIP callback context — mesh-side code
+ * posts to the event pump instead (mn_post_*). */
+void mn_write_line(const char *line);
+void mn_emit_event(const char *fmt, ...);   /* convenience: formats then mn_write_line */
+
+/* ---- Identity (E-B: derived from EUI-64; E-D: SHA256(Ed25519 pk)[0:4]) ---- */
+void           mn_core_set_device_id(const uint8_t id[4]);
+const uint8_t *mn_device_id(void);
+
+/* ---- Core operations (shared by HCP verbs AND Forth FFI words) ---- */
+/* mn_chat is token-bucket rate limited (burst 8, refill 10/s — §4.9);
+ * returns -4 when limited (HCP: -ERR E_RATE_LIMITED). */
+int  mn_chat(const char *msg, size_t len);                   /* multicast, Type 0 */
+int  mn_dm(const char *peer_ipv6, const char *msg, size_t len); /* unicast CON    */
+/* Same as mn_chat but marks the frame MN_F_AUTOMATED, so auto-responders on
+ * other nodes know not to answer it. Used by bot mode (magnet_bot.c). */
+int  mn_chat_automated(const char *msg, size_t len);
+void mn_status_line(char *buf, size_t cap);   /* "state=… role=… peers=… id=…"  */
+void mn_whoami_line(char *buf, size_t cap);   /* "id=… name=… fw=…"             */
+void mn_peers_print(void);
+
+/* ---- E-C: identity name, mode, subscriptions, DEGRADED queue ---- */
+void        mn_name_set(const char *name);    /* ≤16 chars; persists to NVS and
+                                                 announces to the mesh if READY */
+const char *mn_name_get(void);
+void        mn_terse_set(bool terse);         /* TERSE: mn_write_line drops '#' */
+int         mn_sub_update(const char *csv, bool subscribe); /* event classes:
+                                                 chat,dm,cmd,state,peer,role,
+                                                 heartbeat,warn,all; -1 = unknown */
+int         mn_queue_chat(const char *dst_ipv6_or_null,     /* DEGRADED queue,  */
+                          const char *msg, size_t len);     /* max 4; returns   */
+                                                            /* depth or -1 full */
+
+/* ---- E-D: encrypted channels (§11.1) ---- */
+/* Derive from credential (Path A/B/C auto-detected), persist root to NVS,
+ * switch the live channel + multicast group. May block ~1 s for Path B.
+ * Fills info with "name=… selector=…". 0 = ok. */
+int  mn_channel_set(const char *cred, size_t len, char *info, size_t cap);
+void mn_channel_info(char *buf, size_t cap);      /* public info only (§11.3.5) */
+const uint8_t *mn_channel_mcast_suffix(void);     /* 4 bytes, for OT bringup    */
+bool mn_channel_is_default(void);   /* still on the well-known "magnet" channel */
+
+/* ---- E-D part 2: identity + admin (deterministic ECDSA P-256) ---- */
+const uint8_t *mn_pubkey(void);              /* 65-byte uncompressed point */
+int  mn_admin_add(const uint8_t pub65[65]);  /* allow-list, NVS, max 4     */
+void mn_admin_list_print(void);
+int  mn_rotate(void);                        /* signed system/rotate bcast */
+
+/* Erase all provisioned state (channel, name, admins, script, counter block,
+ * identity key) plus any BLE bonds — the node comes back virgin. Does NOT
+ * reboot; RAM still holds the old state, so the caller must restart after it
+ * has flushed its response. 0 = ok. */
+int  mn_factory_reset(void);
+
+/* ---- E-F: BLE-GATT HCP binding (§11.2.1) ----
+ * Decision §12.9 Q3: BLE is torn down once a channel is provisioned, so the
+ * 2.4 GHz front end and ~40-60 KB of NimBLE RAM go back to Thread. Compiled
+ * out unless MN_ENABLE_BLE=1. MN_BLE_RESIDENT=1 (env esp32c6_ble_resident)
+ * skips the teardown so one companion node stays attachable as the phone
+ * app's window into the mesh (magnet_app SCOPE §1 Option A). */
+int  mn_ble_start(void);
+int  mn_ble_stop(void);
+bool mn_ble_running(void);
+bool mn_ble_link_secure(void);  /* bonded+encrypted right now */
+void mn_ble_notify(const char *line);   /* mirror one HCP line to the client */
+
+/* Feed one complete line to the HCP dispatcher from ANY transport (serial,
+ * BLE, later WebSocket) — the grammar is transport-independent (§11.2). */
+void mn_link_feed_line(const char *line);
+
+/* ---- E-E: Forth automation hooks + script persistence (§12.3) ----
+ * Hooks are registered by WORD NAME (the stub engine exposes no execution
+ * tokens). E-G decision: the stub STAYS — it never blocked a real script
+ * through E-E/E-F, so the full ESP32forth port (and the `( xt -- )` hook
+ * form) remains deferred until a script actually needs it.
+ * The hook word is invoked ON THE PUMP TASK — never in OT/lwIP callback
+ * context — with the message pushed as ( c-addr u ) plus the sender id.
+ *   kind 0 = chat, 1 = m2m cmd */
+int  mn_hook_set(int kind, const char *word, size_t len);
+void mn_hooks_print(void);
+
+/* Serialized Forth execution: the interpreter is NOT reentrant, so the REPL
+ * dispatcher and the hook invoker must not call forth_eval concurrently. */
+void mn_forth_exec(const char *line);
+
+/* Boot script: persisted Forth source, run once after vocab registration. */
+/* THE firmware version — the single source every banner must use (H9: the
+ * READY banner and CAPS once disagreed by two releases, so any inventory
+ * keyed on the banner read the wrong version). Bump it here and only here. */
+#define MN_FW_VERSION "0.7.0-eh"
+
+/* H6: node caps advertised to the role-bundle engine (BUNDLE verb and the
+ * boot-time re-apply share one list). Returns the array; *n gets its size. */
+const char **mn_bundle_caps(int *n);
+
+int  mn_script_save(const char *src, size_t len);   /* NVS, ≤1 KB */
+void mn_script_show(void);
+int  mn_script_run(void);                           /* run the saved script now */
+
+/* Switch the subscribed multicast group at runtime (magnet_ot.c). */
+int  mn_ot_set_mcast(const uint8_t suffix[4]);
+
+/* ---- E-H: Type 6 extended transfer glue (magnet_xfer.c ↔ core) ----
+ * Type 6 frames are CON unicast and exempt from handle_rx's self-drop so a
+ * single-node bench can loopback-test a whole transfer against its own
+ * ML-EID (same trick as the SELFTEST magic PING). */
+int  mn_xfer_send_frame(const uint8_t *payload, size_t len,
+                        const char *dst_ipv6);   /* Type 6, CON unicast */
+void mn_post_xfer_tick(void);      /* timer cb → pump task → mn_xfer_tick() */
+bool mn_xfer_ec_enabled(void);     /* is the `xfer` event class subscribed  */
+
+/* ---- Host-set wall clock ----
+ * A Hanasu mesh has no border router, so there is no SNTP and esp_timer only
+ * yields uptime. Any host on the HCP link knows the real time and can push it
+ * down once per session (HCP: TIME SET <epoch> [<POSIX-TZ>]; Forth: mn-time!).
+ * Nothing depends on it — mn_time_str() reports uptime until it is set, and
+ * says so, rather than inventing a date. */
+/* tz_offset_min: minutes east of UTC (JST = 540, PST = -480, UTC = 0). Only
+ * the time of day is kept — see the note in magnet_core.c on why this avoids
+ * newlib's strftime/tzset entirely. */
+int  mn_time_set(int64_t epoch_secs, int tz_offset_min); /* 0 ok, -1 implausible */
+bool mn_time_is_set(void);
+void mn_time_str(char *buf, size_t cap);   /* "14:32:07" set, else "up 3h07m" */
+void mn_time_info(char *buf, size_t cap);  /* + tz, stratum, source, age      */
+
+/* Mesh-wide clock (system/time, ns 0x00 cmd 0x04 announce / 0x05 request).
+ * A host seeds ONE node with mn_time_set(); that node becomes stratum 0 and
+ * multicasts to the channel, everyone else adopts at stratum+1. Receivers do
+ * not re-broadcast — Thread MPL already floods the mesh — so convergence for
+ * late joiners comes from the stratum-0 refresh plus mn_time_request().
+ * Replies to a request are jittered and suppressed by the first announce
+ * heard, so one node answers regardless of mesh size. */
+int  mn_time_push(void);      /* announce our clock now; -1 if we have none  */
+int  mn_time_request(void);   /* ask the mesh for the time                   */
+
+/* ---- Diagnostics / test surface (Forth: mn-sysinfo …; HCP: SYSINFO …) ---- */
+void mn_sysinfo_print(void);             /* chip, IDF, heap, forth heap, uptime */
+void mn_bench(void);                     /* envelope codec + TX-call latency    */
+int  mn_selftest(void);                  /* env roundtrip + pump + CoAP loopback;
+                                            0 = all pass (skips don't fail)     */
+void mn_heartbeat_set(uint32_t secs);    /* !HEARTBEAT interval, 0 = off (§4.6) */
+void mn_stats_print(void);               /* tx/rx counters since boot or reset  */
+void mn_stats_reset(void);
+int  mn_stress_start(uint32_t secs, uint32_t payload_len); /* saturation burst:
+                                            spawns a task that multicasts marked
+                                            chat frames back-to-back; receivers
+                                            count them silently. 0=started,
+                                            -1=already running, -2=bad args    */
+
+/* ---- E-G: SED catch-up (§11.5/§11.6) ----
+ * Every accepted multicast chat frame (sent or received, raw wire bytes) goes
+ * into a small ring; peers poll it with CoAP GET magnet/recent. Frames are
+ * served ciphertext-as-stored — the poller runs them through its normal
+ * decrypt/dedup path, so catch-up delivers exactly the frames it missed and
+ * silently drops the ones it already has. */
+void mn_recent_store(const uint8_t *frame, size_t len);
+int  mn_recent_fill(uint8_t *buf, size_t cap);  /* [2B BE len][frame]…, oldest
+                                                   first; returns bytes filled */
+int  mn_recent_fetch(const char *peer_ipv6);    /* CoAP GET to a peer; frames
+                                                   replay async as events.
+                                                   0=sent -1=no radio -2=bad ip */
+/* Replay OUR OWN ring to the host as `!RCHAT <chan> <id> <name> <text>` lines
+ * (oldest-first, chat event class). This is how a host that was away — the
+ * phone app reconnecting to its companion — backfills its feed: the node's
+ * dedup would (correctly) swallow these frames on the mesh path, so they get
+ * a distinct event that bypasses mesh processing entirely. */
+void mn_recent_print(void);
+
+/* ---- Event pump (§12.4) ----
+ * OpenThread callbacks run with the OT lock held; taking the TX mutex there
+ * can ABBA-deadlock against a Forth/HCP task that holds the TX mutex while
+ * sending (which takes the OT lock). So mesh-side code posts into a queue and
+ * a pump task does the core processing + emission. */
+void mn_post_rx(const uint8_t *data, size_t len,
+                const char *src_ipv6, bool was_multicast);
+/* Same, for catch-up frames served by a peer: the UDP source is the SERVING
+ * node, not the original sender, so peer-table learning is skipped. */
+void mn_post_rx_recent(const uint8_t *data, size_t len);
+void mn_post_role(const char *role_name);
+/* Post one preformatted '#'/'!' line to be emitted from the pump task (for
+ * OT-context code that must not touch the TX mutex). */
+void mn_post_note(const char *fmt, ...);
+
+/* ---- Mesh transport (implemented by magnet_ot.c; stubbed when OT disabled) ---- */
+/* dst_ipv6 == NULL → the default channel multicast group. */
+int         mn_ot_send(const uint8_t *buf, size_t len,
+                       const char *dst_ipv6, bool confirmable);
+/* A CON unicast that reports its fate: done(ctx, true) on the CoAP ACK,
+ * done(ctx, false) once the last retransmit times out. done runs in OT
+ * context — post or poke a timer, never block. One send in flight at a time
+ * (a second call before the first resolves replaces its callback). */
+typedef void (*mn_ot_done_fn)(void *ctx, bool acked);
+int         mn_ot_send_cb(const uint8_t *buf, size_t len, const char *dst_ipv6,
+                          mn_ot_done_fn done, void *ctx);
+const char *mn_ot_role_name(void);
+void        mn_mesh_print(void);         /* Thread detail: partition, RLOC, EID,
+                                            channel/PAN, neighbors w/ RSSI      */
+int         mn_ot_local_eid(char *buf, size_t cap);  /* mesh-local EID string;
+                                            <0 if radio not up (loopback test) */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MAGNET_H */

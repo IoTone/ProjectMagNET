@@ -213,7 +213,7 @@ export type MarkType =
   | 'parallel' | 'tangled-tree' | 'edge-bundle' | 'hexbin'
   | 'video' | 'imu' | 'spatial-audio' | 'splat-gallery' | 'actuator-panel'
   | 'voronoi-stippling' | 'moon-phases-arc' | 'owls-to-the-max'
-  | 'force-tree-3d' | 'targets';
+  | 'force-tree-3d' | 'targets' | 'geo-scene';
 
 export const MARK_TYPES: readonly MarkType[] = [
   'line', 'bar', 'scatter', 'arc',
@@ -222,11 +222,11 @@ export const MARK_TYPES: readonly MarkType[] = [
   'parallel', 'tangled-tree', 'edge-bundle', 'hexbin',
   'video', 'imu', 'spatial-audio', 'splat-gallery', 'actuator-panel',
   'voronoi-stippling', 'moon-phases-arc', 'owls-to-the-max',
-  'force-tree-3d', 'targets',
+  'force-tree-3d', 'targets', 'geo-scene',
 ];
 
-export const SCALE_TAGS = ['personal', 'room', 'hall', 'net', 'vehicle'] as const;
-export const URL_DATA_SHAPES = ['hierarchy', 'graph', 'series', 'distributions', 'flow', 'video', 'imu', 'targets', 'snapshot'] as const;
+export const SCALE_TAGS = ['personal', 'room', 'hall', 'net', 'vehicle', 'region'] as const;
+export const URL_DATA_SHAPES = ['hierarchy', 'graph', 'series', 'distributions', 'flow', 'video', 'imu', 'targets', 'snapshot', 'geo-points'] as const;
 
 export type ManifestValidationResult =
   | { valid: true; warnings?: string[] }

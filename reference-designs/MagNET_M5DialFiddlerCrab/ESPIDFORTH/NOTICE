@@ -1,0 +1,14 @@
+ESPIDFORTH
+Copyright 2026 IoTone, Inc.
+
+This product includes ESP32forth v7.0.8.0 (µEforth), preserved unmodified in
+third_party/esp32forth/ for the ongoing porting effort:
+  https://github.com/flagxor/ueforth
+  Revision ffef117aea5fdb6a0efbb36320aefa271360c2c4
+  Licensed under the Apache License, Version 2.0.
+
+The current forth_core.cpp engine is an original stub implementation of the
+core ANS Forth word set, written for this project and licensed under the
+Apache License, Version 2.0. When the ESP32forth engine port replaces the
+stub, the resulting file will be a derivative work of ESP32forth and will
+carry a modification notice per section 4(b) of the license.

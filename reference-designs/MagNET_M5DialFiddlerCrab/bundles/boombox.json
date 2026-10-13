@@ -1,0 +1,15 @@
+{
+  "name": "boombox",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [
+    "tone"
+  ],
+  "deps": [],
+  "crc32": "df729fac",
+  "sig_alg": "ed25519",
+  "sig": "9e7be9079d9efcdae9589f1d40d9acd7beee1f16ce7910c3008e6b99d2103cf2b661922896972c06f3f025da0e6445ef24fea5a66b04efa24e31b1652407a40d",
+  "src_b64": "XCBSb2xlIDEyOiBCb29tYm94IOKAlCBjb21wb3NlZCBzb3VuZHMgb24gdG9wIG9mIHRoZSBmaXJtd2FyZSdzIHRvbmUKXCBwcmltaXRpdmVzLCBwbHVzIGEgRm9ydGggY29tbWFuZCBjaGFubmVsIChib29tYm94OmZvcnRoKSBkaXN0aW5jdCBmcm9tClwgdGhlIGZpcm13YXJlJ3MgQy1zaWRlIGJvb21ib3g6Y21kIHBvbGxlci4KXCBIb3N0OiBNYWdORVRfUmVTcGVha2VyX0Jvb21ib3guClwgY2Fwc19yZXE6IFsidG9uZSJdICB0aWNrX21zOiAxMDAwCjogZGl0ICAgIDg4MCA5MCB0b25lICA2MCBzbGVlcCA7CjogZGFoICAgIDg4MCAyNDAgdG9uZSAgNjAgc2xlZXAgOwo6IHNvcyAgICBkaXQgZGl0IGRpdCAgZGFoIGRhaCBkYWggIGRpdCBkaXQgZGl0IDsKOiByb2xlLWluaXQgICBub3RpZnkgOwo6IHJvbGUtdGljayAgIHMiIGJvb21ib3g6Zm9ydGgiIGhrdi1ydW4gOwo6IHJvbGUtc3RhdHVzIC4iIGJvb21ib3ggcmVhZHkgKHNvcyB2aWEgYm9vbWJveDpmb3J0aCkiIGNyIDsK",
+  "tick_ms": 1000
+}

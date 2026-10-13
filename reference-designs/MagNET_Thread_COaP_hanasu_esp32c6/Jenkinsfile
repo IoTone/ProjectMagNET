@@ -1,0 +1,92 @@
+// Hanasu bench soak — runs on the Mac that has the 4-node ESP32-C6 bench
+// on USB. Point a pipeline job at this file with "Script Path" =
+// reference-designs/MagNET_Thread_COaP_hanasu_esp32c6/Jenkinsfile and give
+// that Mac's agent the label below.
+//
+// The soak needs exclusive use of the serial ports: anything else holding
+// them (a manual soak, hcp.py --watch, a flash) will make Preflight fail —
+// that is the desired behaviour, not a bug.
+
+pipeline {
+    agent { label 'hanasu-bench' }
+
+    parameters {
+        string(name: 'SOAK_HOURS', defaultValue: '6',
+               description: 'Soak duration in hours (0.05 ≈ a 3-min smoke)')
+        string(name: 'CHAT_SECS', defaultValue: '60',
+               description: 'Seconds between round-robin chats (60 = chat rate)')
+        string(name: 'SAMPLE_MINS', defaultValue: '10',
+               description: 'Minutes between STATS/SYSINFO sweeps')
+    }
+
+    options {
+        // One owner of the bench serial ports at a time.
+        disableConcurrentBuilds()
+        // Must exceed SOAK_HOURS; raise both together for longer runs.
+        timeout(time: 8, unit: 'HOURS')
+        timestamps()
+    }
+
+    environment {
+        PIO_PY = "${HOME}/.platformio/penv/bin/python"
+        DESIGN = 'reference-designs/MagNET_Thread_COaP_hanasu_esp32c6'
+    }
+
+    stages {
+        stage('Bench present') {
+            options { timeout(time: 2, unit: 'MINUTES') }
+            steps {
+                dir(env.DESIGN) {
+                    sh '''
+                        test -x "$PIO_PY" || { echo "PlatformIO penv python not found at $PIO_PY"; exit 1; }
+                        "$PIO_PY" tools/hcp.py list
+                        n=$("$PIO_PY" tools/hcp.py list | wc -l | tr -d " ")
+                        test "$n" -eq 4 || { echo "expected 4 Hanasu nodes, found $n"; exit 1; }
+                    '''
+                }
+            }
+        }
+
+        stage('Preflight selftest') {
+            options { timeout(time: 5, unit: 'MINUTES') }
+            steps {
+                dir(env.DESIGN) {
+                    // hcp.py `all` always exits 0, so gate on the pass count.
+                    sh '''
+                        out=$("$PIO_PY" tools/hcp.py all SELFTEST --wait 12)
+                        echo "$out"
+                        passes=$(echo "$out" | grep -c "+OK selftest pass")
+                        test "$passes" -eq 4 || { echo "selftest passed on $passes/4 nodes"; exit 1; }
+                    '''
+                }
+            }
+        }
+
+        stage('Soak') {
+            steps {
+                dir(env.DESIGN) {
+                    sh '''
+                        "$PIO_PY" tools/soak.py \
+                            --hours "$SOAK_HOURS" \
+                            --chat-secs "$CHAT_SECS" \
+                            --sample-mins "$SAMPLE_MINS" \
+                            --expect-nodes 4 \
+                            --gate
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: "${DESIGN}/tools/logs/soak-*.log",
+                             allowEmptyArchive: true
+        }
+        unsuccessful {
+            mail to: 'dkords@gmail.com',
+                 subject: "Hanasu soak ${currentBuild.fullDisplayName}: ${currentBuild.currentResult}",
+                 body: "Soak did not pass its gates or the bench was unhealthy.\n${env.BUILD_URL}console"
+        }
+    }
+}

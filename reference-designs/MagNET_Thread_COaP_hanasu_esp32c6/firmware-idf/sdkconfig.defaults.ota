@@ -1,0 +1,4 @@
+# OTA builds (partitions_ota.csv): the bootloader reverts an image that was
+# booted once and never marked valid — the IDF analogue of MCUboot TEST mode.
+# The app marks itself valid only once healthy (magnet_ota_idf.c).
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

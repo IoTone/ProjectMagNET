@@ -1,33 +1,44 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-        <uses-permission android:name="android.permission.INTERNET" />
-    <!-- required for API 18 - 30 -->
-    <uses-permission
-            android:name="android.permission.BLUETOOTH"
-            android:maxSdkVersion="30" />
-    <uses-permission
-            android:name="android.permission.BLUETOOTH_ADMIN"
-            android:maxSdkVersion="30" />
 
-    <!-- required for API 23 - 30 -->
-    <!-- <uses-permission-sdk-23 android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" /> -->
-    <!-- <uses-permission-sdk-23 android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" /> -->
-    <!-- <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
-                     android:usesPermissionFlags="neverForLocation" /> -->
-
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"/>
+    <!-- Bluetooth LE scanning + connection.
+         BLUETOOTH / BLUETOOTH_ADMIN cover pre-Android 12; on API 31+
+         the granular SCAN / CONNECT runtime permissions apply. -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <!-- neverForLocation: this app scans BLE to find and configure MagNET
+         nodes, never to infer where the user is. Without this flag Android 12+
+         withholds *all* scan results unless PRECISE location is granted — the
+         scan appears to run and silently returns nothing
+         ("Permission denial: Need ACCESS_FINE_LOCATION permission to get scan
+         results" in the system log). WiFi scanning still uses location
+         separately; these are independent. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-    <!-- <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" /> -->
-    <!-- API 31+ -->
-    <!-- <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" /> -->
-    <!-- <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" /> -->
-    <!-- <uses-permission android:name="android.permission.BLUETOOTH_SCAN"  tools:remove="android:usesPermissionFlags" tools:targetApi="s" /> -->
+
+    <!-- WiFi scanning. ACCESS_WIFI_STATE reads results; CHANGE_WIFI_STATE
+         lets the app trigger a scan; NEARBY_WIFI_DEVICES is the API 33+
+         runtime permission for nearby WiFi without location. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+
+    <!-- Location is required for BLE + WiFi scan results on Android
+         <= 12. FINE is needed for full WiFi scan results. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- BLE is used but not strictly required (WiFi scanning still
+         works on devices without BLE). -->
+    <uses-feature android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+
     <application
-        android:label="magnet_app"
+        android:label="MagNET"
         android:name="${applicationName}"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -37,10 +48,6 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
-            <!-- Specifies an Android theme to apply to this Activity as soon as
-                 the Android process has started. This theme is visible to the user
-                 while the Flutter UI initializes. After that, this theme continues
-                 to determine the Window background behind the Flutter UI. -->
             <meta-data
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
@@ -56,4 +63,10 @@
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
 </manifest>

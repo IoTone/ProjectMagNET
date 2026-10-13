@@ -17,7 +17,7 @@
     },
     "scaleTag": {
       "type": "string",
-      "enum": ["personal", "room", "hall", "net"],
+      "enum": ["personal", "room", "hall", "net", "vehicle", "region"],
       "description": "Scale tag drives default placement radius from the reader."
     },
     "owner": {
@@ -163,10 +163,13 @@
       "enum": [
         "line", "bar", "scatter", "arc",
         "tree", "treemap", "sunburst", "pack",
-        "force", "ridgeline", "sankey",
-        "parallel", "tangled-tree", "edge-bundle", "hexbin"
+        "force", "ridgeline", "sankey", "streamgraph",
+        "parallel", "tangled-tree", "edge-bundle", "hexbin",
+        "video", "imu", "spatial-audio", "splat-gallery", "actuator-panel",
+        "voronoi-stippling", "moon-phases-arc", "owls-to-the-max",
+        "force-tree-3d", "targets", "geo-scene"
       ],
-      "description": "All supported mark types."
+      "description": "All supported mark types. Source of truth: MARK_TYPES in src/manifest/schema.ts."
     },
     "InlineData": {
       "type": "object",
@@ -226,12 +229,16 @@
         },
         "shape": {
           "type": "string",
-          "enum": ["hierarchy", "graph", "series", "distributions", "flow"],
-          "description": "Expected shape — renderer validates after fetch."
+          "enum": ["hierarchy", "graph", "series", "distributions", "flow", "video", "imu", "targets", "snapshot", "geo-points"],
+          "description": "Expected shape — renderer validates after fetch. Source of truth: URL_DATA_SHAPES in src/manifest/schema.ts."
         },
         "refreshInterval": {
           "type": "number",
           "description": "Refresh interval in seconds. 0 = one-shot."
+        },
+        "startDelayMs": {
+          "type": "number",
+          "description": "Delay before the first scheduled refresh tick (staggers co-polling marks on the same device)."
         }
       }
     },

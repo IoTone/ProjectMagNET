@@ -1,0 +1,13 @@
+{
+  "name": "worker",
+  "version": "0.1.0",
+  "min_proto": 1,
+  "author": "iotone-dev",
+  "caps_req": [],
+  "deps": [],
+  "crc32": "7bc7577a",
+  "sig_alg": "ed25519",
+  "sig": "e9d7985b7c8db9c7fd2d5d696eb2948a343a0599d47f96f78a65cc480b34be90f9888f0edbfaa58fccba1cc5d2e482d89a355132da50d8dad407c1cbaac3a805",
+  "src_b64": "XCBSb2xlIDI6IFdvcmtlciDigJQgY2FycmllcyBvdXQgdGFza3MgdGhlIFJ1bGVyIGxlYXZlcyBpbiB3b3JrZXI6dGFzay4KXCBUYXNrcyBhcmUgRm9ydGggcGhyYXNlczsgaGt2LXJ1biBmZXRjaGVzLCBjbGVhcnMgdGhlIGtleSwgdGhlbiBldmFsdWF0ZXMKXCAoYXQtbW9zdC1vbmNlKS4gQW55IG5vZGUgd2l0aCB0aGUgaGl2ZSB3b3JkcyBjYW4gYmUgYSB3b3JrZXIuClwgY2Fwc19yZXE6IFtdICB0aWNrX21zOiAyMDAwCjogcm9sZS1pbml0ICAgcyIgaWRsZSIgcyIgd29ya2VyOnN0YXRlIiBoa3YtcHV0JCA7Cjogcm9sZS10aWNrICAgcyIgd29ya2VyOnRhc2siIGhrdi1ydW4gOwo6IHJvbGUtc3RhdHVzIC4iIHdvcmtlciBwb2xsaW5nIHdvcmtlcjp0YXNrIiBjciA7Cg==",
+  "tick_ms": 2000
+}

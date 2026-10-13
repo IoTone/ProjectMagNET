@@ -1,6 +1,6 @@
 # UC4 — Airplane (`uc4-airplane.json`)
 
-Simulated in-flight experience: live attitude indicator from a real IMU, plus cabin music, video, and a spatial photo gallery. Four mutually-exclusive content modes selectable from the bottom HUD; only one renders at a time, the others stay loaded in the scene graph but hidden + paused.
+Simulated in-flight experience: live attitude indicator from a real IMU, plus cabin music, video, a spatial (Gaussian-splat) photo gallery, and a flat-image photo carousel. Five mutually-exclusive content modes selectable from the bottom HUD; only one renders at a time, the others stay loaded in the scene graph but hidden + paused.
 
 Join code: `DEMO04` (resolved by `mock-join-server`). Direct load: `?manifest=/examples/uc4-airplane.json`.
 
@@ -13,15 +13,23 @@ Join code: `DEMO04` (resolved by `mock-join-server`). Direct load: `?manifest=/e
 | `airplane-imu`          | `imu`            | visible | Wireframe airplane + Garmin G5-style instrument labels + slowly-rotating globe backdrop. Polls `/api/v1/sensor/imu`. |
 | `cabin-boombox`         | `spatial-audio`  | hidden  | Procedural 8-second I-V-vi-IV loop, spatialised via `PositionalAudio`. Pinch to cycle theme. |
 | `cabin-display`         | `video`          | hidden  | HLS via hls.js. Mux "Big Buck Bunny" test stream. 720p ABR cap so Spectacles decodes cleanly. |
-| `cabin-spatial-gallery` | `splat-gallery`  | hidden  | 3 × 3D Gaussian splats (Kyoto, Banff, Marrakech). ArrowL/R navigates, 30 s auto-advance. |
+| `cabin-spatial-gallery` | `splat-gallery`  | hidden  | 3 × 3D Gaussian splats (Kyoto, Cannon Beach, Banff). ArrowL/R navigates, 18 s auto-advance. Splat path on splat-capable runtimes; auto-falls-back to the carousel ring on Spectacles-class devices. |
+| `cabin-carousel`        | `splat-gallery`  | hidden  | Same photos as `cabin-spatial-gallery` but `config.renderMode: "carousel"` — a curved ring of flat textured panels (one draw call per photo). Works on every device, splat-capable or not. |
 
 ## HUD switching
 
 ```
-[ Flight Info ]  [ Music ]  [ Video ]  [ Photos ]  [ Recenter ]  [ Leave ]
+[ Flight Info ]  [ Music ]  [ Video ]  [ Photos ]  [ carousel ]  [ Recenter ]  [ Leave ]
 ```
 
 Each `show-only:<markId>` action makes that mark's cell visible and pauses all the others (audio + video + splat auto-advance), so switching back is instant.
+
+### Photos (splats) vs. carousel — render-path selection
+
+Both modes are the same `splat-gallery` cell ([`src/demo/liveSplatGalleryCell.ts`](../src/demo/liveSplatGalleryCell.ts)); they differ only in render path:
+
+- **Photos** (`cabin-spatial-gallery`) renders mkkellogg Gaussian splats. The cell auto-detects the runtime at first activation: splats on **Quest, Android XR (Chrome 138 on Android 10), and desktop**; the flat-image carousel on **Spectacles-class** devices, whose WebKit runtime can't render the WebGL float-texture splat path. Android XR is Chromium, so it is explicitly treated as splat-capable (`isAndroidXR()` in [`src/platform.ts`](../src/platform.ts), excluded from `isSpectaclesClass()`).
+- **carousel** (`cabin-carousel`) pins `config.renderMode: "carousel"`, so it always renders the flat-image ring regardless of platform — a lightweight always-works alternative, and the same path Spectacles auto-uses for Photos. It reads each photo's `imageUrl` (jpg/webp); the `.ply` `url` is kept only for `SplatPhoto` type-compatibility and is never fetched in carousel mode.
 
 ## IMU data source
 

@@ -1,0 +1,15 @@
+# MagNET Hanasu — custom partition table (E-Phase A spike, 4 MB flash, no OTA)
+#
+# WHY THIS EXISTS: ESPIDFORTH ships with CONFIG_PARTITION_TABLE_SINGLE_APP, which
+# gives a 1 MB factory app. An OpenThread FTD + CoAP + mbedTLS + Forth image is
+# ~1.3-1.6 MB, so the default table CANNOT hold it. This table gives the app
+# 2.625 MB and reserves a LittleFS partition for persisted Forth scripts (§12.3).
+#
+# For OTA (firmware update over the mesh, Open Q4) move to 8 MB flash and the
+# dual-slot table in README.md instead — two 2 MB app slots don't fit in 4 MB.
+#
+# Name,     Type, SubType,   Offset,    Size,      Flags
+nvs,        data, nvs,       0x9000,    0x6000,
+phy_init,   data, phy,       0xf000,    0x1000,
+factory,    app,  factory,   0x10000,   0x2A0000,
+scripts,    data, littlefs,  ,          0xF0000,

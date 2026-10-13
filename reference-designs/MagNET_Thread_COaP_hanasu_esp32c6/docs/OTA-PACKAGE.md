@@ -1,0 +1,360 @@
+# MagNET OTA package format (`.mnpkg`) — v1
+
+| | |
+|---|---|
+| **Wire format** | `format_version = 1` (the byte at header offset 4) |
+| **Document revision** | 1.4 — 2026-09-30 |
+| **Status** | Normative; approved. Implemented on XIAO MG24 and XIAO ESP32C6: receive + verify, local and admin-signed remote apply (proposal §13), bundle-aware health and `CLEARS_BUNDLES` (§7.4) |
+| **Shared copy** | https://claude.ai/code/artifact/367a8f54-6808-4a1f-8b7c-34e80274e30b (commentable; this file is the source of truth) |
+| **Tag** | `mnpkg-spec-v1.4` (previous: `v1.3`, `v1.2`, `v1.1`, `v1.0`) |
+
+Companion to design proposal §13 (remote apply) and `docs/EXTENDED-TRANSFER.md`
+(the Type 6 transport that carries it). Keywords MUST / SHOULD / MAY as in
+RFC 2119.
+
+**Two version numbers, on purpose.** The *wire format* version is what a node
+checks; it changes only when bytes change meaning (§10). The *document
+revision* tracks this text: a revision that clarifies without changing any
+byte bumps the minor number (1.0 → 1.1); one that changes the wire format
+starts a new major (2.0, with `format_version = 2`).
+
+## 1. Why a package, not a raw image
+
+The first MG24 implementation (Z-F) shipped a bare MCUboot image and relied on
+MCUboot's signature check for authenticity. That does not carry over to the
+ESP32-C6: a C6 without ESP secure boot (an irreversible eFuse decision we are
+not making) boots any well-formed app image. So the node itself must decide,
+before an image is ever staged, that it:
+
+1. was released by a trusted key (**authenticity**),
+2. arrived intact (**integrity**),
+3. is meant for this chip and board (**targeting** — a MG24 image in a C6 slot,
+   or an image without the XIAO RF-switch bring-up on a XIAO, bricks the radio),
+4. is an acceptable version for this node (**version policy**).
+
+A small signed header answers all four the same way on every platform; the
+platform's own image format rides inside it unchanged.
+
+## 2. Layout
+
+```
++---------------------------+  offset 0
+| header      256 bytes     |  fixed size, signed (§3)
++---------------------------+  offset 256
+| payload     image_len     |  the platform image, byte-for-byte (§5)
++---------------------------+
+```
+
+- The header is **exactly 256 bytes** in v1. Chunk 0 of a Type 6 transfer
+  (336 bytes) always contains it whole, and every payload byte lands at
+  package offset − 256, which keeps flash writes 4-byte aligned.
+- There is no trailer. Nothing follows the payload.
+- File extension `.mnpkg`; MIME `application/vnd.magnet.ota-package`.
+
+## 3. Header
+
+All multi-byte integers are **big-endian** (MagNET wire convention). Reserved
+bytes MUST be zero when written and MUST be verified zero when read (so a v1
+reader cannot silently accept a field it does not understand).
+
+| Off | Size | Field | Value / meaning |
+|----:|-----:|-------|-----------------|
+| 0 | 4 | `magic` | `4D 4E 50 4B` ("MNPK") |
+| 4 | 1 | `format_version` | `1` |
+| 5 | 1 | `sig_alg` | `2` = Ed25519 (RFC 8032), **preferred**; `1` = deterministic ECDSA P-256 / SHA-256 (RFC 6979) — §6 |
+| 6 | 2 | `header_len` | `256` |
+| 8 | 2 | `chip` | §3.1 |
+| 10 | 2 | `board` | §3.1; `0` = any board of that chip |
+| 12 | 1 | `image_format` | §5: `1` ESP-IDF app image, `2` MCUboot signed image |
+| 13 | 1 | `flags` | bit 0 `REQUIRES_REPARTITION` (never installable over the air — §7.3); bit 1 `CLEARS_BUNDLES` (§7.4); others 0 |
+| 14 | 2 | reserved | 0 |
+| 16 | 8 | `version` | major u8 ‖ minor u8 ‖ revision u16 ‖ build u32 — the encoding of §13.3 `system/ota_apply` |
+| 24 | 8 | `min_running` | same encoding; the node's running version MUST be ≥ this (all-zero = no floor). For migrations that assume an earlier step. |
+| 32 | 4 | `image_len` | payload length in bytes |
+| 36 | 32 | `image_sha256` | SHA-256 over the payload |
+| 68 | 8 | `build_time` | Unix seconds, int64 — informational |
+| 76 | 16 | `variant` | ASCII, NUL-padded: build flavour, e.g. `ble-resident`, `thread` — informational |
+| 92 | 32 | `fw_version` | ASCII, NUL-padded: the firmware's `MN_FW_VERSION`, e.g. `0.8.0-zf` — informational |
+| 124 | 8 | `key_id` | SHA-256(release public key)[0:8] — the key as stored: 32 bytes (Ed25519) or the 65-byte uncompressed point (P-256) |
+| 132 | 60 | reserved | 0 |
+| 192 | 64 | `signature` | `sig_alg` 2: Ed25519 signature over the 192 bytes header[0:192] themselves. `sig_alg` 1: r ‖ s (32 + 32 bytes) over SHA-256(header[0:192]) |
+
+The signature covers every header byte before it — including `image_sha256`,
+so it transitively covers the payload.
+
+### 3.1 Chip and board registry
+
+Append-only: an assigned value is never reused or redefined. A board ID's high
+byte is its chip ID. Inventory taken 2026-09-29 from every firmware project in
+the repo (PlatformIO `board =` IDs are often generic stand-ins, so each board
+was identified from its README, pin maps or sdkconfig). `attic/` is excluded.
+
+| `chip` | Chip | `image_format` |
+|---:|---|---|
+| `0x0001` | ESP32-C6 | 1 (ESP-IDF app image) |
+| `0x0002` | EFR32MG24 | 2 (MCUboot signed image) |
+| `0x0003` | ESP32 (classic, incl. PICO-D4) | 1 |
+| `0x0004` | ESP32-S3 | 1 |
+| `0x0005` | ESP32-C3 | 1 |
+| `0x0006` | nRF52840 | 2 when built on Zephyr/NCS with MCUboot; otherwise not updatable over the air |
+
+| `board` | Board | Flash | Used by | Why the board matters |
+|---:|---|---|---|---|
+| `0x0000` | any board of the chip | — | — | Only for images with no board-specific bring-up |
+| **ESP32-C6** | | | | |
+| `0x0101` | M5Stack M5NanoC6 | 4 MB | Hanasu (`esp32c6`), Thread leader / light / switch | |
+| `0x0102` | Seeed XIAO ESP32C6 | 4 MB | Hanasu (`esp32c6_xiao`), PetWear, Wifi6_Sync | RF switch bring-up; the plain image is antenna-less |
+| `0x0103` | Espressif ESP32-C6-DevKitC-1 | 4 or 8 MB (N4/N8 unconfirmed) | Hanasu | |
+| `0x0104` | Waveshare ESP32-C6-LCD-1.47 | 4 MB | WaveC6LED (default), a Hanasu bench node | ST7789T display |
+| `0x0105` | Waveshare ESP32-C6-Touch-LCD-1.47 | 8 MB | WaveC6LED (`MAGNET_BOARD_WAVEC6TOUCH`) | JD9853 display + touch |
+| `0x0106` | Seeed MR60BHA2 mmWave Heart-Rate Kit (XIAO ESP32C6 on board) | 4 MB | MagNET_Vitals_E4TH | 60 GHz radar, BH1750, WS2812 |
+| **EFR32MG24** | | | | |
+| `0x0201` | Seeed XIAO MG24 (incl. Sense) | 1.5 MB internal | Hanasu `firmware-zephyr` | RF switch via board devicetree |
+| **ESP32 classic** | | | | |
+| `0x0301` | Ai-Thinker ESP32-CAM | 4 MB | M5_Hive_Camera (`esp32cam`) | Camera pins; 4 MB PSRAM |
+| `0x0302` | M5Stack Atom Matrix | 4 MB | M5Atom_Matrix_Hive_Test | 5×5 LED matrix |
+| `0x0303` | M5Stack Atom Echo | 4 MB | M5Atom_Echo_Hex_Hive_Test, _ATH20 | I2S speaker/mic; BLE couples into the amp |
+| `0x0304` | M5Stack M5Camera X | 4 MB | M5_Hive_Camera (`m5camerax`) | Camera pin revision (see open items) |
+| `0x0305` | M5Stack M5StickC Plus | 4 MB | Crawdad_OpenWR, Voice_XR | Display, PDM mic, MPU6886 |
+| **ESP32-S3** | | | | |
+| `0x0401` | M5Stack Dial (StampS3 inside) | 8 MB, no PSRAM | ESPIDFORTH, Dial projects | Round display, encoder |
+| `0x0402` | M5Stack M5Capsule | 8 MB, no PSRAM | Capsule_Hive_Scribe, _Redis, _XR | BMI270, battery latch GPIO 46 |
+| `0x0403` | M5Stack AtomS3 (0.85" LCD) | not stated | MagNET_typeScreen_M5AtomS3LCD | Display |
+| `0x0404` | M5Stack AtomS3R-M12 | 8 MB, 8 MB OPI PSRAM | M5_Hive_Camera (`atoms3r`) | OV3660, POWER_N GPIO 18 |
+| `0x0405` | M5Stack StampS3 (bare) | not stated | MagNET_TimeServer_M5StampS3 | |
+| `0x0406` | M5Stack Unit CamS3 | 8 MB, 8 MB OPI PSRAM | M5_Hive_Camera (`m5cams3`) | Camera |
+| `0x0407` | Seeed ReSpeaker Lite (XIAO ESP32S3 carrier) | 8 MB | MagNET_ReSpeaker_Boombox | I2S audio path on the carrier |
+| **ESP32-C3** | | | | |
+| `0x0501` | M5Stack M5Stamp C3U | 4 MB | Stamp3CU projects, DigDug_BLE_Lighting, M5Stamp-C3U | |
+| `0x0502` | Seeed XIAO ESP32C3 | 4 MB | XIAO_ESP32C3_IOT_LIGHTING | Pad D0–D5 = GPIO 2–7 |
+| **nRF52840** | | | | |
+| `0x0601` | Seeed XIAO nRF52840 | not stated | MagNET_IMUCAL_XIAONRF52 | Sense variant unconfirmed |
+
+**Open registry items** (settle before assigning or relying on them):
+
+- The M5Atom in `M5Atom_DigDug_Camera_Button` is a Lite or a Matrix; nothing
+  in the project says which. A Lite gets its own ID once confirmed.
+- M5Camera X: `platformio.ini` says 4 MB PSRAM and pin map Model-A;
+  `pins_m5camerax.h` says 8 MB PSRAM and Model-B ("confirmed"). If both
+  revisions are in use they need two IDs.
+- ESP32-C6-DevKitC-1: N4 or N8 decides which partition table applies (§7.3).
+- The Waveshare C6 bench node `93c6899e` (EXTENDED-TRANSFER.md) is an
+  unnamed Waveshare model; it gets `0x0104`/`0x0105` or a new ID once
+  identified.
+- ReSpeaker Lite: the XIAO ESP32S3 has 8 MB PSRAM on-chip; the project turns
+  it off. The board entry does not depend on it.
+- PetWear_r1_zephos (Zephyr/NCS) names no board; probably `0x0601`.
+
+## 4. Verification (receiver)
+
+A node MUST perform these checks in this order and MUST NOT mark anything
+pending unless all pass. Checks 1–6 need only the header, so a receiver MAY
+run them as soon as chunk 0 arrives and abort the transfer early.
+
+| # | Check | Failure code |
+|---|---|---|
+| 1 | `magic`, `format_version == 1`, `header_len == 256`, `sig_alg` ∈ {1, 2}, unknown `flags` bits zero, reserved bytes zero | `E_PKG_FORMAT` |
+| 2 | `key_id` names a key in the node's release-key store (§6) | `E_PKG_KEY` |
+| 3 | `signature` verifies over header[0:192] with that key, using the key's own algorithm (a key never verifies under the other `sig_alg`) | `E_PKG_SIG` |
+| 4 | `chip` == this chip; `board` == this board or `0`; `image_format` is the one this chip runs | `E_PKG_TARGET` |
+| 5 | `flags.REQUIRES_REPARTITION` clear | `E_PKG_REPARTITION` |
+| 6 | `image_len` == transfer length − 256, and fits the update slot (§7) | `E_PKG_SIZE` |
+| 7 | SHA-256(payload as written to flash, read back) == `image_sha256` | `E_PKG_SHA` |
+| 8 | the platform's own image check passes (§5) | `E_PKG_IMAGE` |
+| 9 | running version ≥ `min_running` | `E_PKG_MIN` |
+
+Only after all nine is the package **staged**. Version-downgrade policy
+(`version` > running unless `ALLOW_DOWNGRADE`) is enforced at **apply** time
+(§13.3 check 6), not staging, so an admin can stage a known-good older build
+ahead of an emergency rollback.
+
+A staged package is identified everywhere — `system/ota_apply`, `!OTA`
+events, tooling — by **`image_sha256[0:16]`** (the `sha128` of §13.3).
+
+Check 7 hashes what was *read back from flash*, not what arrived: that also
+catches a bad flash write.
+
+## 5. Payload formats
+
+### 5.1 `image_format = 1` — ESP-IDF app image (ESP32-C6)
+
+The unmodified `firmware.bin` produced by the IDF build (`esp_image_header_t`
+magic `0xE9`, segments, the IDF-appended SHA-256). It is written with
+`esp_ota_begin(update_partition, image_len)` → `esp_ota_write_with_offset()`
+(arbitrary order — Type 6 delivers out of order) → `esp_ota_end()`, which
+validates the image structure and its appended hash (check 8).
+
+### 5.2 `image_format = 2` — MCUboot signed image (EFR32MG24)
+
+The `zephyr.signed.bin` produced by sysbuild (image header magic
+`0x96f3b83d`, TLVs including MCUboot's own ECDSA-P256 signature), **unpadded**:
+the update-slot trailer is written by `boot_request_upgrade()` at apply time,
+never shipped. Check 8 = the MCUboot header parses and its size fields are
+consistent. MCUboot then re-verifies its own signature at boot — defence in
+depth on this platform; on the C6 the package signature is the *only*
+authenticity check, which is why it exists.
+
+## 6. Release keys
+
+- **Algorithms.** `sig_alg 2` = **Ed25519** (RFC 8032) is preferred: it is the
+  fleet standard — ESPIDFORTH role bundles, the RobotARme release server and
+  the `craw_role_bundle` trust store all use it, and every build that carries
+  the role-bundle engine already links TweetNaCl (the shared `magnet_crypto`
+  component — verified on the Hanasu C6, the MG24 and the WaveC6LED). `sig_alg 1` =
+  deterministic ECDSA P-256 / SHA-256, the primitive of MagNET node identity
+  (§11.1.7 as implemented), stays for signers without Ed25519. Receivers MUST
+  support 2 and SHOULD support 1.
+- **What is signed — exactly.** Ed25519 signs the 192 raw header bytes. This
+  is NOT the RobotARme bundle convention, which signs the 64-character
+  lowercase HEX TEXT of a SHA-256 (`ota_verify.c` in `MagNET_OTA_WaveC6LED`);
+  a server reusing that code path for packages produces a signature that is
+  well-formed and never verifies. Package signing is its own mode.
+- **Store.** Nodes carry a compiled-in store of up to 2 release keys (current +
+  next), each entry `{key_id, sig_alg, public key}` — the same tagged-entry
+  shape as the bundle trust store (`TRUST_ALG_*` in `keys.h`). Rotating keys =
+  ship an image, signed by the current key, whose store holds the next one.
+- **Separation.** The release key is distinct from admin keys (§11.1.7, who may
+  *apply*), from the MCUboot key (§5.2, what may *boot*), and from bundle
+  author keys (what Forth may *run*). Holding one grants none of the others,
+  even where two use the same algorithm.
+- **DEV key.** A DEV release key (private half committed for the bench, like
+  `dev_ed25519.key` for bundles) MUST be absent from the store of any image
+  deployed off the bench. `mnpkg.py` refuses to build a non-`dev` variant
+  with it.
+
+## 7. Transport and platform bindings
+
+### 7.1 Carrying a package
+
+A package travels as one Type 6 transfer (`docs/EXTENDED-TRANSFER.md`), CON
+unicast, with **meta `mnpkg:1`**. A receiver with an OTA sink claims the
+transfer by that meta and writes payload bytes (package offset ≥ 256) to the
+update slot at offset − 256; header bytes are kept in RAM. The receiver sends
+`XC_COMPLETE` **only if §4 checks 1–9 passed** and `XC_REFUSED` otherwise, so
+the sender's `!XFER_SENT` means "staged and verified" (proposal §13.5).
+
+The refusal carries the failing **check number** as the STATUS frame's
+optional reason byte (`docs/EXTENDED-TRANSFER.md`: byte 14, present only with
+code 2). Checks 1–6 are refused at chunk 0, before the payload is sent; 7–9
+instead of COMPLETE after the last chunk. The sender reports
+`!XFER_FAIL <xid> refused:<n>` (a sender on older firmware: plain `refused`).
+
+The v0 MG24 transport (bare image, meta `ota:<sha128>`) is superseded and is
+removed when v1 lands.
+
+### 7.2 EFR32MG24 (Zephyr)
+
+Update slot = MCUboot slot1 (712 KB; payload ≤ 712 KB − 16 KB).
+Apply = `boot_request_upgrade(TEST|PERMANENT)` + reboot; health =
+confirm-when-READY / 10 min / roll back (proposal §13.1).
+
+### 7.3 ESP32-C6 (ESP-IDF)
+
+Update slot = the inactive `ota_N` app partition. **New partition table
+(required once, over USB — a table cannot be changed over the air):**
+
+```
+# 4 MB parts (M5NanoC6, XIAO ESP32C6) — firmware-idf/partitions_ota.csv
+# images: Thread-only ~852 KB, BLE+LED (xray1's build) ~1.16 MB = 65 % of a slot
+nvs,      data, nvs,      0x9000,   0x6000,     # unchanged: identity, bonds survive
+otadata,  data, ota,      0xf000,   0x2000,
+phy_init, data, phy,      0x11000,  0x1000,
+ota_0,    app,  ota_0,    0x20000,  0x1C0000,   # 1792 KB
+ota_1,    app,  ota_1,    0x1E0000, 0x1C0000,   # 1792 KB
+scripts,  data, littlefs, 0x3A0000, 0x60000,    # 384 KB (was 960 KB; reserved, unused today)
+```
+
+8 MB parts keep the 2 × 2 MB table in `firmware-idf/README.md`.
+Apply = `esp_ota_set_boot_partition()` + reboot, with
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`; health = the same
+confirm-when-READY policy via `esp_ota_mark_app_valid_cancel_rollback()`;
+an unconfirmed image is reverted by the bootloader on the next reset — the
+direct analogue of MCUboot TEST mode.
+
+A package whose build changed the partition table MUST set
+`REQUIRES_REPARTITION`; such packages are USB-only.
+
+### 7.4 Health after apply, and persisted Forth bundles
+
+A new image is **healthy** — and only then confirmed — when BOTH hold:
+
+1. the node reached READY (Thread attached), and
+2. every persisted role bundle re-applied without error at boot (or none was
+   persisted).
+
+Reason: a firmware update can remove an FFI word a persisted bundle uses. The
+bundle then fails to re-apply (safely — the engine rolls the dictionary back),
+but the node still reaches READY, so a READY-only rule would **confirm an
+image that silently lost the node's role**. Under this rule that image is not
+confirmed, and the 10-minute deadline rolls it back.
+
+`CLEARS_BUNDLES` (flag bit 1) is for firmware that breaks the Forth vocabulary
+on purpose. While that image is on trial the node does **not** re-apply its
+persisted bundles (health reduces to READY; `system/ota_report` says
+`bundles = 3`). Once the image is confirmed, the node **forgets** them, and the
+operator redeploys bundles for the new vocabulary. If the image instead rolls
+back, the bundles were never touched and the old image re-applies them as
+usual. (Rev 1.0–1.3 said "forget on first boot"; that lost the bundles on a
+rollback.) Nodes record the flag when the image is armed — local `ota-apply`
+or remote `system/ota_apply` — keyed by the image version.
+
+### 7.5 Relation to ESPIDFORTH bundle OTA (RobotARme)
+
+Two update layers, two version spaces — they compose, they do not overlap:
+
+| | Forth bundle OTA (WaveC6LED ↔ RobotARme) | Firmware OTA (this spec) |
+|---|---|---|
+| What changes | Forth source in the dictionary | The ESP-IDF / Zephyr image |
+| Artifact | Bundle JSON, ≤ 64 KB | `.mnpkg`, up to a slot (≤ 1792 KB C6) |
+| Signature | Ed25519 over hex(SHA-256) | Ed25519 over header[0:192] (§6) |
+| Delivery | Pull: HTTP check-in (IP or BLE/USB relay) | Push: Type 6 over the mesh; any transport can carry the file |
+| Rollback | Dictionary savepoint | MCUboot / IDF app rollback |
+| Version reported | Applied release | Running firmware (`version`) |
+
+A `.mnpkg` is transport-neutral bytes, so RobotARme can host it as a release
+kind of its own and a gateway node (or the phone app) can pull it and push it
+into a Thread mesh. ESPIDFORTH devices outside the mesh (M5Dial, WaveC6LED …)
+use the same package over their own transports; each needs an OTA-capable
+partition table first — the WaveC6LED ships a single `factory` app today.
+
+## 8. Tooling — `tools/mnpkg.py`
+
+```
+mnpkg.py build   --chip esp32c6 --board xiao-esp32c6 --variant thread \
+                 --version 0.8.0+1 --fw-version 0.8.0-zf \
+                 --key release.pem  firmware.bin  -o node.mnpkg
+mnpkg.py inspect node.mnpkg                 # decode + validate structure
+mnpkg.py verify  node.mnpkg --pubkey rel.pub  # §4 checks 1-8 offline
+```
+
+`build` derives `image_format` from `chip`, sets `build_time`, refuses a
+payload whose own format check (§5) fails, and refuses the DEV key for a
+non-`dev` variant. `ota_push.py` accepts only `.mnpkg` once v1 lands.
+
+## 9. Worked example (header of a MG24 package)
+
+```
+00  4D 4E 50 4B 01 02 01 00  00 02 02 01 02 00 00 00   MNPK v1 sig=Ed25519 len=256 chip=MG24 board=XIAO fmt=MCUboot
+10  00 08 00 00 00 00 00 01  00 07 00 00 00 00 00 00   version 0.8.0+1   min_running 0.7.0+0
+20  00 06 1A 2F [image_sha256 ................ 32 B]   image_len 399,919
+44  [build_time 8] [variant "ble-resident" 16]
+5C  [fw_version "0.8.0-zf" 32]
+7C  [key_id 8] [reserved 60 x 00]
+C0  [signature r 32][signature s 32]
+```
+
+## 10. Versioning this format
+
+A reader MUST reject `format_version` ≠ 1. A future v2 MAY change
+`header_len`; v1 readers reject it at check 1, which is the intended failure.
+Fields are never repurposed; new ones take reserved bytes and a new version.
+
+## 11. Revision history
+
+| Revision | Date | Wire format | Change |
+|---|---|---|---|
+| 1.4 | 2026-09-30 | 1 | §7.4 `CLEARS_BUNDLES`: bundles are held back during the trial and forgotten only on confirm, so a rollback keeps them (1.0–1.3: forgotten on first boot). No package byte changes. |
+| 1.3 | 2026-09-30 | 1 | §7.3 C6 table corrected to 2 × 1792 KB slots, scripts 384 KB. Revs 1.0–1.2 sized slots from the Thread-only image (852 KB); the BLE+LED build is 1.16 MB and filled 93 % of a 1216 KB slot. No package byte changes. |
+| 1.2 | 2026-09-29 | 1 | §7.1: a refusal carries the failing check number (Type 6 STATUS optional reason byte); checks 1–6 refuse at chunk 0. Clarification — no package byte changes. |
+| 1.1 | 2026-09-29 | 1 | ESPIDFORTH alignment: `sig_alg 2` = Ed25519, preferred (§6); health includes persisted Forth bundles + `CLEARS_BUNDLES` flag (§7.4); relation to the RobotARme bundle OTA (§7.5); registry grown to every board in use — 4 more chips, 22 boards (§3.1). Additive: no v1.0 byte changes meaning; a v1.0 reader rejects the new values at check 1. |
+| 1.0 | 2026-09-29 | 1 | First approved revision (design proposal rev 2.3, §13). |

@@ -1,0 +1,3 @@
+[submodule "reference-designs/MagNET_M5DialFiddlerCrab/ESPIDFORTH"]
+	path = reference-designs/MagNET_M5DialFiddlerCrab/ESPIDFORTH
+	url = git@github.com:IoTone/ESPIDFORTH.git

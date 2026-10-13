@@ -67,7 +67,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
   // demo dataspace (DEMO01) so a one-click Submit pulls up UC1 without
   // any wheel scrolling — speeds up demo runs and proves the panel's
   // wiring end-to-end before the user touches the keyboard. Other valid
-  // codes today: DEMO02, DEMO03, DEMO04.
+  // codes today: DEMO02, DEMO03, DEMO04, DEMO05, DEMO06.
   const DEFAULT_CODE = 'DEMO01';
   const slotValues: string[] = DEFAULT_CODE.split('');
 
@@ -262,7 +262,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
       case JoinState.IDLE:
         // Mention the fixed UC codes alongside the generic prompt so testers
         // can jump directly into a use-case dataspace without a host device.
-        updateStatus('Enter a code  ·  try DEMO01 / DEMO02 / DEMO03 / DEMO04', TEXT.muted);
+        updateStatus('Enter a code  ·  try DEMO01 – DEMO06', TEXT.muted);
         break;
       case JoinState.ENTERING: {
         const n = filledCount();
@@ -374,7 +374,7 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
 
     // Real fetch to /api/v1/join.
     //
-    // Hard 6 s timeout via AbortController. Symptom that motivated this:
+    // Hard timeout via AbortController. Symptom that motivated this:
     // on Snap Spectacles the join screen "stayed up" forever after
     // pressing Submit. A plain fetch() with no timeout will hang
     // indefinitely if the network stack never resolves OR rejects the
@@ -383,13 +383,21 @@ export function createJoinPanel(events: JoinPanelEvents = {}): JoinPanelResult {
     // Without a timeout, neither .then nor .catch fires and the panel is
     // wedged in SUBMITTING forever. The timeout aborts → .catch runs →
     // we fall back to mock-accept so the demo still proceeds.
+    //
+    // 3 s (was 6 s): a reachable join server answers in well under a
+    // second even through a cloudflared tunnel, so 3 s is ample headroom;
+    // the only case that waits the full duration is an ABSENT server that
+    // black-holes the request (offline demo / dropped tunnel), and there
+    // the user was paying 6 s per join for nothing. Halving it is the
+    // single biggest cut to perceived join latency.
     setState(JoinState.SUBMITTING);
     console.info(`[join] submitting code "${code}" …`);
     const ctrl = new AbortController();
+    const JOIN_TIMEOUT_MS = 3000;
     const timeoutId = setTimeout(() => {
-      console.warn('[join] /api/v1/join timed out after 6s — aborting');
+      console.warn(`[join] /api/v1/join timed out after ${JOIN_TIMEOUT_MS}ms — aborting`);
       ctrl.abort();
-    }, 6000);
+    }, JOIN_TIMEOUT_MS);
     fetch('/api/v1/join', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

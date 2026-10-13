@@ -55,6 +55,7 @@
 #include "craw_ble_provision.h"
 #include "craw_hive.h"
 #include "craw_role_bundle.h"
+#include "craw_role_hive_words.h"
 #include "craw_audio.h"
 #include "http_speaker.h"
 #include "../../include/magnet_gen.h"
@@ -241,6 +242,15 @@ static void bundle_install_worker(void *arg) {
             uprintf("[bundle] install failed rc=%d field='%s'\r\n",
                     irc, result.err_field);
             craw_audio_play_error();
+        }
+        /* H4: report the outcome into the hive KV so the ruler can tell a
+         * node RUNNING a role from one that failed to install it. */
+        {
+            char akey[CRAW_HIVE_KV_KEY_MAX + 1], aval[192];
+            snprintf(akey, sizeof(akey), "applied:%.24s", node_id);
+            if (craw_role_bundle_format_applied_json(&result, job->role,
+                                                     aval, sizeof(aval)) == 0)
+                craw_hive_node_kv_put(akey, aval);
         }
     } else {
         uprintf("[bundle] kv-get '%s' failed rc=%d\r\n", job->bundle_key, rc);
@@ -569,6 +579,7 @@ void app_main(void) {
      * silently truncating ESP32forth core + the bundle. */
     forth_init(FORTH_HEAP_SIZE);
     register_forth_words();
+    craw_role_bundle_register_hive_words();   /* hkv-put$/hkv-get$/hkv-run */
     uprintf("Forth ready. Free heap: %lu bytes\r\n",
             (unsigned long)esp_get_free_heap_size());
 

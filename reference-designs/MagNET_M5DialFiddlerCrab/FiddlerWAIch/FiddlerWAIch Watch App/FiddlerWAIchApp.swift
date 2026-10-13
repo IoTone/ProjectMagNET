@@ -55,6 +55,10 @@ struct FiddlerWAIchApp: App {
     }
 
     private func wireMQTT() {
+        // One automatic connectivity probe per launch. When the broker won't connect this
+        // is the line that says whether the device has no network at all or only denies
+        // raw socket flows — and it lands in the log without anyone tapping into 設定.
+        NetProbe.runAtLaunch()
         if !settings.mac4.isEmpty {
             mqtt.connect()
         }

@@ -112,6 +112,34 @@ describe('navigation', () => {
   });
 });
 
+describe('forced carousel render mode', () => {
+  // `forceRenderMode: 'carousel'` pins the flat-image ring (UC4's standalone
+  // "carousel" HUD mode) regardless of platform. We don't call setActive()
+  // here: buildCarousel() uses THREE.TextureLoader, which needs a DOM the
+  // node test env lacks. The navigation branch in goTo() is carousel-aware
+  // and guards the ring with optional chaining, so next/prev/goTo drive the
+  // index without ever touching the splat loader or a texture.
+  const CAROUSEL_PHOTOS: SplatPhoto[] = [
+    { url: '/spatial/a.compressed.ply', imageUrl: '/spatial/a.jpg', title: 'A' },
+    { url: '/spatial/b.compressed.ply', imageUrl: '/spatial/b.jpg', title: 'B' },
+    { url: '/spatial/c.compressed.ply', imageUrl: '/spatial/c.jpg', title: 'C' },
+  ];
+
+  it('navigates without loading any splat scene', () => {
+    const cell = buildLiveSplatGalleryCell({
+      photos: CAROUSEL_PHOTOS, autoAdvanceMs: 0, bindKeyboard: false,
+      forceRenderMode: 'carousel',
+    });
+    expect(cell.currentIndex()).toBe(0);
+    cell.next();        expect(cell.currentIndex()).toBe(1);
+    cell.next();        expect(cell.currentIndex()).toBe(2);
+    cell.next();        expect(cell.currentIndex()).toBe(0);   // wrap
+    cell.prev();        expect(cell.currentIndex()).toBe(2);   // wrap back
+    cell.goTo(1);       expect(cell.currentIndex()).toBe(1);
+    cell.dispose();
+  });
+});
+
 describe('auto-advance timer', () => {
   it('advances on each autoAdvanceMs tick', async () => {
     const cell = buildLiveSplatGalleryCell({

@@ -352,15 +352,15 @@ export default defineConfig({
       // override as the '/api/v1' catch-all below so the two stay aligned.
       // MUST appear BEFORE '/api/v1/sensor'.
       '/api/v1/sensor/aqi': {
-        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        target: `http://127.0.0.1:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
         changeOrigin: true,
       },
       '/api/v1/sensor/barometer': {
-        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        target: `http://127.0.0.1:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
         changeOrigin: true,
       },
       '/api/v1/sensor/pollen': {
-        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+        target: `http://127.0.0.1:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
         changeOrigin: true,
       },
       // M5Atom_Echo_Hex_Hive_ATH20 — UC2 environment sensor (temp + humidity).
@@ -534,8 +534,19 @@ export default defineConfig({
       '/api/v1': {
         /* Port can be overridden via JOIN_SERVER_PORT to sidestep a
          * collision with an unrelated app on 3001. Run mock-join-server
-         * with the same env var and the two stay aligned. */
-        target: `http://localhost:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
+         * with the same env var and the two stay aligned.
+         *
+         * 127.0.0.1 (an IP literal), NOT `localhost`, on every mock-server
+         * target: with no devices attached, the device proxies' dead
+         * `magnet-*.local` lookups block libuv threadpool threads for
+         * seconds each (macOS mDNS timeout). Once all 4 threads are stuck,
+         * EVERY getaddrinfo queues — including `localhost` — and the whole
+         * /api/v1 tier (join, manifests, geo feeds) hangs behind them even
+         * though the join server is alive. An IP literal skips DNS
+         * entirely, so local traffic is immune to that starvation.
+         * (Observed live 2026-07-15: join POST hung ~10 min on a wedged
+         * long-running dev server, then everything drained at once.) */
+        target: `http://127.0.0.1:${process.env.JOIN_SERVER_PORT ?? '3001'}`,
         changeOrigin: true,
       },
       // ESP32-CAM proxy. Override the host in your shell when DHCP shifts:

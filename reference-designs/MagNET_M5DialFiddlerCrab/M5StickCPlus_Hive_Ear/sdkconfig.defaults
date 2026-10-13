@@ -1,0 +1,41 @@
+# M5StickCPlus_Hive_Ear — M5StickC Plus (ESP32-PICO-D4, no PSRAM)
+# BLE-only hive accessory: no WiFi is ever initialized.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Voice_XR ran at 160 MHz; the Ear wants headroom for capture + ADPCM + BLE.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Console: UART0 via the CH552 USB bridge.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# BLE — NimBLE peripheral only, controller BLE-only.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+# Bonds persist in NVS (LE SC, passkey on display).
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+CONFIG_BT_NIMBLE_SM_SC=y
+# Room for one 16 kHz voice frame per notification (E2 confirms the size).
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
+
+# NimBLE logs every notify at INFO: ~125 lines/s at 115200 baud while
+# streaming, enough to stall tasks. Warnings only.
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+# NimBLE's msys_1 pool serves both audio notifications and ATT responses.
+# At the default 12 blocks it ran dry while streaming (host writes failed
+# "Insufficient Resource", ear_atvv stalled); at 24 it never dropped below
+# 22 free (HW, 2026-10-07). +3 KB.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24

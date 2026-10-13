@@ -13,6 +13,61 @@ Sentients: they operate without intervention from their makers.  They will try t
 There will be multiple phases of development.  Each phase will attempt to progressively create newer capabilities. 
 he focus of this design prototype is to exercise a concept of a biologic node that can self replicate, self modify, receive upgrades from "the hive", and utilize shared memory.  
 
+## Status at a glance — 2026-08-14
+
+Full work log with evidence: [`docs/MagNET-Hive-Punch-List-2026-08.md`](docs/MagNET-Hive-Punch-List-2026-08.md)
+(H1–H10 all closed). Design analysis: [`docs/MagNET-Hive-Design-Review-2026-08.md`](docs/MagNET-Hive-Design-Review-2026-08.md).
+
+### Features
+
+| Feature | Status |
+|---|---|
+| BLE WiFi provisioning (`craw_ble_provision`) | ✅ HW-validated, 4 chip families |
+| Hive join: mDNS discovery + HMAC-SHA256 session (`craw_hive`) | ✅ HW-validated multi-node (2026-04-25) |
+| Hive KV store (ruler table, `KV_GET/PUT`, Forth words) | ✅ HW-validated |
+| Signed role bundles — **Ed25519** (RoleBundle v2) with HMAC migration path | ✅ HW-validated incl. tamper rejection |
+| Failed-install **rollback** (engine `forth_eval_rollback`, no partial definitions survive) | ✅ host-tested 15/15 + HW-validated |
+| Bundle **persistence** (NVS envelope, auto-re-apply at boot) | ✅ HW-validated across reboots |
+| **Apply-result reporting** (`applied:<node_id>` KV — ruler sees running vs failed) | ✅ built; HW gate pending on WiFi bench |
+| **Role lifecycle** `role-init/tick/stop/status` + `tick_ms` (host owns the timer) | ✅ host-tested; HW gate pending |
+| Hive KV words for bundles `hkv-put$ / hkv-get$ / hkv-run` (Forth-phrase commands) | ✅ built on all bundle-capable nodes |
+| **All 12 design roles** as firmware or signed bundles (11 bundles authored + linted) | ✅ Milestone C complete |
+| Signed bundles over **Hanasu Thread/HCP/BLE** (`BUNDLE` verb) — one apply engine, three transports | ✅ **HW-validated on the C6 bench** (first on-device Ed25519 install, reboot re-apply, tamper reject) |
+| Mesh-time **stratum-ratchet fix** (anchor-role persistence) | ✅ HW-validated (full anchor cycle) |
+| ESPIDFORTH engine — standalone repo, versioned, CI | ✅ [IoTone/ESPIDFORTH](https://github.com/IoTone/ESPIDFORTH) 0.5.0, consumed as a git submodule |
+| Component hygiene — zero private copies of shared `craw_*` components | ✅ (H10) |
+
+Requirements coverage: **R1–R5, R7–R12 done**; R6 consensus is an auto-accept stub by
+design; R13–R15 partially covered by the lifecycle convention (`role-init` = install,
+`role-tick` = hive work); R16/R17 are ruler-centric KV rather than true NDN; R18 (P2P
+`/chat`) exists on the Hanasu/Thread side, not yet on the WiFi hive.
+
+### Platform support
+
+| Target | Projects | Build | Status |
+|---|---|---|---|
+| ESP32-S3 | Dial ruler, Capsule Scribes ×3, Boombox, CamS3/AtomS3R camera variants | PlatformIO + espidf (pinned `espressif32@6.9.0` / IDF 5.3.1) | ✅ builds green |
+| ESP32-C3 | Stamp C3U nodes, XIAO lighting, ESPIDFORTH reference target | PlatformIO + espidf | ✅ builds green; C3 HW-tested |
+| ESP32 classic | AI-Thinker camera (Spy/Eye host), Atom Echo/Matrix | PlatformIO + espidf | ✅ builds green (DRAM-tight — see punch list H8) |
+| ESP32-C6 | Hanasu Thread mesh (4-node bench, fw `0.7.0-eh`), WaveC6LED OTA | PlatformIO + espidf **and** raw IDF 5.1.1 | ✅ bench-validated 2026-08-14 |
+| Android | `magnet_app` (Flutter) — BLE companion, live mesh, clock seeding | Flutter | ✅ device-validated 2026-08-14 |
+| Milk-V Duo 256M (RISC-V Linux) | Eye retina via M5Stamp C3U sidecar (planned) | — | 🔬 bench-profiled; see `docs/device-profile-MilkV-Duo256M.md` |
+
+### Planned
+
+- **WiFi-bench hardware gates**: grant `eye` → camera and watch `applied:<id>` land;
+  Wave reboot-persistence check; Wave D4 failure-path re-run.
+- **Thread-multicast bundle broadcast** — one `BUNDLE COMMIT` fanning out mesh-wide over
+  the new Type-6 XFER path (point-to-point per node works today).
+- **Eye sidecar**: Milk-V Duo retina ↔ M5Stamp C3U over UART (`ttyS1`, 1.5 Mbaud) — the
+  Duo profile doc has the full plan.
+- **Deferred by design** (see punch list §3): real R6 consensus; R16–R18 Named Data
+  Networking (content-addressed shared memory, custody transfer); full ESP32forth
+  v7.0.8.0 engine port (stub stays until then); Hanasu 32-node soak.
+- **Production posture**: the committed dev keys (`CRAW_HIVE_DEV_SECRET`, the Ed25519
+  dev seed) and Wave's plaintext HTTP are prototype conveniences — a real deployment
+  swaps per-deployment keys, offline author seeds, and TLS before anything ships.
+
 ## Design
 
 OTA is a core ability we wish to enable is for nodes to be able to change their roles and capabilities to do work.  In our demonstration prototype, we will use an M5Stack Dial https://shop.m5stack.com/products/m5stack-dial-esp32-s3-smart-rotary-knob-w-1-28-round-touch-screen based on a core base of software starting from this code: https://github.com/Pharkie/M5StackDial-m5gfx-demo .  This code doesn't have any networking.  We assume this code will be altered to add networking via WIFI or BLE.  For this prototype, we will just use WiFi.  The code will need to be configurable via BLE to connect to WIFI.  
@@ -80,6 +135,15 @@ To get comfortable with FORTH as an alternative language, please see: https://es
 
 **Status**: The ESPIDFORTH project lives in the `ESPIDFORTH/` subdirectory.  It builds and runs on ESP32-S3, ESP32-C3 (tested on hardware), ESP32-C6, and ESP32 classic via PlatformIO with the `espidf` framework.  A stub Forth interpreter implements the core ANS Forth word set (arithmetic, stack ops, comparisons, logic, colon definitions, variables, constants, and control flow).  A built-in test suite of 47 assertions plus 8 FFI tests with per-test microsecond timing is available via the `test` and `test-ffi` words at the REPL.  The Forth engine is packaged as a **self-contained ESP-IDF component** (`ESPIDFORTH/components/forth/`) that can be dropped into any ESP-IDF or PlatformIO project — just copy the directory, add as a git submodule, or use the ESP Component Manager.  The full ESP32forth v7.0.8.0 source is preserved for the next phase of porting.  See `ESPIDFORTH/README.md` for full details.
 
+**Update 2026-08-14**: ESPIDFORTH now lives in its own repository —
+[github.com/IoTone/ESPIDFORTH](https://github.com/IoTone/ESPIDFORTH) (Apache-2.0, full
+history preserved, six-env CI) — and this monorepo consumes it as a **git submodule** at
+the old `ESPIDFORTH/` path. Every project's `components/forth` is a symlink into it;
+**fresh clones need `git submodule update --init`**. Engine is at **0.5.0**: the
+savepoint/rollback primitives (`forth_save/restore`, `forth_eval_rollback`,
+`forth_error_count`, `forth_word_exists`) and internal serialization that the role-bundle
+system is built on.
+
 ### Phase 2.5: ESPIDFORTH M5Stack LED Experiments
 
 Create M5Stamp3CU_Blinky_E4TH, based on ESPIDFORTH and use it as a component.  The project then is just handling blink functions in Forth, via native libraries.
@@ -122,9 +186,16 @@ The post-WiFi bringup order is non-obvious and load-bearing: **BLE teardown → 
 
 #### Milestone C — signed Forth role bundles (R8-R12)
 
-**Status**: Steps 1–4 done. Authoring more bundles is an ongoing line of work; the infrastructure is in place.
+**Status**: **Complete (2026-08-14)** — steps 1–4 plus the H-series upgrades: Ed25519
+signatures (RoleBundle v2), rollback-safe install, NVS persistence with boot re-apply,
+apply-result reporting, the `role-init/tick/stop/status` lifecycle, and **all 12
+design-section roles existing as firmware or signed bundles** (11 bundles under
+`bundles/`, each linted against its host's real FFI vocabulary and host-eval'd through
+the actual engine). The same apply engine also serves WaveC6LED's HTTP OTA and Hanasu's
+`BUNDLE` HCP verb — bench-validated on the C6 fleet. Work log:
+[`docs/MagNET-Hive-Punch-List-2026-08.md`](docs/MagNET-Hive-Punch-List-2026-08.md).
 
-Role bundles are signed Forth source blobs the hive delivers to nodes at runtime. Each is a JSON envelope: version, author tag, capabilities provided, signature over the source, and the source itself. The node validates (signature, version monotonic, CRC), then executes via `forth_eval_n()`.
+Role bundles are signed Forth source blobs the hive delivers to nodes at runtime. Each is a JSON envelope: version, author tag, capabilities provided, signature over the source, and the source itself. The node validates (signature, version monotonic, CRC), then installs via the engine's `forth_eval_rollback()` — line-at-a-time under a dictionary savepoint, so a failed bundle leaves no trace and the error names the offending line.
 
 Architectural decision: **bundles live on the Scribe**. R16/R17 (shared-memory queries) and R8/R9 (role download) collapse into one mechanism — bundles are just KV values keyed `bundle:<name>`. The Ruler embeds bundles as a bootstrap fallback only; once a Scribe joins, the Ruler `KV_PUT`-seeds its bundles into the Scribe and the Scribe becomes authoritative.
 
@@ -138,7 +209,11 @@ Step plan:
    - **A** (production / demo): bundles compiled into the Dial firmware via `bundle_blobs.h` (auto-generated by `scripts/bundles_to_header.py` from signed `*.json`), `bundle_bootstrap()` `KV_PUT`s each into the ruler's local table on boot. Self-sufficient — no laptop required at runtime.
    - **B** (dev / CI): `scripts/push_bundles.py` discovers a running Dial via mDNS, joins as a transient hive client, and `KV_PUT`s each `*.json` in the target directory. Update bundles without reflashing the Dial.
 
-Authoring more roles is now mostly a matter of writing Forth source — author 8 more for the design-section roster (Ruler bundle is special; Worker, Parrot, Beeper, Warrior, Pet, ML PhD, Eye plus Scribe-base remain — **Boombox** has its own firmware project at `MagNET_ReSpeaker_Boombox/` rather than living as a bundle, since it needs the I2S audio component compiled in).
+The roster is authored: `spawn`, `scribe-extra`, `spy-snapper`, `eye`, `worker`,
+`parrot`, `beeper`, `pet`, `warrior`, `mlphd`, `boombox`, plus `hanasu-hello` (the first
+bundle ever installed on hardware, over Hanasu's Thread-node HCP). Ruler remains
+firmware by design. Roles that act do so through `hkv-run` — the Ruler leaves a Forth
+phrase in the role's command key and the next tick executes it, at most once.
 
 ## Topology at the current checkpoint
 
@@ -172,9 +247,18 @@ Per-peer projects: `M5Atom_Echo_Hex_Hive_Test/`, `M5_Hive_Camera/`, `M5Capsule_H
 | `craw_ble_provision` | Phase 4A — BLE provisioning GATT service + advertising/teardown control |
 | `craw_hive` | Phase 4B — mDNS + TCP + HMAC-SHA256 protocol, node + ruler sides |
 | `craw_camera` | OV2640 wrapper over `espressif/esp32-camera`, multi-board pin maps (AI-Thinker + M5CamS3), NVS-persisted sensor settings (framesize, quality, vflip, hmirror, XCLK) |
-| `craw_role_bundle` | Phase 4C — parse + verify-signature + base64-decode + CRC + `forth_eval()` install + NVS persist of signed Forth role bundles |
+| `craw_role_bundle` | Phase 4C+H — the verified-apply engine: envelope parse, HMAC/**Ed25519** verify, CRC, rollback-safe install (`forth_eval_rollback`), NVS persist + boot re-apply, role lifecycle ticker, applied-report formatting. **No WiFi/hive dependency** — Hanasu's Thread nodes carry it too. |
+| `magnet_crypto` | H3 — shared Ed25519 verify (vendored TweetNaCl + hardware-RNG `randombytes`); also consumed by `MagNET_OTA_WaveC6LED` |
+| `craw_role_hive_words` | H6/H8 — the `hkv-put$`/`hkv-get$`/`hkv-run` Forth words (WiFi-hive nodes only; split from `craw_role_bundle` so the engine stays transport-agnostic) |
+| `craw_imu` | M5Capsule BMI270 (Madgwick fusion) — promoted from project copies in H10 |
+| `craw_redis` | RESP2 TCP server over the scribe KV — promoted from project copies in H10 |
 | `craw_mdns` | Simple mDNS hostname publisher (pre-Phase-4, retained for other projects) |
 | `craw_mqtt`, `craw_http`, `craw_speaker` | Earlier-phase helpers still in use by the M5StickC and M5Dial crawdad projects |
+
+**Policy since H10**: node projects consume every shared component via **symlink** — no
+private copies (a per-project copy silently forks; two of them did, for months). A
+component used by only one project may live in that project until a second consumer
+appears, then it gets promoted here.
 
 ## Dev-environment gotchas
 

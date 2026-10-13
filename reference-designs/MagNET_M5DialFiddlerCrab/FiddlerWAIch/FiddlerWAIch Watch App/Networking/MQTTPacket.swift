@@ -71,7 +71,10 @@ enum MQTTPacket {
 
     /// Decode a full MQTT control packet. Caller must have already framed the packet
     /// (i.e., `data` is exactly one complete packet).
-    static func decode(_ data: Data) -> Decoded? {
+    static func decode(_ rawData: Data) -> Decoded? {
+        // Re-base: a Data that came out of a slice has a non-zero startIndex, and every
+        // index below is absolute. Copying is cheap at MQTT packet sizes.
+        let data = rawData.startIndex == 0 ? rawData : Data(rawData)
         guard data.count >= 2 else { return nil }
         let firstByte = data[0]
         let ptype = firstByte & 0xF0

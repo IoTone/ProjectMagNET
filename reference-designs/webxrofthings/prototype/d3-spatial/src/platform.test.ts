@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { isSpectacles, isQuest, platformName, _setUaForTest } from './platform';
+import { isSpectacles, isQuest, isAndroidXR, platformName, _setUaForTest } from './platform';
 
 afterEach(() => _setUaForTest(null));
 
@@ -11,6 +11,10 @@ const QUEST3_UA =
 const SPECTACLES_UA =
   'Mozilla/5.0 (Linux; Spectacles 5.2) AppleWebKit/605.1.15 (KHTML, like Gecko) ' +
   'Version/16.0 Mobile/15E148 Safari/604.1';
+// Reference Android XR device: Chrome 138 on Android 10 (no OculusBrowser).
+const ANDROIDXR_UA =
+  'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/138.0.0.0 Mobile Safari/537.36';
 const DESKTOP_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) ' +
   'Version/17.0 Safari/605.1.15';
@@ -67,10 +71,38 @@ describe('isQuest', () => {
   });
 });
 
+describe('isAndroidXR', () => {
+  it('matches the Chrome-138-on-Android-10 reference UA', () => {
+    _setUaForTest(ANDROIDXR_UA);
+    expect(isAndroidXR()).toBe(true);
+  });
+
+  it('does NOT match Quest 3 (Chromium on Android-ish, but OculusBrowser)', () => {
+    _setUaForTest(QUEST3_UA);
+    expect(isAndroidXR()).toBe(false);
+  });
+
+  it('does NOT match Spectacles (WebKit, not Chromium)', () => {
+    _setUaForTest(SPECTACLES_UA);
+    expect(isAndroidXR()).toBe(false);
+  });
+
+  it('does NOT match desktop Safari', () => {
+    _setUaForTest(DESKTOP_UA);
+    expect(isAndroidXR()).toBe(false);
+  });
+
+  it('handles empty UA gracefully', () => {
+    _setUaForTest('');
+    expect(isAndroidXR()).toBe(false);
+  });
+});
+
 describe('platformName', () => {
   it.each([
     [SPECTACLES_UA, 'spectacles'],
     [QUEST3_UA,     'quest'],
+    [ANDROIDXR_UA,  'androidxr'],
     [DESKTOP_UA,    'desktop'],
     ['',            'desktop'],
   ])('UA %s → %s', (uaStr, expected) => {

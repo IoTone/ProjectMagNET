@@ -1,16 +1,3 @@
-buildscript {
-    ext.kotlin_version = '1.7.10'
-    repositories {
-        google()
-        mavenCentral()
-    }
-
-    dependencies {
-        classpath 'com.android.tools.build:gradle:7.3.0'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-    }
-}
-
 allprojects {
     repositories {
         google()
@@ -22,6 +9,25 @@ rootProject.buildDir = '../build'
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
 }
+// Some older transitive plugins (e.g. nsd_android) don't declare an
+// `android.namespace`, which Android Gradle Plugin 8+ requires. Inject
+// one from the plugin's Gradle `group` (which matches its legacy
+// AndroidManifest package) so the build configures cleanly. Registered
+// BEFORE the evaluationDependsOn block below, otherwise that block
+// forces ':app' to evaluate first and afterEvaluate can't attach to an
+// already-evaluated project.
+subprojects {
+    afterEvaluate { project ->
+        if (project.hasProperty('android')) {
+            project.android {
+                if (namespace == null) {
+                    namespace project.group.toString()
+                }
+            }
+        }
+    }
+}
+
 subprojects {
     project.evaluationDependsOn(':app')
 }
