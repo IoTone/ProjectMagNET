@@ -49,9 +49,10 @@ Resume from "Next, when resumed".
   `mnbleota` (BLE resident, DEV MCUboot key), v0.7.0+1, default channel at epoch 0,
   admin list empty, no bundles, bonded to the dev Mac.
 - **neko** — M5Stack NanoC6, USB serial `40:4C:CA:5B:0D:F8`, id `46a359bf`: env
-  `esp32c6_ble_led_ota`, v0.7.0+1 in `ota_0` (moved to OTA 2026-10-12, NVS kept).
+  `esp32c6_ble_led_ota`, moved to OTA 2026-10-12 (NVS kept). v0.7.0+2 flashed, but the
+  USB link went silent right after (even esptool gets no answer): replug, then check `WHOAMI`.
 - **probe** — M5Stack NanoC6 companion node, USB serial `40:4C:CA:5B:18:14`, id
-  `e1256131`: env `esp32c6_ble_resident_ota`, v0.7.0+1 in `ota_0` (moved to OTA
+  `e1256131`: env `esp32c6_ble_resident_ota`, v0.7.0+2 in `ota_0` (moved to OTA
   2026-10-12, NVS kept); resets on port open. Chat with neko verified both ways.
 - Pick serial ports by USB serial number, never by `/dev` name; the
   M5StampS3 (`34:B7:DA:55:CC:70`) that sometimes shares the hub is not part of
