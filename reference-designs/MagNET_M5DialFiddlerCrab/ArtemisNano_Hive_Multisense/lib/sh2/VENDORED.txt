@@ -1,0 +1,2 @@
+Vendored from https://github.com/ceva-dsp/sh2 at b514b1e2586ddc195e553dac89fc94c637b25298 (2023-09-14).
+Apache-2.0 (see file headers). Unmodified.
