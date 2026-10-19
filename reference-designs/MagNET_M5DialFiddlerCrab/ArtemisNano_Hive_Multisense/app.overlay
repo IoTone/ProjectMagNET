@@ -1,9 +1,33 @@
 /*
  * ArtemisNano_Hive_Multisense app overlay.
- * M1: Qwiic bus on (IOM2, SCL pad 27 / SDA pad 25), 100 kHz.
+ * Qwiic bus (IOM2, SCL pad 27 / SDA pad 25) at 100 kHz with the Multisensor chain:
+ *   0x0B LC709203F fuel gauge   (M2, in-tree driver)
+ *   0x44 OPT4048 color          (M3, out-of-tree driver)
+ *   0x4A BNO085 IMU             (M3, CEVA SH-2 port)
+ *   0x69 RV-1805 RTC            (M2, in-tree ambiq,am1805 driver; RV-1805 = AM1805)
  */
+
+/ {
+	aliases {
+		rtc = &rv1805;
+		fuel-gauge0 = &fuel_gauge;
+	};
+};
 
 &qwiic_i2c {
 	clock-frequency = <I2C_BITRATE_STANDARD>;
 	status = "okay";
+
+	fuel_gauge: lc709203f@b {
+		compatible = "onnn,lc709203f";
+		reg = <0x0b>;
+		apa = "2000mAh";		/* 3.7 V 2000 mAh LiPo */
+		battery-profile = <0x01>;	/* 4.2 V charged (Adafruit default) */
+	};
+
+	/* Alarm (CONFIG_RTC_ALARM) needs am1805-gpios = RV-1805 INT -> D6 (pad 43); not wired yet. */
+	rv1805: rv1805@69 {
+		compatible = "ambiq,am1805";
+		reg = <0x69>;
+	};
 };

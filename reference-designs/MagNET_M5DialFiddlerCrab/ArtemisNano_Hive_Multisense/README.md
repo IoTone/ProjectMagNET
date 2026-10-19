@@ -26,6 +26,7 @@ time, its own energy) and tells the hive which ones it has (§5).
 | 2026-10-19 | Project repurposed: **Turret → Multisense** (low-power multi-sensor node). Design below. |
 | 2026-10-19 | **M1 scan** (chain attached): `0x0B` LC709203F ✅, `0x44` OPT4048 ✅, `0x69` RV-1805 ✅, stable over 3 scans. AK9753 not seen at `0x64/65/67`; unexpected ACKs at `0x39 0x4F 0x62` (to recheck after the swap). **AK9753 dropped; replaced by BNO085 IMU** (`0x4A`). |
 | 2026-10-19 | **M1 passed.** After the swap: `0x0B` LC709203F, `0x44` OPT4048, `0x4A` BNO085, `0x69` RV-1805, nothing else. The `0x39/0x4F/0x62` ACKs left with the presence board, which never answered as an AK9753 (wrong part or faulty board). |
+| 2026-10-19 | **M2 on the bench.** RV-1805 reports `ID0=0x18 ID1=0x05` (AM1805 part number): the upstream `ambiq,am1805` driver works unmodified. Trickle charger enabled by `src/rv1805.c` (reads back `0xA5`); first boot found year 1900 (never set) and loaded the build time; **time kept across reset** ✅. LC709203F (APA 2000 mAh, 4.2 V profile): `vbat 4.067 V soc 87%` on USB charge. Requesting `FUEL_GAUGE_TEMPERATURE` without a thermistor fails the *whole* `get_props` call (`-134`), so it is not requested. Remaining checks: voltage against a meter; time across a full power-off on the supercap (allow ~10 min to charge first). Alarm waits for RV-1805 INT → D6. |
 
 ---
 
