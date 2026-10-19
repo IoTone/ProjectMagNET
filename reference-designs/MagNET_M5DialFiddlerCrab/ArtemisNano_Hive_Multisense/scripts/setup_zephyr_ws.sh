@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup_zephyr_ws.sh — create the Zephyr workspace used by ArtemisNano_Hive_Turret_Test.
+# setup_zephyr_ws.sh — create the Zephyr workspace used by ArtemisNano_Hive_Multisense.
 #
 # Pinned versions (keep in sync with README §5, phase 1):
 #   Zephyr      v4.4.2   (upstream; NCS's fork drops hal_ambiq, so we don't reuse C:\ncs)

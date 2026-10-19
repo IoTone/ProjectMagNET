@@ -12,7 +12,7 @@ svl.py, github.com/sparkfun/Apollo3_Uploader_SVL, MIT), and adds what svl.py lac
   * --monitor: reopens the port afterwards and prints the console.
 
 Usage:
-  python flash.py [--port COM7] [--build-dir C:/zephyr-artemis/build/turret] [--monitor 10]
+  python flash.py [--port COM7] [--build-dir C:/zephyr-artemis/build/multisense] [--monitor 10]
   python flash.py --bin path/to/zephyr.bin --port COM7
 
 Requires pyserial (installed in the Zephyr venv by setup_zephyr_ws.sh).
@@ -181,7 +181,7 @@ def monitor(port, seconds):
 def main():
     ap = argparse.ArgumentParser(description="Upload a Zephyr image to the Artemis Nano via the SVL.")
     ap.add_argument("--port", help="serial port (default: auto-detect the CH340)")
-    ap.add_argument("--build-dir", default="C:/zephyr-artemis/build/turret",
+    ap.add_argument("--build-dir", default="C:/zephyr-artemis/build/multisense",
                     help="west build directory (uses <dir>/zephyr/zephyr.bin)")
     ap.add_argument("--bin", help="explicit image file instead of --build-dir")
     ap.add_argument("-b", "--baud", type=int, default=115200,

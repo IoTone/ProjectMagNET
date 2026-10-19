@@ -1,0 +1,9 @@
+/*
+ * ArtemisNano_Hive_Multisense app overlay.
+ * M1: Qwiic bus on (IOM2, SCL pad 27 / SDA pad 25), 100 kHz.
+ */
+
+&qwiic_i2c {
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	status = "okay";
+};
