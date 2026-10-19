@@ -1,0 +1,49 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Pad assignments from SparkFun's RedBoard-Artemis-Nano.sch (see docs/wiring.html).
+ */
+
+#include <zephyr/dt-bindings/pinctrl/ambiq-apollo3-pinctrl.h>
+
+&pinctrl {
+	/* UART0 -> CH340E USB-serial (TXO-0 = pad 48, RXI-0 = pad 49) */
+	uart0_default: uart0_default {
+		group1 {
+			pinmux = <UART0TX_P48>;
+		};
+
+		group2 {
+			pinmux = <UART0RX_P49>;
+			input-enable;
+		};
+	};
+
+	/* SWO is shared with header pin A1 (pad 33) on this board */
+	itm_default: itm_default {
+		group1 {
+			pinmux = <SWO_P33>;
+		};
+	};
+
+	/* Qwiic connector: SCL2 = pad 27, SDA2 = pad 25 */
+	i2c2_default: i2c2_default {
+		group1 {
+			pinmux = <M2SCL_P27>, <M2SDAWIR3_P25>;
+			drive-open-drain;
+			drive-strength = "0.5";
+			bias-pull-up;
+		};
+	};
+
+	/*
+	 * Servo signal on header D9 = pad 39 (CTX25). With the driver's NORMAL output
+	 * type, CTX25 can be driven by timer 2 segment B (B2OUT) or timer 6 segment A
+	 * (A6OUT); see outcfg_tbl in hal_ambiq am_hal_ctimer.c. We use timer 2 seg B.
+	 */
+	pwm2_default: pwm2_default {
+		group1 {
+			pinmux = <CTIM25_P39>;
+		};
+	};
+};

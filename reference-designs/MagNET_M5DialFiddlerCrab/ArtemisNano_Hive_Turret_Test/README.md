@@ -1,6 +1,8 @@
 # ArtemisNano_Hive_Turret_Test — bring-up plan
 
-**Status:** 📋 **PLANNED.** Desk research 2026-10-18. No code written yet.
+**Status:** 🔧 **BRING-UP.** Phase 2 passed on hardware 2026-10-18: Zephyr v4.4.2 boots from `0x10000` via the SVL.
+**Build / flash:** `west build -b sparkfun_artemis_nano -d C:/zephyr-artemis/build/turret <this dir>` then
+`python scripts/flash.py --monitor 10` (Zephyr venv; workspace from `scripts/setup_zephyr_ws.sh`).
 **Board:** [SparkFun RedBoard Artemis Nano](https://github.com/sparkfun/RedBoard_Artemis_Nano)
 (DEV-15443) — Artemis module = Ambiq **Apollo3 Blue** (Cortex-M4F @ 48/96 MHz, 1 MB flash,
 384 KB SRAM, BLE 5). USB-C via CH340E serial; no native USB.
@@ -15,6 +17,9 @@
 |---|---|
 | 2026-10-18 | Desk research: platform options, Zephyr port status, J-Link connector, servo selection. ULN2003/28BYJ-48 steppers parked in favor of the FS0307 servo. |
 | 2026-10-18 | **Phase 1 done.** Workspace `C:\zephyr-artemis` (Zephyr v4.4.2, SDK 1.0.1, Arm toolchain only) via `scripts/setup_zephyr_ws.sh`. `hello_world` (14,376 B) and `bluetooth/peripheral` (144 KB flash / 37 KB RAM) build green for `apollo3_evb`. Found the SoC default `FLASH_LOAD_OFFSET=0xC000` collides with the SVL (§1). |
+| 2026-10-18 | **Phase 2 built, not yet on hardware.** Board `sparkfun_artemis_nano` (`boards/sparkfun/artemis_nano/`), app linked at `0x10000` (vector table verified, 16,772 B, 4-byte aligned). `scripts/flash.py` speaks the SVL protocol natively: CRC matches SparkFun's on 2,000 random vectors, and it rejects the stock `apollo3_evb` image (reset vector `0xC951`). First upload attempt: the CH340 on COM4 gave no SVL response, with or without an explicit RTS pulse, and printed nothing at 115200. The board on COM4 is not yet confirmed to be the Nano. |
+| 2026-10-18 | **Board not reachable over USB serial.** COM4 confirmed to be the Nano. No response from the SVL (`flash.py`, SparkFun `svl.py` at 115200/921600, Arduino IDE upload) or from the Ambiq ROM bootloader (read-only HELLO probe, Arduino *Burn Bootloader*: `Fail ×3`). Only the red 3V3 LED is lit; the yellow RX LED (D5) and green TX LED (D7) never lit under 30 s of traffic with reset pulses. One `SerialTimeoutException` and one COM4 drop-out. CH340 driver: WCH 3.8.2023.2. Because the ROM bootloader can't be erased, this is below firmware: Artemis not running/resetting, or the CH340↔Artemis UART path is broken. **Next: J-Link over SWD** (`docs/wiring.html`) to check chip ID and read `0xC000`, then restore `svl.bin` if needed. Cable swap: the board seems sensitive to which USB-C cable is used, although R11/R13 (5.1 kΩ CC pull-downs) are fitted, so a C-to-C cable should work. That points at a marginal USB-C link (consistent with the drop-out). SparkFun notes the Artemis can't be bricked by bootloader choice. Second Nano may be available to A/B. |
+| 2026-10-18 | **Phase 2 gate passed on hardware** after re-seating the USB-C connection (no J-Link needed). `flash.py`: SVL v5, 9 frames at 115200. Console: `Booting Zephyr OS build v4.4.2`, `VTOR=0x00010000 (expect 0x00010000)`, tick 10 at 5021 ms (500 ms period, clocks correct). One stray byte on TX at reset (harmless). Lesson: the earlier failures were the USB-C link, not firmware. If the SVL goes silent, re-seat or swap the USB-C cable first. |
 
 ---
 
@@ -109,7 +114,7 @@ role with fixed verbs. A Zephyr port of the engine is deferred.
 |---|---|---|
 | 0 | Bench: stock SVL upload of a SparkFun example over USB-C. Solder the SWD header. Read the target with J-Link Commander (`connect`, device `AMA3B1KK-KBR`). | Board alive on both paths |
 | 1 ✅ | Toolchain: `west` workspace pinned to Zephyr v4.4.2, Zephyr SDK 1.0.1, `hal_ambiq` (+ `mbedtls`, `tf-psa-crypto` for BLE). Build `hello_world` for unmodified `apollo3_evb`. | Build passes (proves the toolchain, not the board). Done 2026-10-18. |
-| 2 | Board `boards/sparkfun/artemis_nano/`, derived from `apollo3_evb`. Code partition `0x10000`, UART0 console on the CH340E pins, user LED. `flash.py` for SVL. `west flash` via J-Link at the offset. | Blinky + console, flashed **both** ways |
+| 2 ✅ | Board `boards/sparkfun/artemis_nano/`, derived from `apollo3_evb`. Code partition `0x10000`, UART0 console on the CH340E pins, user LED. `flash.py` for SVL. `west flash` via J-Link at the offset. | Blinky + console, flashed **both** ways |
 | 3 | **Servo** (§6): `ambiq,ctimer-pwm` → Zephyr `samples/basic/servo_motor` adapted to the FS0307 range | Servo sweeps the full range, no jitter |
 | 4 | BLE: Ambiq HCI driver + Zephyr `peripheral` sample | Phone (nRF Connect / `magnet_app`) connects |
 | 5 | Hive glue: HCP subset over a BLE GATT service, plus the turret verbs | `AIM 30` from `hcp.py`/app moves the servo |

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Derived from boards/ambiq/apollo3_evb/Kconfig.defconfig (Zephyr v4.4.2).
+
+if BOARD_SPARKFUN_ARTEMIS_NANO
+
+# The SoC default (soc/ambiq/apollo3x/Kconfig.defconfig.apollo3_blue) is 0xC000,
+# which is where the SparkFun Variable Loader (SVL) lives on this board. The SVL
+# runs applications from 0x10000. Board defaults are read before SoC defaults,
+# so this wins. Never change it unless the SVL is being replaced.
+config FLASH_LOAD_OFFSET
+	default 0x10000 if !BOOTLOADER_MCUBOOT
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+	default 32768 if AMBIQ_STIMER_TIMER
+	default 48000000 if CORTEX_M_SYSTICK
+
+config LOG_BACKEND_SWO_FREQ_HZ
+	default 1000000
+	depends on LOG_BACKEND_SWO
+
+endif # BOARD_SPARKFUN_ARTEMIS_NANO

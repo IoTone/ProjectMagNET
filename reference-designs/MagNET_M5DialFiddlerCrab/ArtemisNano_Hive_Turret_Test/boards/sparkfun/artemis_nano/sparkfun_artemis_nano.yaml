@@ -1,0 +1,15 @@
+identifier: sparkfun_artemis_nano
+name: SparkFun RedBoard Artemis Nano
+type: mcu
+arch: arm
+ram: 384
+flash: 960
+toolchain:
+  - zephyr
+supported:
+  - uart
+  - gpio
+  - pwm
+  - i2c
+  - watchdog
+vendor: sparkfun
