@@ -200,9 +200,9 @@ static void report_imu(void)
 		printk("imu    no data yet (resets %u)\n", s.resets);
 		return;
 	}
-	printk("imu    yaw %.1f pitch %.1f roll %.1f (+/-%.1f deg)  %s  n=%u resets=%u\n",
+	printk("imu    yaw %.1f pitch %.1f roll %.1f (+/-%.1f deg)  %s  sigmo=%u  n=%u resets=%u\n",
 	       (double)s.yaw, (double)s.pitch, (double)s.roll, (double)s.accuracy_deg,
-	       bno085_stability_str(s.stability), s.reports, s.resets);
+	       bno085_stability_str(s.stability), s.sig_motion, s.reports, s.resets);
 }
 
 static void report(void)

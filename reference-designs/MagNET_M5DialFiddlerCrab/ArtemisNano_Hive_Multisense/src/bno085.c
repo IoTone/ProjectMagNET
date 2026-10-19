@@ -13,6 +13,7 @@
 
 #define RV_INTERVAL_US        100000	/* rotation vector, 10 Hz */
 #define STABILITY_INTERVAL_US 1000000	/* stability classifier, 1 Hz */
+#define SIG_MOTION_ARM_US     1000000	/* any non-zero interval arms the one-shot */
 #define POLL_MS               10
 
 static const struct device *bus;
@@ -21,6 +22,7 @@ static uint16_t bus_addr;
 static struct k_spinlock lock;
 static struct bno085_sample latest;
 static volatile bool need_config;
+static volatile bool need_rearm;
 static K_SEM_DEFINE(started, 0, 1);
 static int start_err = -ETIMEDOUT;
 
@@ -143,6 +145,10 @@ static void on_sensor(void *cookie, sh2_SensorEvent_t *event)
 		latest.valid = true;
 		break;
 	}
+	case SH2_SIGNIFICANT_MOTION:
+		latest.sig_motion++;
+		need_rearm = true;
+		break;
 	case SH2_STABILITY_CLASSIFIER:
 		latest.stability = v.un.stabilityClassifier.classification;
 		break;
@@ -163,12 +169,14 @@ static void configure(void)
 {
 	int a = enable_report(SH2_ROTATION_VECTOR, RV_INTERVAL_US);
 	int b = enable_report(SH2_STABILITY_CLASSIFIER, STABILITY_INTERVAL_US);
+	int c = enable_report(SH2_SIGNIFICANT_MOTION, SIG_MOTION_ARM_US);
 
-	if (a != SH2_OK || b != SH2_OK) {
-		printk("bno085: enable reports failed (%d, %d)\n", a, b);
+	if (a != SH2_OK || b != SH2_OK || c != SH2_OK) {
+		printk("bno085: enable reports failed (%d, %d, %d)\n", a, b, c);
 		return;
 	}
 	need_config = false;
+	need_rearm = false;
 }
 
 static void imu_thread(void *p1, void *p2, void *p3)
@@ -204,6 +212,10 @@ static void imu_thread(void *p1, void *p2, void *p3)
 		if (need_config) {
 			printk("bno085: hub reset, re-enabling reports\n");
 			configure();
+		} else if (need_rearm) {
+			/* Significant motion disables itself after firing. */
+			need_rearm = false;
+			enable_report(SH2_SIGNIFICANT_MOTION, SIG_MOTION_ARM_US);
 		}
 		k_msleep(POLL_MS);
 	}
