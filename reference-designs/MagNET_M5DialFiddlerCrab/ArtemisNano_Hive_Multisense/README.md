@@ -7,8 +7,8 @@ then `python scripts/flash.py --monitor 10` (Zephyr venv; workspace from `script
 **Board:** [SparkFun RedBoard Artemis Nano](https://github.com/sparkfun/RedBoard_Artemis_Nano)
 (DEV-15443): Artemis module = Ambiq **Apollo3 Blue** (Cortex-M4F @ 48/96 MHz, 1 MB flash,
 384 KB SRAM, BLE 5), LiPo charger, Qwiic, PDM mic. USB-C via CH340E serial. Inventory: 3 working boards.
-**Role:** proposed **Role 15: Antenna**, a node that senses its surroundings (presence, light, time,
-its own energy) and reports to the hive (§5). Insect antennae are multi-sensors, which fits the theme.
+**Role:** **Role 15: Multisensor**, a node that carries more than one sensor (motion/orientation, light,
+time, its own energy) and tells the hive which ones it has (§5).
 **Platform:** upstream **Zephyr** + our out-of-tree board `sparkfun_artemis_nano` (§1–§3).
 **Hive link:** BLE only (no WiFi/Thread on the Apollo3), §5.
 **Forth:** yes, via a Zephyr platform layer for the ESPIDFORTH engine (§6).
@@ -24,6 +24,8 @@ its own energy) and reports to the hive (§5). Insect antennae are multi-sensors
 | 2026-10-18 | First Nano unreachable: no SVL, no ROM-bootloader (ASB) answer, only the red LED lit, RX/TX LEDs dark. **Root cause: its Artemis module had been physically torn off.** The CH340 and 3V3 rail still worked, so COM4 enumerated. Board retired. Lesson: if the SVL *and* the ROM bootloader are silent while COM4 enumerates, inspect the board. |
 | 2026-10-18 | **P2 passed on hardware** (second Nano, no J-Link). SVL v5, 9 frames at 115200. Console: `Booting Zephyr OS build v4.4.2`, `VTOR=0x00010000`, tick 10 at 5021 ms (clocks correct). Blue LED blinking. One stray byte on TX at reset (harmless). |
 | 2026-10-19 | Project repurposed: **Turret → Multisense** (low-power multi-sensor node). Design below. |
+| 2026-10-19 | **M1 scan** (chain attached): `0x0B` LC709203F ✅, `0x44` OPT4048 ✅, `0x69` RV-1805 ✅, stable over 3 scans. AK9753 not seen at `0x64/65/67`; unexpected ACKs at `0x39 0x4F 0x62` (to recheck after the swap). **AK9753 dropped; replaced by BNO085 IMU** (`0x4A`). |
+| 2026-10-19 | **M1 passed.** After the swap: `0x0B` LC709203F, `0x44` OPT4048, `0x4A` BNO085, `0x69` RV-1805, nothing else. The `0x39/0x4F/0x62` ACKs left with the presence board, which never answered as an AK9753 (wrong part or faulty board). |
 
 ---
 
@@ -82,7 +84,7 @@ Worth soldering if BLE (M4) or deep sleep (M5) produce silent failures; not need
 
 | Part | Board | Senses | I2C | Supply / current (vendor) | Zephyr driver |
 |---|---|---|---|---|---|
-| AK9753 | [SparkFun SEN-14349](https://www.sparkfun.com/sparkfun-human-presence-sensor-breakout-ak9753-qwiic.html) | Human presence + direction: 4 IR channels (each its own field of view), die temp | `0x64` (jumpers: `0x65`/`0x67`) | 1.7–3.3 V, ~100 µA | ❌ **write** (out-of-tree sensor driver) |
+| BNO085 | [Adafruit 4754](https://learn.adafruit.com/adafruit-9-dof-orientation-imu-fusion-breakout-bno085/arduino) | 9-DoF with on-chip fusion: rotation vector, accel, gyro, mag, step/tap/significant-motion, stability classifier | `0x4A` (DI high: `0x4B`) | VIN 3–5 V (on-board regulator, level shifters); **mA-range while fusing**, sleep modes available | ❌ **port CEVA SH-2** (Apache-2.0, the library Adafruit/SparkFun use) with a Zephyr HAL: I2C + INT + RST + timer |
 | OPT4048 | [SparkFun SEN-24020](https://www.sparkfun.com/sparkfun-tristimulus-color-sensor-opt4048dtsr-qwiic.html) | CIE XYZ + clear channel → lux (2.15 mlux–144 klux), CCT, CIE xy | `0x44` (`0x45`/`0x46`) | 1.71–3.6 V, 24 µA active, 2 µA standby; 0.6–800 ms conversion | ❌ **write** (out-of-tree sensor driver) |
 | RV-1805 | [SparkFun BOB-14558](https://www.sparkfun.com/sparkfun-real-time-clock-module-rv-1805-qwiic.html) | Wall-clock time, alarms; supercap backup (~35 days) | `0x69` | ~22 nA (lowest-power mode) | ✅ `ambiq,am1805`: the RV-1805 is Micro Crystal's AM1805; **confirm register compatibility on the bench** |
 | LC709203F | [Adafruit 4712](https://learn.adafruit.com/adafruit-lc709203f-lipo-lipoly-battery-monitor/overview) | LiPo voltage, state of charge, optional 10k thermistor | `0x0B` | powered from the battery | ✅ `onnn,lc709203f` (fuel gauge API) |
@@ -97,7 +99,8 @@ Worth soldering if BLE (M4) or deep sleep (M5) produce silent failures; not need
 
   | Signal | Nano pin | Pad |
   |---|---|---|
-  | AK9753 INT (presence threshold) | D8 | 38 |
+  | BNO085 INT (data ready, active low; required) | D8 | 38 |
+  | BNO085 RST (active low) | D10 | 40 |
   | OPT4048 INT (lux threshold / conversion done) | D7 | 42 |
   | RV-1805 INT (alarm) | D6 | 43 |
   | LC709203F ALARM (low SOC/voltage) | D4 | 18 |
@@ -106,7 +109,7 @@ Worth soldering if BLE (M4) or deep sleep (M5) produce silent failures; not need
 
 ### 4.2 Power
 
-Battery: single-cell LiPo → **LC709203F board (JST-PH pass-through)** → Nano JST battery
+Battery: single-cell LiPo, **3.7 V nominal, 2000 mAh** (fuel-gauge pack size = 2000 mAh) → **LC709203F board (JST-PH pass-through)** → Nano JST battery
 input (`V_BATT` → Schottky → `VIN` → AP2112 3.3 V). The Nano's MCP73831 charges from USB.
 
 **Always-on loads on the Nano** (from the schematic). These set the sleep floor regardless of firmware:
@@ -119,6 +122,9 @@ input (`V_BATT` → Schottky → `VIN` → AP2112 3.3 V). The Nano's MCP73831 ch
 | SPH0641 mic, idle without PDM clock | small (µA range) | Accept |
 | Breakout power LEDs (if fitted) | ~1 mA each | Cut the LED jumpers |
 
+The LED/jumper removals are deferred (2026-10-19): bench units keep them; they matter only for
+battery life, and get revisited in M5 with measurements.
+
 Two power architectures, chosen after measuring (M5):
 
 - **A. Deep sleep (default).** Zephyr PM drops to `suspend-to-ram` between samples; sensors in
@@ -130,11 +136,11 @@ Two power architectures, chosen after measuring (M5):
   so the hive sees a periodic visitor, not a resident. **Open question:** the PSW pin sees `VIN`
   (up to 4.2 V) through R1 while the RTC runs from its supercap; check the RV-1805 pin limits first.
 
-## 5. Hive integration — Role 15: Antenna (proposed)
+## 5. Hive integration — Role 15: Multisensor
 
-Not yet in the top-level role list (README Roles 1–14); proposed wording: *"Antenna: any device
-that senses its environment (presence, light, time, energy) and shares readings with the hive.
-Should display a pair of insect antennae."*
+Named 2026-10-19. Not yet in the top-level role list (README Roles 1–14); proposed wording:
+*"Multisensor: any device that carries more than one sensor, advertises which sensors it has, and
+shares their readings with the hive."* Open design item: **how it advertises what it has** (§5.1).
 
 Transport is BLE only:
 
@@ -145,7 +151,40 @@ Transport is BLE only:
 3. **Time:** the RV-1805 keeps wall-clock through sleep and power-off. The node can accept the
    hive's mesh time and could later serve as a time anchor.
 
-Example hive behaviors, as bundles rather than firmware: presence + darkness → wake the Beeper;
+### 5.1 Advertising what it has (proposal, 2026-10-19)
+
+**Fleet today** (repo survey): no MagNET firmware sets manufacturer or service data. Hanasu adverts
+are flags + the 128-bit HCP service UUID `6d61676e-2d68-6370-0001-000000000000` (21 of 31 bytes),
+with the name `MagNET-%02x%02x` in the scan response (`MagNET_Thread_COaP_hanasu_esp32c6/firmware-idf/components/magnet/magnet_ble.c:340-389`).
+`magnet_app` matches the name prefix `MagNET-` or that UUID (`magnet_app/lib/magnet/magnet_ble.dart:40-58`).
+Capabilities exist only after connecting (`CAPS`, `WHOAMI`, `STATUS`), and they list protocol
+features, not hardware. Hanasu already has a **Zephyr port** (`firmware-zephyr/src/magnet_ble_zephyr.c`)
+with the same GATT service: the starting point for M4/M7.
+
+**Layer 1 — advert (any scanner, no connection).** Keep the Hanasu layout so existing tools find
+the node; spend the 10 spare bytes on manufacturer data (company ID `0xFFFF` = testing, for the
+prototype):
+
+| Byte | Field |
+|---|---|
+| 0 | format version (hi nibble) · role number (lo nibble; Multisensor = 15) |
+| 1–2 | sensor bitmap: b0 presence (none fitted) · b1 lux · b2 color (XYZ/CCT) · b3 time (RTC) · b4 battery gauge · b5 sound · b6 orientation/motion (IMU) · b7–15 reserved |
+| 3 | battery % (0xFF = no gauge) |
+| 4 | reading sequence number (new data vs. stale) |
+| 5 | installed role-bundle tag (low byte of the bundle hash; 0 = none) |
+
+Latest readings (presence state/direction, lux, CCT) go in the scan response next to the name.
+**The bitmap is detected, not hard-coded:** set from the boot-time bus probe, so a missing or
+loose breakout clears its bit.
+
+**Layer 2 — connected (HCP).** `CAPS` gains `role=multisensor sensors=orientation:bno085,motion:bno085,lux:opt4048,cct:opt4048,time:rv1805,battery:lc709203f`
+(names shared with the WiFi hive's `caps[]` vocabulary, so a RoleBundle's `caps_req` can be checked
+against them), and a `SENSE` verb returns current readings as key=value.
+
+Open: register a real Bluetooth SIG company ID before anything ships; optionally also emit
+**BTHome v2** service data so Home Assistant can read the sensors without MagNET software.
+
+Example hive behaviors, as bundles rather than firmware: significant motion + darkness → wake the Beeper;
 low SOC → lengthen the sample interval and tell the ruler; CCT/lux logging for a Scribe.
 
 ## 6. Forth on the Artemis
@@ -163,7 +202,7 @@ portable C++. Its ESP-IDF dependencies are confined to:
 
 Plan: add a small platform layer (`forth_platform.h` with `esp-idf` and `zephyr` backends) **upstream
 in IoTone/ESPIDFORTH**, consume it as a Zephyr module, and register Multisense words:
-`presence@ ( -- n0 n1 n2 n3 )`, `lux@`, `cct@`, `xyz@`, `soc@`, `vbat@`, `now@`, `alarm!`,
+`quat@ ( -- w x y z )`, `motion?`, `lux@`, `cct@`, `xyz@`, `soc@`, `vbat@`, `now@`, `alarm!`,
 `sample-ms!`. Role bundles define `role-init` / `role-tick` exactly as on the ESP32 fleet.
 Bundle verification reuses `magnet_crypto` (tweetnacl Ed25519, portable) and SHA/HMAC from
 Zephyr's mbedtls/PSA. Resources are not a concern: 384 KB SRAM and 944 KB app flash.
@@ -174,13 +213,13 @@ Platform phases P1–P2 are done (bench log). Multisense phases:
 
 | # | Goal | Gate |
 |---|---|---|
-| M1 | Qwiic bus up (`qwiic_i2c` enabled, 100 kHz); I2C shell bus scan | All four addresses ACK: `0x0B 0x44 0x64 0x69` |
+| M1 | Qwiic bus up (`qwiic_i2c` enabled, 100 kHz); bus scan | All four addresses ACK: `0x0B 0x44 0x4A 0x69` |
 | M2 | In-tree drivers: RV-1805 via `ambiq,am1805` (set/get time, alarm interrupt), LC709203F (voltage, SOC) | Time survives a reset; SOC and voltage plausible against a meter |
-| M3 | Out-of-tree drivers in `drivers/sensor/`: OPT4048 (XYZ → lux, CCT), AK9753 (IR1–4, temp, INT) | Lux tracks a phone light meter; a hand passing left→right shows in channel order |
+| M3 | Out-of-tree: OPT4048 driver (XYZ → lux, CCT) in `drivers/sensor/`; BNO085 via CEVA SH-2 + Zephyr HAL (INT-driven) | Lux tracks a phone light meter; rotation vector follows the board by hand; significant-motion event fires |
 | M4 | **BLE** (highest risk): Ambiq HCI up; resolve the EVB's BLEIF pinmux vs. header pins A1/A5/A14/A15; advertise a sensor payload | Phone sees adverts with live readings |
 | M5 | **Power:** PM `suspend-to-ram`, sensors in one-shot/standby, interrupt wake; measure; LED/jumper mods; decide architecture A vs. B | Measured average current against a target set after the first measurement |
 | M6 | Forth: ESPIDFORTH platform layer + Multisense words; REPL on the console | `presence@ . lux@ .` prints live values |
-| M7 | Hive: HCP over GATT, signed `BUNDLE` install, role lifecycle | A signed Antenna bundle installs over BLE and its `role-tick` reports readings |
+| M7 | Hive: HCP over GATT, signed `BUNDLE` install, role lifecycle | A signed Multisensor bundle installs over BLE and its `role-tick` reports readings |
 
 ## Appendix A — parked: turret (FS0307 servo)
 

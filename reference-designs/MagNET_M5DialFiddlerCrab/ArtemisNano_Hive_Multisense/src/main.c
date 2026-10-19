@@ -5,7 +5,7 @@
  *
  * M1: Qwiic bus scan every 10 s, so breakouts show up as they are plugged in.
  * Expected once all four are chained: 0x0B (LC709203F), 0x44 (OPT4048),
- * 0x64 (AK9753), 0x69 (RV-1805).
+ * 0x4A (BNO085), 0x69 (RV-1805).
  *
  * Boot check (from P2): blue LED lights before the kernel starts.
  *   LED on, no text -> console pins/baud wrong.  LED off -> image never ran.
@@ -32,9 +32,8 @@ static const struct {
 	{0x44, "OPT4048 color"},
 	{0x45, "OPT4048 color (alt)"},
 	{0x46, "OPT4048 color (alt)"},
-	{0x64, "AK9753 presence"},
-	{0x65, "AK9753 presence (alt)"},
-	{0x67, "AK9753 presence (alt)"},
+	{0x4A, "BNO085 IMU"},
+	{0x4B, "BNO085 IMU (alt)"},
 	{0x69, "RV-1805 RTC"},
 };
 
