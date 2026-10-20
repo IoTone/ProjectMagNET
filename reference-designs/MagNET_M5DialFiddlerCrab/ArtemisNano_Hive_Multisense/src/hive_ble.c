@@ -209,7 +209,10 @@ static void write_line(const char *line)
 
 	for (size_t off = 0; off <= len; off += chunk) {
 		size_t n = len - off;
-		bool last = n <= chunk;
+		/* Strictly less: the '\n' must fit in the same notification. A line of
+		 * exactly `chunk` bytes goes out full, then the '\n' alone next pass.
+		 */
+		bool last = n < chunk;
 		int rc = -ENOMEM;
 
 		if (!last) {
@@ -224,6 +227,7 @@ static void write_line(const char *line)
 			if (rc == -ENOMEM || rc == -ENOBUFS) {
 				k_msleep(10);
 			} else if (rc != 0) {
+				printk("ble: notify failed (%d) at %u/%u\n", rc, off, len);
 				return;
 			}
 		}
@@ -290,7 +294,7 @@ static void caps_line(char *buf, size_t cap)
 	ms_readings_get(&r);
 	n = snprintf(buf, cap,
 		     "+OK proto=2.1 fw=" MS_FW_VERSION " maxline=%d transports=ble "
-		     "verbs=PING,HELP,WHOAMI,STATUS,CAPS,SENSE mode=HCP role=multisensor sensors=",
+		     "verbs=PING,HELP,WHOAMI,STATUS,CAPS,SENSE,CHANNEL,ADMIN mode=HCP role=multisensor sensors=",
 		     LINE_MAX);
 	const char *sep = "";
 
@@ -338,14 +342,21 @@ static void dispatch(char *line)
 	while (*p && *p != ' ') {
 		p++;
 	}
-	*p = '\0';
+	char *rest = p;
+
+	if (*rest == ' ') {
+		*rest++ = '\0';
+		while (*rest == ' ') {
+			rest++;
+		}
+	}
 
 	if (verb[0] == '\0') {
 		respond(tag, "-ERR E_SYNTAX empty");
 	} else if (!strcmp(verb, "PING")) {
 		respond(tag, "+PONG");
 	} else if (!strcmp(verb, "HELP")) {
-		write_line("# HCP verbs: PING HELP WHOAMI STATUS CAPS SENSE");
+		write_line("# HCP verbs: PING HELP WHOAMI STATUS CAPS SENSE  CHANNEL SHOW  ADMIN LIST");
 		respond(tag, "+OK");
 	} else if (!strcmp(verb, "WHOAMI")) {
 		snprintf(body, sizeof(body), "+OK id=%02x%02x%02x%02x name=%s fw=" MS_FW_VERSION,
@@ -363,6 +374,22 @@ static void dispatch(char *line)
 	} else if (!strcmp(verb, "SENSE")) {
 		sense_line(body, sizeof(body));
 		respond(tag, body);
+	} else if (!strcmp(verb, "CHANNEL")) {
+		/* No mesh channel on this node yet (BLE-only until M7). magnet_app's node
+		 * screen reads CHANNEL SHOW on every refresh, so answer it honestly.
+		 */
+		if (!strncmp(rest, "SHOW", 4) || !strncmp(rest, "LIST", 4)) {
+			respond(tag, "+OK name=none selector=- path=-");
+		} else {
+			respond(tag, "-ERR E_UNSUPPORTED no mesh channel on this node yet");
+		}
+	} else if (!strcmp(verb, "ADMIN")) {
+		/* Empty allow-list: no privileged verbs exist here yet. */
+		if (!strncmp(rest, "LIST", 4)) {
+			respond(tag, "+OK");
+		} else {
+			respond(tag, "-ERR E_UNSUPPORTED no privileged verbs on this node yet");
+		}
 	} else {
 		snprintf(body, sizeof(body), "-ERR E_UNKNOWN %s", verb);
 		respond(tag, body);

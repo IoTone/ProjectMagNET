@@ -224,9 +224,11 @@ static void sample(void)
 	k_mutex_unlock(&snap_lock);
 
 	if ((r.caps & MS_CAP_TIME) && rtc_get_time(rtc, &now) == 0) {
-		snprintf(r.time_iso, sizeof(r.time_iso), "%04d-%02d-%02dT%02d:%02d:%02d",
-			 now.tm_year + 1900, now.tm_mon + 1, now.tm_mday, now.tm_hour, now.tm_min,
-			 now.tm_sec);
+		/* Field ranges bounded so the compiler can prove the 19-character fit. */
+		snprintf(r.time_iso, sizeof(r.time_iso), "%04u-%02u-%02uT%02u:%02u:%02u",
+			 (now.tm_year + 1900) % 10000u, (now.tm_mon + 1) % 100u,
+			 now.tm_mday % 100u, now.tm_hour % 100u, now.tm_min % 100u,
+			 now.tm_sec % 100u);
 		r.time_ok = true;
 	}
 

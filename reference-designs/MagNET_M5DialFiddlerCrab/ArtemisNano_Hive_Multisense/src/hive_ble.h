@@ -16,7 +16,8 @@
  *
  * GATT: the Hanasu HCP service (…0000) with CMD (…0001), EVT (…0002, notify),
  * AUTH (…0003, read-encrypted). A small built-in dispatcher answers PING, HELP,
- * WHOAMI, STATUS, CAPS and SENSE until the full HCP core lands (M7).
+ * WHOAMI, STATUS, CAPS, SENSE, CHANNEL SHOW (none yet) and ADMIN LIST (empty)
+ * until the full HCP core lands (M7). magnet_app's node screen needs the last two.
  */
 
 /* Bring up the controller, load bonds, start advertising. */
