@@ -24,6 +24,8 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/rtc.h>
 #include <zephyr/drivers/fuel_gauge.h>
+#include <zephyr/fatal.h>
+#include <zephyr/sys/reboot.h>
 #include <cmsis_core.h>
 #include <am_mcu_apollo.h>
 #include "rv1805.h"
@@ -71,6 +73,18 @@ static int early_led_on(void)
 	return 0;
 }
 SYS_INIT(early_led_on, PRE_KERNEL_1, 0);
+
+/*
+ * An unattended node must not sit halted after a fault: say why, then reboot.
+ * (The default handler spins forever; the RTC keeps time across the reset.)
+ */
+void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
+{
+	ARG_UNUSED(esf);
+	printk("FATAL %u: rebooting\n", reason);
+	sys_reboot(SYS_REBOOT_COLD);
+	CODE_UNREACHABLE;
+}
 
 void ms_readings_get(struct ms_readings *out)
 {

@@ -11,8 +11,9 @@
  * Scan response: "MagNET-xxxx" + manufacturer data = the same header + readings:
  *   [6..7] lux (u16 LE, saturating)  [8..9] CCT K (u16 LE)  [10..11] yaw deg (s16 LE)
  *   [12] stability  [13] significant-motion count (low byte)
- * (Android merges advert + scan response per company ID, so the scan response
- * repeats the header rather than carrying readings alone.)
+ * The scan response repeats the header so it survives however a stack combines
+ * the two packets: bleak keeps only this block, Android concatenates both
+ * (header, FF FF, header+readings). See README 5.1.
  *
  * GATT: the Hanasu HCP service (…0000) with CMD (…0001), EVT (…0002, notify),
  * AUTH (…0003, read-encrypted). A small built-in dispatcher answers PING, HELP,

@@ -409,7 +409,10 @@ static void hcp_thread(void *p1, void *p2, void *p3)
 		dispatch(line);
 	}
 }
-K_THREAD_DEFINE(hcp_tid, 2048, hcp_thread, NULL, NULL, NULL, K_PRIO_PREEMPT(9), 0, 0);
+/* 4 KB: dispatch() + respond() + write_line() hold ~900 B of line buffers and
+ * SENSE formats floats on top. 2 KB overflowed once the IMU fields appeared.
+ */
+K_THREAD_DEFINE(hcp_tid, 4096, hcp_thread, NULL, NULL, NULL, K_PRIO_PREEMPT(9), 0, 0);
 
 /* ---- connection + security ---- */
 
