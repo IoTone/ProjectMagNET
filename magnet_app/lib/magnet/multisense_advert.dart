@@ -11,12 +11,17 @@
 ///   [3]    battery %, 0xFF = no gauge
 ///   [4]    reading sequence number
 ///   [5]    installed role-bundle tag, 0 = none
-/// Readings, 8 more bytes (scan response; Android merges it over the advert):
+/// Readings, 8 more bytes (the scan response repeats the header, then these):
 ///   [6..7]   lux, u16 LE, 0xFFFF = none
 ///   [8..9]   CCT in K, u16 LE, 0xFFFF = none
 ///   [10..11] yaw in degrees, s16 LE, 0x8000 = none
 ///   [12]     stability 0..4, 0xFF = none
 ///   [13]     significant-motion count, low byte
+///
+/// How the two blocks reach us depends on the stack: bleak/Windows keeps only
+/// the scan response's block (14 bytes), while Android (flutter_blue_plus,
+/// measured on a Galaxy S20 FE) concatenates both under one key, including the
+/// second company id: header(6) · FF FF · header+readings(14) = 22 bytes.
 class MultisenseAdvert {
   const MultisenseAdvert({
     required this.version,
@@ -75,8 +80,17 @@ class MultisenseAdvert {
   /// Parse from a scan's manufacturer data map (company id already split off,
   /// as flutter_blue_plus delivers it). Null when absent or malformed.
   static MultisenseAdvert? fromManufacturerData(Map<int, List<int>> mfg) {
-    final List<int>? b = mfg[companyTest];
-    if (b == null || b.length < 6) return null;
+    final List<int>? raw = mfg[companyTest];
+    if (raw == null || raw.length < 6) return null;
+    // Android layout: advert header, then the scan response's own company id
+    // and block. The later block is the complete one, so decode that. Matched
+    // exactly (22 bytes, header repeated after FF FF): a 14-byte block whose
+    // lux is "none" also has FF FF at [6..7].
+    final bool concatenated = raw.length == 6 + 2 + 14 &&
+        raw[6] == 0xFF &&
+        raw[7] == 0xFF &&
+        raw[8] == raw[0];
+    final List<int> b = concatenated ? raw.sublist(8) : raw;
     final int version = b[0] >> 4;
     if (version != 1) return null; // unknown format: don't guess
 

@@ -39,6 +39,26 @@ void main() {
     expect(a.summary(), 'multisensor · 96% · 6 lx · 2471 K · yaw -153° · on-table');
   });
 
+  test('Android concatenated layout (captured on a Galaxy S20 FE)', () {
+    // header(6) · FF FF · header+readings(14), exactly as flutter_blue_plus
+    // delivered it: 94 %, seq 0x16, 0 lux, 2883 K, yaw -156, on-table.
+    const List<int> android = <int>[
+      0x1f, 0x5e, 0x00, 0x5e, 0x16, 0x00, //
+      0xff, 0xff, //
+      0x1f, 0x5e, 0x00, 0x5e, 0x16, 0x00, 0x00, 0x00, 0x43, 0x0b, 0x64, 0xff,
+      0x01, 0x00,
+    ];
+    final MultisenseAdvert a = MultisenseAdvert.fromManufacturerData(
+        <int, List<int>>{0xFFFF: android})!;
+    expect(a.batteryPct, 94);
+    expect(a.sequence, 0x16);
+    expect(a.lux, 0);
+    expect(a.cctK, 2883);
+    expect(a.yawDeg, -156);
+    expect(a.stability, 'on-table');
+    expect(a.summary(), 'multisensor · 94% · 0 lx · 2883 K · yaw -156° · on-table');
+  });
+
   test('"no reading" sentinels decode to null', () {
     final MultisenseAdvert a = MultisenseAdvert.fromManufacturerData(<int, List<int>>{
       0xFFFF: <int>[0x1F, 0x10, 0x00, 0xFF, 1, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x80, 0xFF, 0],

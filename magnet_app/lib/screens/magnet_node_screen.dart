@@ -52,6 +52,7 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
   static const Duration _sensePeriod = Duration(seconds: 10);
   Map<String, String> _sense = <String, String>{};
   DateTime? _senseAt;
+  String? _senseError;
   Timer? _senseTimer;
   bool _sensing = false;
 
@@ -146,9 +147,12 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
       setState(() {
         _sense = r;
         _senseAt = DateTime.now();
+        _senseError = null;
       });
-    } catch (_) {
-      // Link dropped or node busy: the status card and console show it.
+    } catch (e) {
+      // Keep the last good readings, but say why this read failed.
+      debugPrint('SENSE failed: $e');
+      if (mounted) setState(() => _senseError = '$e');
     } finally {
       _sensing = false;
     }
@@ -496,6 +500,7 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
                       _ReadingsCard(
                         sense: _sense,
                         at: _senseAt,
+                        error: _senseError,
                         onRefresh: _pollSense,
                         cs: cs,
                       ),
@@ -635,12 +640,14 @@ class _ReadingsCard extends StatelessWidget {
   const _ReadingsCard({
     required this.sense,
     required this.at,
+    required this.error,
     required this.onRefresh,
     required this.cs,
   });
 
   final Map<String, String> sense;
   final DateTime? at;
+  final String? error;
   final VoidCallback onRefresh;
   final ColorScheme cs;
 
@@ -714,6 +721,12 @@ class _ReadingsCard extends StatelessWidget {
                 ),
               ],
             ),
+            if (error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6, right: 8),
+                child: Text('last read failed: $error',
+                    style: TextStyle(fontSize: 12, color: cs.error)),
+              ),
             for (final (String k, String? v) in rows)
               if (v != null)
                 Padding(
