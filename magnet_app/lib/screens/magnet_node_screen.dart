@@ -47,6 +47,16 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
   OperatorIdentity? _operator;
   int _adminCount = -1;          // -1 = not read yet
 
+  // Live readings (sensing roles only). Polled at the node's own sample
+  // period; the poll's traffic is kept out of the console.
+  static const Duration _sensePeriod = Duration(seconds: 10);
+  Map<String, String> _sense = <String, String>{};
+  DateTime? _senseAt;
+  Timer? _senseTimer;
+  bool _sensing = false;
+
+  bool get _isSensor => _status['role'] == 'multisensor';
+
   @override
   void initState() {
     super.initState();
@@ -59,6 +69,7 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
 
   @override
   void dispose() {
+    _senseTimer?.cancel();
     _trafficSub?.cancel();
     _hcp?.dispose();
     _transport?.dispose();
@@ -68,7 +79,7 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
   }
 
   void _log(String line) {
-    if (!mounted) return;
+    if (!mounted || _sensing) return;
     setState(() {
       _console.add(line);
       if (_console.length > 300) _console.removeRange(0, _console.length - 300);
@@ -114,8 +125,32 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
         _nameCtl.text = w['name'] == '-' ? '' : (w['name'] ?? '');
       });
       await _readAdmins();
+      if (_isSensor) {
+        await _pollSense();
+        _senseTimer ??= Timer.periodic(_sensePeriod, (_) => _pollSense());
+      }
     } catch (e) {
       _log('! $e');
+    }
+  }
+
+  /// One SENSE round trip. Skipped while another poll is still out (a slow
+  /// link must not stack them up); failures keep the last good readings.
+  Future<void> _pollSense() async {
+    final HcpClient? c = _hcp;
+    if (c == null || _sensing || !mounted) return;
+    _sensing = true;
+    try {
+      final Map<String, String> r = await c.sense();
+      if (!mounted) return;
+      setState(() {
+        _sense = r;
+        _senseAt = DateTime.now();
+      });
+    } catch (_) {
+      // Link dropped or node busy: the status card and console show it.
+    } finally {
+      _sensing = false;
     }
   }
 
@@ -456,6 +491,16 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
                   children: <Widget>[
                     _StatusCard(status: _status, who: _who, channel: _channel, cs: cs),
                     const SizedBox(height: 16),
+                    if (_isSensor) ...<Widget>[
+                      _Section('Readings'),
+                      _ReadingsCard(
+                        sense: _sense,
+                        at: _senseAt,
+                        onRefresh: _pollSense,
+                        cs: cs,
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     _Section('Display name'),
                     Row(
                       children: <Widget>[
@@ -580,6 +625,116 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
                     _Console(lines: _console, cs: cs),
                   ],
                 ),
+    );
+  }
+}
+
+/// Live SENSE readings from a sensing node. A sensor that did not answer is
+/// simply absent from the reply, so each row shows only what arrived.
+class _ReadingsCard extends StatelessWidget {
+  const _ReadingsCard({
+    required this.sense,
+    required this.at,
+    required this.onRefresh,
+    required this.cs,
+  });
+
+  final Map<String, String> sense;
+  final DateTime? at;
+  final VoidCallback onRefresh;
+  final ColorScheme cs;
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, String> s = sense;
+    String? join(List<String?> parts) {
+      final List<String> p = parts.whereType<String>().toList();
+      return p.isEmpty ? null : p.join('   ');
+    }
+
+    final List<(String, String?)> rows = <(String, String?)>[
+      ('Time', s['time']?.replaceFirst('T', ' ')),
+      (
+        'Battery',
+        join(<String?>[
+          if (s['vbat'] != null) '${s['vbat']} V',
+          if (s['soc'] != null) '${s['soc']}%',
+          if (s['tbat'] != null) s['tbat'] == 'na' ? 'temp n/a' : '${s['tbat']} °C',
+        ])
+      ),
+      (
+        'Light',
+        join(<String?>[
+          if (s['lux'] != null) '${s['lux']} lx',
+          if (s['cct'] != null) '${s['cct']} K',
+          if (s['x'] != null && s['y'] != null) 'xy ${s['x']}, ${s['y']}',
+        ])
+      ),
+      (
+        'Orientation',
+        join(<String?>[
+          if (s['yaw'] != null) 'yaw ${s['yaw']}°',
+          if (s['pitch'] != null) 'pitch ${s['pitch']}°',
+          if (s['roll'] != null) 'roll ${s['roll']}°',
+          if (s['hacc'] != null) '±${s['hacc']}°',
+        ])
+      ),
+      (
+        'Motion',
+        join(<String?>[
+          s['motion'],
+          if (s['sigmo'] != null) 'events ${s['sigmo']}',
+        ])
+      ),
+    ];
+
+    final String stamp = at == null
+        ? 'waiting for first reading…'
+        : 'seq ${s['seq'] ?? '?'} · read '
+            '${at!.hour.toString().padLeft(2, '0')}:'
+            '${at!.minute.toString().padLeft(2, '0')}:'
+            '${at!.second.toString().padLeft(2, '0')}';
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(stamp,
+                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                ),
+                IconButton(
+                  tooltip: 'Read now',
+                  onPressed: onRefresh,
+                  icon: const Icon(Icons.sensors, size: 20),
+                ),
+              ],
+            ),
+            for (final (String k, String? v) in rows)
+              if (v != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      SizedBox(
+                          width: 96,
+                          child: Text(k, style: const TextStyle(fontSize: 12))),
+                      Expanded(
+                        child: Text(v,
+                            style: const TextStyle(
+                                fontSize: 12, fontFamily: 'monospace')),
+                      ),
+                    ],
+                  ),
+                ),
+          ],
+        ),
+      ),
     );
   }
 }

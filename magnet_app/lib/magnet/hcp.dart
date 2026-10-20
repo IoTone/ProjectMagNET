@@ -255,6 +255,11 @@ class HcpClient {
   Future<Map<String, String>> channel() async =>
       parseKv(await command('CHANNEL SHOW'));
 
+  /// Current sensor readings from a node with a sensing role (Multisensor):
+  /// `seq time vbat soc tbat lux cct x y yaw pitch roll hacc motion sigmo`,
+  /// each present only when that sensor answered.
+  Future<Map<String, String>> sense() async => parseKv(await command('SENSE'));
+
   /// Join/derive a channel. A typed passphrase runs PBKDF2 on-device, which
   /// takes seconds — hence the long default timeout.
   Future<Map<String, String>> setChannel(String credential,
