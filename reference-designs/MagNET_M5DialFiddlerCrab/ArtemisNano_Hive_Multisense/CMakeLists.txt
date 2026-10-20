@@ -8,7 +8,8 @@ list(APPEND BOARD_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(artemis_multisense)
 
-target_sources(app PRIVATE src/main.c src/rv1805.c src/opt4048.c src/bno085.c)
+target_sources(app PRIVATE src/main.c src/rv1805.c src/opt4048.c src/bno085.c
+  src/hive_ble.c)
 
 # CEVA SH-2 sensor hub library (vendored, unmodified; see lib/sh2/VENDORED.txt).
 target_sources(app PRIVATE

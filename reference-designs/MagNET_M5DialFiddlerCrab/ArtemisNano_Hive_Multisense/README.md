@@ -1,9 +1,12 @@
 # ArtemisNano_Hive_Multisense — low-power multi-sensor hive member
 
-**Status:** 🔧 **BRING-UP.** Platform proven 2026-10-18: Zephyr v4.4.2 boots from `0x10000` via the SVL
-(phases P1–P2). Sensor and BLE work starts at M1 (§7).
+**Status:** 🔧 **BRING-UP.** Platform proven 2026-10-18 (P1–P2). M1–M2 passed; M3 sensors reporting (IMU
+INT/RST wiring and hand checks pending); M4 BLE advert + HCP GATT working from the PC (§7).
 **Build / flash:** `west build -b sparkfun_artemis_nano -d C:/zephyr-artemis/build/multisense <this dir>`
 then `python scripts/flash.py --monitor 10` (Zephyr venv; workspace from `scripts/setup_zephyr_ws.sh`).
+**BLE check from the PC:** `python scripts/ble_probe.py` (scan + decode) or `--hcp WHOAMI CAPS SENSE` (needs
+`pip install bleak`; on Windows keep the venv on a short path such as `C:/zephyr-artemis/blevenv`; the WinRT DLLs
+fail to load from long paths).
 **Board:** [SparkFun RedBoard Artemis Nano](https://github.com/sparkfun/RedBoard_Artemis_Nano)
 (DEV-15443): Artemis module = Ambiq **Apollo3 Blue** (Cortex-M4F @ 48/96 MHz, 1 MB flash,
 384 KB SRAM, BLE 5), LiPo charger, Qwiic, PDM mic. USB-C via CH340E serial. Inventory: 3 working boards.
@@ -28,6 +31,9 @@ time, its own energy) and tells the hive which ones it has (§5).
 | 2026-10-19 | **M1 passed.** After the swap: `0x0B` LC709203F, `0x44` OPT4048, `0x4A` BNO085, `0x69` RV-1805, nothing else. The `0x39/0x4F/0x62` ACKs left with the presence board, which never answered as an AK9753 (wrong part or faulty board). |
 | 2026-10-19 | **M2 on the bench.** RV-1805 reports `ID0=0x18 ID1=0x05` (AM1805 part number): the upstream `ambiq,am1805` driver works unmodified. Trickle charger enabled by `src/rv1805.c` (reads back `0xA5`); first boot found year 1900 (never set) and loaded the build time; **time kept across reset** ✅. LC709203F (APA 2000 mAh, 4.2 V profile): `vbat 4.067 V soc 87%` on USB charge. Requesting `FUEL_GAUGE_TEMPERATURE` without a thermistor fails the *whole* `get_props` call (`-134`), so it is not requested. Remaining checks: voltage against a meter; time across a full power-off on the supercap (allow ~10 min to charge first). Alarm waits for RV-1805 INT → D6. |
 | 2026-10-19 | **M3 on the bench, first flash.** OPT4048 `ID=0x0821`; continuous auto-range at 100 ms, CRC checked on every channel: `15.2 lux, xy 0.398/0.379, CCT 3577 K` under room light. BNO085 via vendored CEVA SH-2 (`lib/sh2`, unmodified): `part 10004148 v3.2.13 build 6`; rotation vector at 10 Hz (~100 reports per 10 s) and stability classifier (`on-table`). **INT and RST not wired yet**: SH-2 runs polled every 10 ms with a soft reset at open. Heading accuracy reads ±180° until the magnetometer is calibrated (move the board in a figure-8). Battery temperature is a placeholder (`tbat n/a (no thermistor)`, sentinel `TBAT_NONE_DC`) until a 10k thermistor is fitted. Build: 52 KB flash, 26 KB RAM. |
+| 2026-10-19 | M3: significant-motion (one-shot) enabled and re-armed after each event; reads `sigmo=0` at rest, firing still to be checked by moving the board. |
+| 2026-10-19 | **M4 BLE up on the first flash.** The radio is inside the Artemis module (internal BLEIF); Zephyr only drives the EVB's BLEIF pads with `CONFIG_SPI_AMBIQ_BLEIF_TIMING_TRACE`, so **no header pins are used** and A1/A5/A14/A15 stay free. Controller: HCI 5.0, manufacturer `0x09ac`, identity `66:77:88:23:BB:EF` (public, from the controller). Node ID `029d7d8f` (FNV-1a of the Apollo3 chip ID); name `MagNET-7d8f`. Bonds in NVS on the `storage` partition (2 x 8 KB). Build: 170 KB flash, 58 KB RAM. |
+| 2026-10-19 | **M4 checked from the PC** (`scripts/ble_probe.py`, bleak over the PC's adapter): advert decodes as role 15, sensors lux/color/time/battery/orientation (bitmap `0x5e`), battery 96%, live lux/CCT/yaw/stability from the scan response. GATT HCP: `PING WHOAMI STATUS CAPS SENSE` all answer; an unknown verb returns `-ERR E_UNKNOWN`; the node logged ATT MTU tx 527 / rx 247 and the console mirrors every `hcp<`/`hcp>` line. Removed Hanasu's on-connect Security Request: Windows turned it into a pairing prompt that cancelled the first write (`WinError -2147023673`). One SVL upload failed (`frame 7/84 rejected 4 times`, cause unknown); the immediate retry was clean. Phone/`magnet_app` check pending (the Galaxy did not show in `adb devices`). |
 
 ---
 
@@ -175,7 +181,20 @@ prototype):
 | 4 | reading sequence number (new data vs. stale) |
 | 5 | installed role-bundle tag (low byte of the bundle hash; 0 = none) |
 
-Latest readings (presence state/direction, lux, CCT) go in the scan response next to the name.
+Latest readings go in the scan response next to the name. **As built (M4):** the scan response carries
+manufacturer data under the same `0xFFFF`, holding the 6-byte header again plus 8 bytes of readings,
+because Android merges advert and scan response per company ID (a readings-only block would hide the header):
+
+| Byte | Field |
+|---|---|
+| 0–5 | header, as above |
+| 6–7 | lux, u16 LE, saturating (`0xFFFF` = no reading) |
+| 8–9 | CCT in K, u16 LE (`0xFFFF` = no reading) |
+| 10–11 | yaw in degrees, s16 LE (`0x8000` = no reading) |
+| 12 | stability: 0 unknown, 1 on-table, 2 stationary, 3 stable, 4 motion (`0xFF` = none) |
+| 13 | significant-motion count, low byte |
+
+Name (13 bytes) + this block (18 bytes) fills the 31-byte scan response exactly.
 **The bitmap is detected, not hard-coded:** set from the boot-time bus probe, so a missing or
 loose breakout clears its bit.
 
@@ -217,8 +236,8 @@ Platform phases P1–P2 are done (bench log). Multisense phases:
 |---|---|---|
 | M1 | Qwiic bus up (`qwiic_i2c` enabled, 100 kHz); bus scan | All four addresses ACK: `0x0B 0x44 0x4A 0x69` |
 | M2 | In-tree drivers: RV-1805 via `ambiq,am1805` (set/get time, alarm interrupt), LC709203F (voltage, SOC) | Time survives a reset; SOC and voltage plausible against a meter |
-| M3 | OPT4048 driver (XYZ → lux, CIE xy, CCT) in `src/opt4048.c`; BNO085 via CEVA SH-2 + Zephyr HAL. **Polled version working**; INT-driven version once D8/D10 are wired | Lux tracks a phone light meter; rotation vector follows the board by hand; significant-motion event fires |
-| M4 | **BLE** (highest risk): Ambiq HCI up; resolve the EVB's BLEIF pinmux vs. header pins A1/A5/A14/A15; advertise a sensor payload | Phone sees adverts with live readings |
+| M3 | *IMU test rig idea:* once the Turret exists, it can turn the Multisensor through known angles so the hive checks yaw against commanded position (two members collaborating). OPT4048 driver (XYZ → lux, CIE xy, CCT) in `src/opt4048.c`; BNO085 via CEVA SH-2 + Zephyr HAL. **Polled version working**; INT-driven version once D8/D10 are wired | Lux tracks a phone light meter; rotation vector follows the board by hand; significant-motion event fires |
+| M4 | **BLE**: Ambiq HCI up; BLEIF pins (resolved: none used); §5.1 advert + readings; Hanasu HCP GATT service with a built-in `PING/HELP/WHOAMI/STATUS/CAPS/SENSE` dispatcher. **Working from the PC**; phone + `magnet_app` check pending | Phone sees adverts with live readings |
 | M5 | **Power:** PM `suspend-to-ram`, sensors in one-shot/standby, interrupt wake; measure; LED/jumper mods; decide architecture A vs. B | Measured average current against a target set after the first measurement |
 | M6 | Forth: ESPIDFORTH platform layer + Multisense words; REPL on the console | `presence@ . lux@ .` prints live values |
 | M7 | Hive: HCP over GATT, signed `BUNDLE` install, role lifecycle | A signed Multisensor bundle installs over BLE and its `role-tick` reports readings |

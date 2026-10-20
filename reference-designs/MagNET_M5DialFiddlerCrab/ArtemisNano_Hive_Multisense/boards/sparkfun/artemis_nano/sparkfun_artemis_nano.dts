@@ -22,6 +22,7 @@
 		zephyr,shell-uart = &uart0;
 		zephyr,flash-controller = &flash;
 		zephyr,code-partition = &slot0_partition;
+		zephyr,bt-hci = &bt_hci_apollo;
 	};
 
 	aliases {
@@ -119,10 +120,14 @@
 };
 
 /*
- * BLE (bleif / bt_hci_apollo) is left at the SoC default (disabled) until phase 4.
- * The EVB pinmuxes BLEIF onto pads 30-33, 35, 41; on this board 31/32/33/35 are
- * header pins A5/A15/A1/A14, so that needs checking before it is enabled.
+ * BLE: the Apollo3 Blue radio sits inside the Artemis module behind the internal
+ * BLEIF, so no pads are needed. The EVB's bleif_default pinmux (pads 30-33, 35, 41)
+ * is only applied with CONFIG_SPI_AMBIQ_BLEIF_TIMING_TRACE, so it is left out here
+ * and header pins A1/A5/A14/A15 stay free.
  */
+&bleif {
+	status = "okay";
+};
 
 &gpio0_31 {
 	status = "okay";
