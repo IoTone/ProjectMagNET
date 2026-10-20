@@ -152,11 +152,14 @@ void mn_ble_notify(const char *line) {
     size_t chunk = (mtu > 23 ? mtu : 23) - 3;
     size_t len = strlen(line);
     char buf[256];
+    if (chunk > sizeof(buf) - 1) chunk = sizeof(buf) - 1;  /* MTU can exceed buf */
 
     for (size_t off = 0; off <= len; off += chunk) {
         size_t n = len - off;
         bool last = false;
-        if (n > chunk) n = chunk; else last = true;
+        /* Strictly less: the '\n' must fit in the same notification. A line of
+         * exactly `chunk` bytes goes out full, then the '\n' alone next pass. */
+        if (n >= chunk) n = chunk; else last = true;
         size_t m = n;
         memcpy(buf, line + off, m);
         if (last && m < sizeof(buf) - 1) buf[m++] = '\n';   /* frame terminator */

@@ -156,7 +156,9 @@ void mn_ble_notify(const char *line) {
 
     for (size_t off = 0; off <= len; off += chunk) {
         size_t n = len - off;
-        bool last = n <= chunk;
+        /* Strictly less: the '\n' must fit in the same notification. A line of
+         * exactly `chunk` bytes goes out full, then the '\n' alone next pass. */
+        bool last = n < chunk;
         if (!last) n = chunk;
         memcpy(buf, line + off, n);
         if (last) buf[n++] = '\n';            /* frame terminator */
