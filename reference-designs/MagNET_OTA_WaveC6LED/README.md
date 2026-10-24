@@ -74,6 +74,14 @@ the same `transport_relay`; an attached proxy takes precedence over WiFi.
   `checkin` then goes through it. The screen's NETWORK section reads
   `BLE RELAY` / `USB RELAY` while a proxy is attached.
 
+- **Speed (#100).** The rx characteristic accepts Write Without Response, and
+  on connect the board asks for a 7.5–15 ms interval and the 2M PHY; the
+  negotiated link is logged (`link (connect|update|phy): ...`). A proxy that
+  writes without response and asks for high priority + 2M (Android) moves
+  44–59 KB/s, against ~5 KB/s with acknowledged writes at Android's default
+  interval. `ble_relay_proxy.py` writes without response when offered;
+  `--ack-writes` forces the old way.
+
 The device's bearer token crosses the proxy in clear text by decision (plan
 §5.3 (a)); the proxy is operator-controlled.
 
