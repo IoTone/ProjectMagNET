@@ -75,6 +75,11 @@ const char  *ota_discovered_url(void);
  * Signature descriptor first, then the body, then SHA256, then Ed25519. */
 bool         ota_fetch_and_verify(struct magnet_transport *tx, const ota_release_t *rel);
 const char  *ota_verify_status(void);
+/* After a failed fetch+verify: true when the PATH failed (link dropped, chunk
+ * retries exhausted, signed URL expired, no memory), false when the RELEASE is
+ * at fault (descriptor, digest, signature, over the size cap). Only the
+ * second should count against the release (#101). */
+bool         ota_verify_failure_transient(void);
 /* Fetch + verify whatever the last check-in flagged. Poll task / console. */
 bool         ota_fetch_pending(void);
 const uint8_t *ota_bundle(size_t *len);

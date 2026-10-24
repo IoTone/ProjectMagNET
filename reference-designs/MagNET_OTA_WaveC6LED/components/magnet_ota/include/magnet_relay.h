@@ -57,6 +57,17 @@ const char *relay_pipe_name(void);          /* attached pipe's name, or "none" *
  * transport validates, reassembles and wakes the waiting request. */
 void relay_rx(const uint8_t *frame, size_t len);
 
+/* Streaming request, for bodies fetched in pieces (ota_verify's ranged
+ * chunks, #101). The body of a 200 or 206 is handed to SINK in order, one
+ * frame's slice at a time, from the pipe's RX path; returning false aborts the
+ * request. EXPECT_LEN sizes the wait. Returns the HTTP status, a negative
+ * value on transport failure, or -3 when the sink refused; *GOT is the body
+ * length seen. A stream times out after 30 s with no first frame (the proxy
+ * may still be fetching) or 4 s of silence after that. */
+typedef bool (*relay_sink_fn)(void *ctx, const uint8_t *data, size_t n);
+int relay_request_stream(const char *method, const char *path, const char *body,
+                         relay_sink_fn sink, void *ctx, size_t expect_len, size_t *got);
+
 /* The transport. Same lifetime model as transport_ip(): a static singleton. */
 magnet_transport_t *transport_relay(void);
 
