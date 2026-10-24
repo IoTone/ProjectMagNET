@@ -812,6 +812,12 @@ abstract class AppLocalizations {
   /// **'Connection lost'**
   String get meshStateError;
 
+  /// No description provided for @meshStateReconnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Reconnecting…'**
+  String get meshStateReconnecting;
+
   /// No description provided for @meshReconnect.
   ///
   /// In en, this message translates to:

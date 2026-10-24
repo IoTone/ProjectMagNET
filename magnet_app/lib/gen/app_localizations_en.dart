@@ -393,6 +393,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get meshStateError => 'Connection lost';
 
   @override
+  String get meshStateReconnecting => 'Reconnecting…';
+
+  @override
   String get meshReconnect => 'Reconnect';
 
   @override

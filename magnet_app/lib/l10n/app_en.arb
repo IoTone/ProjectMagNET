@@ -143,6 +143,7 @@
   "meshStateConnected": "Live",
   "meshStateDisconnected": "Disconnected",
   "meshStateError": "Connection lost",
+  "meshStateReconnecting": "Reconnecting…",
   "meshReconnect": "Reconnect",
   "meshChangeCompanion": "Change companion node",
   "meshComposerHint": "Message the channel…",

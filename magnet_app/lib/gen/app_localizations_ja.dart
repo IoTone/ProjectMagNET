@@ -386,6 +386,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get meshStateError => '接続が切れました';
 
   @override
+  String get meshStateReconnecting => '再接続中…';
+
+  @override
   String get meshReconnect => '再接続';
 
   @override

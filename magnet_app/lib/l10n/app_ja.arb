@@ -137,6 +137,7 @@
   "meshStateConnected": "ライブ",
   "meshStateDisconnected": "切断",
   "meshStateError": "接続が切れました",
+  "meshStateReconnecting": "再接続中…",
   "meshReconnect": "再接続",
   "meshChangeCompanion": "コンパニオンノードを変更",
   "meshComposerHint": "チャンネルへメッセージ…",
