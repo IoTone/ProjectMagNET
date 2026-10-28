@@ -3,6 +3,8 @@
     <!-- Bluetooth LE scanning + connection.
          BLUETOOTH / BLUETOOTH_ADMIN cover pre-Android 12; on API 31+
          the granular SCAN / CONNECT runtime permissions apply. -->
+    <!-- Sentinel presence feed: MQTT to the MagNET broker. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"

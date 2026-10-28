@@ -25,6 +25,7 @@ static volatile bool     wifi_connected     = false;
 static int               wifi_retry_count   = 0;
 static bool              wifi_started       = false;
 static volatile bool     reconnect_pending  = false;
+static volatile bool     wifi_held          = false;
 static esp_netif_t      *sta_netif          = NULL;
 
 static craw_wifi_event_cb_t s_event_cb  = NULL;
@@ -47,10 +48,11 @@ static void wifi_retry_task(void *arg)
 {
     for (;;) {
         while (wifi_retry_count < WIFI_MAX_RETRY && !wifi_connected) {
+            if (wifi_held) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
             wifi_retry_count++;
             ESP_LOGW(TAG, "Retry %d/%d...", wifi_retry_count, WIFI_MAX_RETRY);
             vTaskDelay(pdMS_TO_TICKS(2000));
-            if (!wifi_connected) {
+            if (!wifi_connected && !wifi_held) {
                 esp_wifi_connect();
             }
             vTaskDelay(pdMS_TO_TICKS(3000));
@@ -68,6 +70,7 @@ static void wifi_retry_task(void *arg)
         ESP_LOGW(TAG, "Sleeping %d ms before next retry burst...",
                  WIFI_RESPAWN_DELAY_MS);
         vTaskDelay(pdMS_TO_TICKS(WIFI_RESPAWN_DELAY_MS));
+        while (wifi_held) vTaskDelay(pdMS_TO_TICKS(1000));
         if (wifi_connected) break;   /* something else connected us */
         wifi_retry_count = 0;        /* arm next burst */
     }
@@ -82,7 +85,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 {
     if (event_base == WIFI_EVENT) {
         if (event_id == WIFI_EVENT_STA_START) {
-            esp_wifi_connect();
+            if (!wifi_held) esp_wifi_connect();
         } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
             wifi_event_sta_disconnected_t *disc =
                 (wifi_event_sta_disconnected_t *)event_data;
@@ -91,7 +94,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             fire_event(CRAW_WIFI_EVENT_DISCONNECTED);
 
             // Skip retry task if this is an intentional reconnect (new creds)
-            if (!reconnect_pending && wifi_retry_count == 0) {
+            if (!reconnect_pending && !wifi_held && wifi_retry_count == 0) {
                 xTaskCreate(wifi_retry_task, "wifi_retry", 3072, NULL, 3, NULL);
             }
         }
@@ -260,6 +263,24 @@ void craw_wifi_connect_best(const char *ssid, const char *pass)
     ESP_LOGW(TAG, "connect_best: '%s' not seen in scan (n=%d), falling back to plain connect",
         ssid, n);
     craw_wifi_connect(ssid, pass);
+}
+
+void craw_wifi_hold(bool hold)
+{
+    if (hold == wifi_held) return;
+    wifi_held = hold;
+    if (!wifi_started) return;
+    if (hold) {
+        reconnect_pending = true;
+        esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        reconnect_pending = false;
+    } else {
+        wifi_retry_count = 0;
+        wifi_config_t c;
+        if (esp_wifi_get_config(WIFI_IF_STA, &c) == ESP_OK && c.sta.ssid[0])
+            esp_wifi_connect();      // nothing to resume when no network was ever set
+    }
 }
 
 void craw_wifi_disconnect(void)

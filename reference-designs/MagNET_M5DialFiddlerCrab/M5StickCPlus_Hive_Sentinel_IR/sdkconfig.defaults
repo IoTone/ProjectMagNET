@@ -1,0 +1,25 @@
+# M5StickCPlus_Hive_Sentinel_IR — M5StickC Plus (ESP32-PICO-D4, no PSRAM)
+# WiFi + MQTT presence sensor: Bluetooth is never used.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Console: UART0 via the CH552 USB bridge.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# WiFi on, BT off, IPv6 off (RAM).
+CONFIG_BT_ENABLED=n
+CONFIG_LWIP_IPV6=n
+
+# Captive-portal phone login (net_portal.c): forward a phone's traffic from
+# the Sentinel's own login network onto the venue WiFi.
+CONFIG_LWIP_IP_FORWARD=y
+CONFIG_LWIP_IPV4_NAPT=y
+
+# WiFi setup page (net_portal.c): phones' captive-portal checks send long headers.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024

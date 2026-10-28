@@ -18,6 +18,7 @@ import 'package:magnet_app/scanner/wifi_sources.dart';
 import 'package:magnet_app/screens/first_run_intro_screen.dart';
 import 'package:magnet_app/splash/branded_splash_screen.dart';
 import 'package:magnet_app/magnet/mesh_session.dart';
+import 'package:magnet_app/magnet/sentinel_feed.dart';
 import 'package:magnet_app/theme/theme_controller.dart';
 
 void main() {
@@ -56,6 +57,8 @@ void main() {
           ChangeNotifierProvider<MeshSession>(
             create: (_) => MeshSession()..load(),
           ),
+          // Sentinel IR presence over MQTT; connects when its screen opens.
+          ChangeNotifierProvider<SentinelFeed>(create: (_) => SentinelFeed()),
         ],
         child: const MyApp(),
       ),

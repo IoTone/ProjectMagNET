@@ -440,4 +440,183 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get provisionLogEmpty =>
       'Nothing provisioned from this phone yet. Nodes appear here the moment you give them a channel.';
+
+  @override
+  String get sentinelTitle => 'Sentinels';
+
+  @override
+  String get sentinelDashboardCard => 'Presence sentinels';
+
+  @override
+  String get sentinelDashboardHint =>
+      'Room presence from Sentinel IR nodes, over MQTT from any network';
+
+  @override
+  String get sentinelLinkIdle => 'Not connected';
+
+  @override
+  String get sentinelLinkConnecting => 'Connecting…';
+
+  @override
+  String get sentinelLinkConnected => 'Live';
+
+  @override
+  String get sentinelLinkReconnecting => 'Reconnecting…';
+
+  @override
+  String get sentinelLinkError => 'Can\'t reach the broker';
+
+  @override
+  String sentinelEmpty(String broker) {
+    return 'Waiting for Sentinels on $broker. One appears here as soon as the broker sends its state.';
+  }
+
+  @override
+  String get sentinelStatePresent => 'PRESENT';
+
+  @override
+  String get sentinelStateClear => 'CLEAR';
+
+  @override
+  String get sentinelStateWarmup => 'WARMING UP';
+
+  @override
+  String get sentinelStateOffline => 'OFFLINE';
+
+  @override
+  String get sentinelStateUnknown => 'UNKNOWN';
+
+  @override
+  String sentinelFor(String duration) {
+    return 'for $duration';
+  }
+
+  @override
+  String sentinelLastHeard(String time) {
+    return 'updated $time';
+  }
+
+  @override
+  String get sentinelClockUnset => 'device clock not set yet';
+
+  @override
+  String get sentinelPeriodHour => 'This hour';
+
+  @override
+  String get sentinelPeriodDay => 'Today';
+
+  @override
+  String get sentinelPeriodWeek => 'This week';
+
+  @override
+  String get sentinelPeriodMonth => 'This month';
+
+  @override
+  String get sentinelEntries => 'entries';
+
+  @override
+  String sentinelOccupied(String duration) {
+    return '$duration occupied';
+  }
+
+  @override
+  String get sentinelRecent => 'Recent activity';
+
+  @override
+  String get sentinelNoEvents => 'No activity since the app connected.';
+
+  @override
+  String get sentinelEvEnter => 'Someone entered';
+
+  @override
+  String sentinelEvPresent(String duration) {
+    return 'Still present, $duration so far';
+  }
+
+  @override
+  String sentinelEvClear(String duration) {
+    return 'Room clear, visit lasted $duration';
+  }
+
+  @override
+  String sentinelEvRollover(
+      String period, String label, String entries, String occupied) {
+    return '$period $label closed: $entries entries, $occupied occupied';
+  }
+
+  @override
+  String sentinelEvReset(String periods) {
+    return 'Reset on the device: $periods';
+  }
+
+  @override
+  String get sentinelBroker => 'Broker';
+
+  @override
+  String get sentinelBrokerHint =>
+      'The address your Sentinels publish to, e.g. mqtt://broker.hivemq.com:1883';
+
+  @override
+  String get sentinelBrokerSave => 'Save';
+
+  @override
+  String get sentinelPrivacy =>
+      'broker.hivemq.com is public. Anyone who knows a Sentinel\'s id can see when its room is occupied.';
+
+  @override
+  String get sentinelStateActive => 'ACTIVE';
+
+  @override
+  String sentinelClearIn(String time) {
+    return 'clears in $time';
+  }
+
+  @override
+  String sentinelLastMotion(String ago) {
+    return 'last motion $ago ago';
+  }
+
+  @override
+  String get sentinelMotionNow => 'motion now';
+
+  @override
+  String get sentinelLast5 => 'Last 5 minutes';
+
+  @override
+  String sentinelLast5Summary(String secs) {
+    return '$secs s of motion · tap a bar for detail';
+  }
+
+  @override
+  String sentinelLast5Bar(String ago, String pct) {
+    return '$ago ago · motion $pct% of those 10 s';
+  }
+
+  @override
+  String get sentinelLast24 => 'Last 24 hours';
+
+  @override
+  String sentinelLast24Summary(String duration) {
+    return '$duration occupied · tap a bar for detail';
+  }
+
+  @override
+  String sentinelLast24Bar(String from, String to, String minutes) {
+    return '$from–$to · $minutes min occupied';
+  }
+
+  @override
+  String get sentinelNoSeries =>
+      'Waiting for this Sentinel\'s first update (needs firmware 0.2.0).';
+
+  @override
+  String get sentinelNow => 'now';
+
+  @override
+  String get sentinelCheckSensor => 'Check the sensor';
+
+  @override
+  String sentinelCheckSensorBody(String duration) {
+    return 'No motion for $duration. A loose PIR wire looks exactly like an empty room, so if the room has been in use, check VCC, OUT and GND.';
+  }
 }

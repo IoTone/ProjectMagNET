@@ -432,4 +432,182 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String get provisionLogEmpty =>
       'まだこのスマートフォンからプロビジョニングしていません。ノードにチャンネルを設定するとここに表示されます。';
+
+  @override
+  String get sentinelTitle => 'センチネル';
+
+  @override
+  String get sentinelDashboardCard => '在室センチネル';
+
+  @override
+  String get sentinelDashboardHint =>
+      'Sentinel IR ノードの在室状況(MQTT 経由、どのネットワークからでも)';
+
+  @override
+  String get sentinelLinkIdle => '未接続';
+
+  @override
+  String get sentinelLinkConnecting => '接続中…';
+
+  @override
+  String get sentinelLinkConnected => 'ライブ';
+
+  @override
+  String get sentinelLinkReconnecting => '再接続中…';
+
+  @override
+  String get sentinelLinkError => 'ブローカーに接続できません';
+
+  @override
+  String sentinelEmpty(String broker) {
+    return '$broker でセンチネルを待っています。ブローカーから状態が届くとここに表示されます。';
+  }
+
+  @override
+  String get sentinelStatePresent => '在室';
+
+  @override
+  String get sentinelStateClear => '不在';
+
+  @override
+  String get sentinelStateWarmup => '準備中';
+
+  @override
+  String get sentinelStateOffline => 'オフライン';
+
+  @override
+  String get sentinelStateUnknown => '不明';
+
+  @override
+  String sentinelFor(String duration) {
+    return '$duration 継続';
+  }
+
+  @override
+  String sentinelLastHeard(String time) {
+    return '更新 $time';
+  }
+
+  @override
+  String get sentinelClockUnset => 'デバイスの時計が未設定';
+
+  @override
+  String get sentinelPeriodHour => 'この1時間';
+
+  @override
+  String get sentinelPeriodDay => '今日';
+
+  @override
+  String get sentinelPeriodWeek => '今週';
+
+  @override
+  String get sentinelPeriodMonth => '今月';
+
+  @override
+  String get sentinelEntries => '入室';
+
+  @override
+  String sentinelOccupied(String duration) {
+    return '在室 $duration';
+  }
+
+  @override
+  String get sentinelRecent => '最近の動き';
+
+  @override
+  String get sentinelNoEvents => 'アプリ接続後の動きはまだありません。';
+
+  @override
+  String get sentinelEvEnter => '入室を検知';
+
+  @override
+  String sentinelEvPresent(String duration) {
+    return '在室継続中(ここまで $duration)';
+  }
+
+  @override
+  String sentinelEvClear(String duration) {
+    return '不在になりました(滞在 $duration)';
+  }
+
+  @override
+  String sentinelEvRollover(
+      String period, String label, String entries, String occupied) {
+    return '$period $label 締め: 入室 $entries 回、在室 $occupied';
+  }
+
+  @override
+  String sentinelEvReset(String periods) {
+    return 'デバイスでリセット: $periods';
+  }
+
+  @override
+  String get sentinelBroker => 'ブローカー';
+
+  @override
+  String get sentinelBrokerHint =>
+      'センチネルの送信先(例: mqtt://broker.hivemq.com:1883)';
+
+  @override
+  String get sentinelBrokerSave => '保存';
+
+  @override
+  String get sentinelPrivacy =>
+      'broker.hivemq.com は公開ブローカーです。センチネルの ID を知っていれば、誰でも在室状況を見られます。';
+
+  @override
+  String get sentinelStateActive => '動きあり';
+
+  @override
+  String sentinelClearIn(String time) {
+    return 'あと $time で不在';
+  }
+
+  @override
+  String sentinelLastMotion(String ago) {
+    return '最後の動き $ago 前';
+  }
+
+  @override
+  String get sentinelMotionNow => 'いま動きあり';
+
+  @override
+  String get sentinelLast5 => '直近5分';
+
+  @override
+  String sentinelLast5Summary(String secs) {
+    return '動き $secs 秒 · バーをタップで詳細';
+  }
+
+  @override
+  String sentinelLast5Bar(String ago, String pct) {
+    return '$ago 前 · この10秒の $pct% で動き';
+  }
+
+  @override
+  String get sentinelLast24 => '直近24時間';
+
+  @override
+  String sentinelLast24Summary(String duration) {
+    return '在室 $duration · バーをタップで詳細';
+  }
+
+  @override
+  String sentinelLast24Bar(String from, String to, String minutes) {
+    return '$from–$to · 在室 $minutes 分';
+  }
+
+  @override
+  String get sentinelNoSeries => 'このセンチネルの最初の更新を待っています(ファームウェア 0.2.0 以降)。';
+
+  @override
+  String get sentinelNow => 'いま';
+
+  @override
+  String get sentinelCheckSensor => 'センサーを確認してください';
+
+  @override
+  String sentinelCheckSensorBody(String duration) {
+    return '$duration 動きがありません。PIR の配線が外れていても空室と同じに見えます。部屋を使っていたなら、VCC・OUT・GND を確認してください。';
+  }
 }

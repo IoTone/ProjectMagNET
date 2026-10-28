@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "mqtt_client.h"
+#include "esp_crt_bundle.h"
 
 static const char *TAG = "craw_mqtt";
 
@@ -13,6 +14,11 @@ static bool s_connected = false;
 static char s_broker_uri[128];
 static char s_base_topic[128];
 static char s_sub_topic[140];   // base_topic + "/#"
+
+static char s_lwt_topic[128];
+static char s_lwt_msg[128];
+static int  s_lwt_qos, s_keepalive_s;
+static bool s_lwt_retain;
 
 static craw_mqtt_msg_cb_t  s_msg_cb  = NULL;
 static craw_mqtt_conn_cb_t s_conn_cb = NULL;
@@ -156,11 +162,30 @@ int craw_mqtt_publish(const char *topic, const char *payload,
                                    qos, retain ? 1 : 0);
 }
 
+void craw_mqtt_set_lwt(const char *topic, const char *payload, int qos,
+                       bool retain, int keepalive_s) {
+    strncpy(s_lwt_topic, topic ? topic : "", sizeof(s_lwt_topic) - 1);
+    strncpy(s_lwt_msg, payload ? payload : "", sizeof(s_lwt_msg) - 1);
+    s_lwt_qos = qos;
+    s_lwt_retain = retain;
+    s_keepalive_s = keepalive_s;
+}
+
 void craw_mqtt_start(void) {
     if (s_client) return;
 
     esp_mqtt_client_config_t cfg = {0};
     cfg.broker.address.uri = s_broker_uri;
+    if (s_lwt_topic[0]) {
+        cfg.session.last_will.topic  = s_lwt_topic;
+        cfg.session.last_will.msg    = s_lwt_msg;
+        cfg.session.last_will.qos    = s_lwt_qos;
+        cfg.session.last_will.retain = s_lwt_retain;
+    }
+    if (s_keepalive_s > 0) cfg.session.keepalive = s_keepalive_s;
+    // TLS brokers (mqtts://, wss://) are verified against IDF's root CA bundle.
+    if (!strncmp(s_broker_uri, "mqtts://", 8) || !strncmp(s_broker_uri, "wss://", 6))
+        cfg.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
 
     s_client = esp_mqtt_client_init(&cfg);
     if (!s_client) {

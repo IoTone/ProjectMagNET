@@ -901,6 +901,295 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Nothing provisioned from this phone yet. Nodes appear here the moment you give them a channel.'**
   String get provisionLogEmpty;
+
+  /// No description provided for @sentinelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Sentinels'**
+  String get sentinelTitle;
+
+  /// No description provided for @sentinelDashboardCard.
+  ///
+  /// In en, this message translates to:
+  /// **'Presence sentinels'**
+  String get sentinelDashboardCard;
+
+  /// No description provided for @sentinelDashboardHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Room presence from Sentinel IR nodes, over MQTT from any network'**
+  String get sentinelDashboardHint;
+
+  /// No description provided for @sentinelLinkIdle.
+  ///
+  /// In en, this message translates to:
+  /// **'Not connected'**
+  String get sentinelLinkIdle;
+
+  /// No description provided for @sentinelLinkConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connecting…'**
+  String get sentinelLinkConnecting;
+
+  /// No description provided for @sentinelLinkConnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Live'**
+  String get sentinelLinkConnected;
+
+  /// No description provided for @sentinelLinkReconnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Reconnecting…'**
+  String get sentinelLinkReconnecting;
+
+  /// No description provided for @sentinelLinkError.
+  ///
+  /// In en, this message translates to:
+  /// **'Can\'t reach the broker'**
+  String get sentinelLinkError;
+
+  /// No description provided for @sentinelEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for Sentinels on {broker}. One appears here as soon as the broker sends its state.'**
+  String sentinelEmpty(String broker);
+
+  /// No description provided for @sentinelStatePresent.
+  ///
+  /// In en, this message translates to:
+  /// **'PRESENT'**
+  String get sentinelStatePresent;
+
+  /// No description provided for @sentinelStateClear.
+  ///
+  /// In en, this message translates to:
+  /// **'CLEAR'**
+  String get sentinelStateClear;
+
+  /// No description provided for @sentinelStateWarmup.
+  ///
+  /// In en, this message translates to:
+  /// **'WARMING UP'**
+  String get sentinelStateWarmup;
+
+  /// No description provided for @sentinelStateOffline.
+  ///
+  /// In en, this message translates to:
+  /// **'OFFLINE'**
+  String get sentinelStateOffline;
+
+  /// No description provided for @sentinelStateUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'UNKNOWN'**
+  String get sentinelStateUnknown;
+
+  /// No description provided for @sentinelFor.
+  ///
+  /// In en, this message translates to:
+  /// **'for {duration}'**
+  String sentinelFor(String duration);
+
+  /// No description provided for @sentinelLastHeard.
+  ///
+  /// In en, this message translates to:
+  /// **'updated {time}'**
+  String sentinelLastHeard(String time);
+
+  /// No description provided for @sentinelClockUnset.
+  ///
+  /// In en, this message translates to:
+  /// **'device clock not set yet'**
+  String get sentinelClockUnset;
+
+  /// No description provided for @sentinelPeriodHour.
+  ///
+  /// In en, this message translates to:
+  /// **'This hour'**
+  String get sentinelPeriodHour;
+
+  /// No description provided for @sentinelPeriodDay.
+  ///
+  /// In en, this message translates to:
+  /// **'Today'**
+  String get sentinelPeriodDay;
+
+  /// No description provided for @sentinelPeriodWeek.
+  ///
+  /// In en, this message translates to:
+  /// **'This week'**
+  String get sentinelPeriodWeek;
+
+  /// No description provided for @sentinelPeriodMonth.
+  ///
+  /// In en, this message translates to:
+  /// **'This month'**
+  String get sentinelPeriodMonth;
+
+  /// No description provided for @sentinelEntries.
+  ///
+  /// In en, this message translates to:
+  /// **'entries'**
+  String get sentinelEntries;
+
+  /// No description provided for @sentinelOccupied.
+  ///
+  /// In en, this message translates to:
+  /// **'{duration} occupied'**
+  String sentinelOccupied(String duration);
+
+  /// No description provided for @sentinelRecent.
+  ///
+  /// In en, this message translates to:
+  /// **'Recent activity'**
+  String get sentinelRecent;
+
+  /// No description provided for @sentinelNoEvents.
+  ///
+  /// In en, this message translates to:
+  /// **'No activity since the app connected.'**
+  String get sentinelNoEvents;
+
+  /// No description provided for @sentinelEvEnter.
+  ///
+  /// In en, this message translates to:
+  /// **'Someone entered'**
+  String get sentinelEvEnter;
+
+  /// No description provided for @sentinelEvPresent.
+  ///
+  /// In en, this message translates to:
+  /// **'Still present, {duration} so far'**
+  String sentinelEvPresent(String duration);
+
+  /// No description provided for @sentinelEvClear.
+  ///
+  /// In en, this message translates to:
+  /// **'Room clear, visit lasted {duration}'**
+  String sentinelEvClear(String duration);
+
+  /// No description provided for @sentinelEvRollover.
+  ///
+  /// In en, this message translates to:
+  /// **'{period} {label} closed: {entries} entries, {occupied} occupied'**
+  String sentinelEvRollover(
+      String period, String label, String entries, String occupied);
+
+  /// No description provided for @sentinelEvReset.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset on the device: {periods}'**
+  String sentinelEvReset(String periods);
+
+  /// No description provided for @sentinelBroker.
+  ///
+  /// In en, this message translates to:
+  /// **'Broker'**
+  String get sentinelBroker;
+
+  /// No description provided for @sentinelBrokerHint.
+  ///
+  /// In en, this message translates to:
+  /// **'The address your Sentinels publish to, e.g. mqtt://broker.hivemq.com:1883'**
+  String get sentinelBrokerHint;
+
+  /// No description provided for @sentinelBrokerSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save'**
+  String get sentinelBrokerSave;
+
+  /// No description provided for @sentinelPrivacy.
+  ///
+  /// In en, this message translates to:
+  /// **'broker.hivemq.com is public. Anyone who knows a Sentinel\'s id can see when its room is occupied.'**
+  String get sentinelPrivacy;
+
+  /// No description provided for @sentinelStateActive.
+  ///
+  /// In en, this message translates to:
+  /// **'ACTIVE'**
+  String get sentinelStateActive;
+
+  /// No description provided for @sentinelClearIn.
+  ///
+  /// In en, this message translates to:
+  /// **'clears in {time}'**
+  String sentinelClearIn(String time);
+
+  /// No description provided for @sentinelLastMotion.
+  ///
+  /// In en, this message translates to:
+  /// **'last motion {ago} ago'**
+  String sentinelLastMotion(String ago);
+
+  /// No description provided for @sentinelMotionNow.
+  ///
+  /// In en, this message translates to:
+  /// **'motion now'**
+  String get sentinelMotionNow;
+
+  /// No description provided for @sentinelLast5.
+  ///
+  /// In en, this message translates to:
+  /// **'Last 5 minutes'**
+  String get sentinelLast5;
+
+  /// No description provided for @sentinelLast5Summary.
+  ///
+  /// In en, this message translates to:
+  /// **'{secs} s of motion · tap a bar for detail'**
+  String sentinelLast5Summary(String secs);
+
+  /// No description provided for @sentinelLast5Bar.
+  ///
+  /// In en, this message translates to:
+  /// **'{ago} ago · motion {pct}% of those 10 s'**
+  String sentinelLast5Bar(String ago, String pct);
+
+  /// No description provided for @sentinelLast24.
+  ///
+  /// In en, this message translates to:
+  /// **'Last 24 hours'**
+  String get sentinelLast24;
+
+  /// No description provided for @sentinelLast24Summary.
+  ///
+  /// In en, this message translates to:
+  /// **'{duration} occupied · tap a bar for detail'**
+  String sentinelLast24Summary(String duration);
+
+  /// No description provided for @sentinelLast24Bar.
+  ///
+  /// In en, this message translates to:
+  /// **'{from}–{to} · {minutes} min occupied'**
+  String sentinelLast24Bar(String from, String to, String minutes);
+
+  /// No description provided for @sentinelNoSeries.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for this Sentinel\'s first update (needs firmware 0.2.0).'**
+  String get sentinelNoSeries;
+
+  /// No description provided for @sentinelNow.
+  ///
+  /// In en, this message translates to:
+  /// **'now'**
+  String get sentinelNow;
+
+  /// No description provided for @sentinelCheckSensor.
+  ///
+  /// In en, this message translates to:
+  /// **'Check the sensor'**
+  String get sentinelCheckSensor;
+
+  /// No description provided for @sentinelCheckSensorBody.
+  ///
+  /// In en, this message translates to:
+  /// **'No motion for {duration}. A loose PIR wire looks exactly like an empty room, so if the room has been in use, check VCC, OUT and GND.'**
+  String sentinelCheckSensorBody(String duration);
 }
 
 class _AppLocalizationsDelegate

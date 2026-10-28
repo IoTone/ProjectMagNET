@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 860" width="960" height="860" font-family="Helvetica, Arial, sans-serif">
+  <title>Sentinel IR wiring: M5StickC Plus to RadioShack 276-0347 PIR</title>
+  <rect width="960" height="860" fill="#ffffff"/>
+
+  <text x="32" y="30" font-size="20" font-weight="bold" fill="#1d1d1f">M5StickC Plus  ↔  RadioShack 276-0347 PIR sensor</text>
+  <text x="32" y="50" font-size="13" fill="#555">Three jumper wires (female–female). Power the PIR from 3V3 so its OUT pin can never exceed 3.3 V.</text>
+
+  <!-- ===== wires (drawn first, under the parts) ===== -->
+  <!-- GND: Stick pin 1 → PIR GND -->
+  <polyline points="105,148 105,82 560,82 560,402 652,402" fill="none" stroke="#1d1d1f" stroke-width="5" stroke-linejoin="round"/>
+  <!-- G26: Stick pin 3 → PIR OUT -->
+  <polyline points="149,148 149,102 590,102 590,362 652,362" fill="none" stroke="#7a4b00" stroke-width="7" stroke-linejoin="round"/>
+  <polyline points="149,148 149,102 590,102 590,362 652,362" fill="none" stroke="#f4a300" stroke-width="5" stroke-linejoin="round"/>
+  <!-- 3V3: Stick pin 7 → PIR VCC -->
+  <polyline points="237,148 237,122 620,122 620,322 652,322" fill="none" stroke="#d62828" stroke-width="5" stroke-linejoin="round"/>
+
+  <!-- wire labels -->
+  <rect x="330" y="72" width="96" height="20" rx="4" fill="#ffffff"/>
+  <text x="378" y="87" font-size="13" text-anchor="middle" fill="#1d1d1f" font-weight="bold">GND → GND</text>
+  <rect x="330" y="92" width="96" height="20" rx="4" fill="#ffffff"/>
+  <text x="378" y="107" font-size="13" text-anchor="middle" fill="#a35f00" font-weight="bold">G26 ← OUT</text>
+  <rect x="330" y="112" width="96" height="20" rx="4" fill="#ffffff"/>
+  <text x="378" y="127" font-size="13" text-anchor="middle" fill="#d62828" font-weight="bold">3V3 → VCC</text>
+
+  <!-- ===== M5StickC Plus (front view, header end up) ===== -->
+  <rect x="80" y="160" width="190" height="420" rx="22" fill="#f37021" stroke="#b34d0f" stroke-width="2"/>
+  <!-- HAT header: 8 pins, 22 px pitch -->
+  <rect x="94" y="146" width="176" height="16" rx="3" fill="#2b2b2b"/>
+  <g fill="#c9a227" stroke="#7d6416">
+    <rect x="100" y="148" width="10" height="12"/>
+    <rect x="122" y="148" width="10" height="12"/>
+    <rect x="144" y="148" width="10" height="12"/>
+    <rect x="166" y="148" width="10" height="12"/>
+    <rect x="188" y="148" width="10" height="12"/>
+    <rect x="210" y="148" width="10" height="12"/>
+    <rect x="232" y="148" width="10" height="12"/>
+    <rect x="254" y="148" width="10" height="12"/>
+  </g>
+  <!-- pin labels, rotated, on the case -->
+  <g font-size="11" fill="#ffffff" font-weight="bold">
+    <text transform="translate(109,170) rotate(90)">GND</text>
+    <text transform="translate(131,170) rotate(90)" fill="#ffe2cc" font-weight="normal">5V out</text>
+    <text transform="translate(153,170) rotate(90)">G26</text>
+    <text transform="translate(175,170) rotate(90)" fill="#ffe2cc" font-weight="normal">G36/G25</text>
+    <text transform="translate(197,170) rotate(90)" fill="#ffe2cc" font-weight="normal">G0</text>
+    <text transform="translate(219,170) rotate(90)" fill="#ffe2cc" font-weight="normal">BAT</text>
+    <text transform="translate(241,170) rotate(90)">3V3</text>
+  </g>
+  <text transform="translate(263,170) rotate(90)" font-size="11" fill="#ffe2cc">5V in</text>
+
+  <!-- screen -->
+  <rect x="104" y="232" width="142" height="230" rx="6" fill="#121a2b" stroke="#000" stroke-width="2"/>
+  <text x="175" y="330" font-size="16" fill="#9ef01a" text-anchor="middle" font-weight="bold">CLEAR</text>
+  <text x="175" y="352" font-size="11" fill="#cfd8e3" text-anchor="middle">in: hour 2  today 9</text>
+  <!-- button A -->
+  <rect x="133" y="482" width="84" height="44" rx="8" fill="#e05a10" stroke="#a8400a" stroke-width="2"/>
+  <text x="175" y="510" font-size="15" text-anchor="middle" fill="#fff" font-weight="bold">M5  (A)</text>
+  <!-- side button B (right edge) and power key (left edge) -->
+  <rect x="270" y="280" width="8" height="46" rx="3" fill="#555"/>
+  <text x="284" y="308" font-size="12" fill="#555">B</text>
+  <rect x="72" y="400" width="8" height="40" rx="3" fill="#555"/>
+  <text x="38" y="424" font-size="12" fill="#555">power</text>
+  <!-- USB-C at the bottom -->
+  <rect x="155" y="572" width="40" height="12" rx="4" fill="#666"/>
+  <text x="175" y="602" font-size="12" text-anchor="middle" fill="#555">USB-C (power + console)</text>
+
+  <!-- ===== PIR module ===== -->
+  <rect x="660" y="190" width="230" height="290" rx="10" fill="#2f6b3a" stroke="#1d4424" stroke-width="2"/>
+  <circle cx="790" cy="345" r="74" fill="#f3f3ee" stroke="#bdbdb4" stroke-width="2"/>
+  <g stroke="#d1d1c7" stroke-width="2" fill="none">
+    <circle cx="790" cy="345" r="56"/>
+    <circle cx="790" cy="345" r="36"/>
+    <circle cx="790" cy="345" r="16"/>
+    <line x1="716" y1="345" x2="864" y2="345"/>
+    <line x1="790" y1="271" x2="790" y2="419"/>
+  </g>
+  <text x="790" y="462" font-size="12" fill="#e8f5e9" text-anchor="middle">Fresnel lens — 120°, up to 9 m</text>
+  <!-- 3-pin header on the left edge -->
+  <rect x="646" y="306" width="18" height="112" rx="3" fill="#2b2b2b"/>
+  <g fill="#c9a227" stroke="#7d6416">
+    <rect x="648" y="316" width="12" height="12"/>
+    <rect x="648" y="356" width="12" height="12"/>
+    <rect x="648" y="396" width="12" height="12"/>
+  </g>
+  <g font-size="13" font-weight="bold" fill="#ffffff">
+    <text x="672" y="327">VCC</text>
+    <text x="672" y="367">OUT</text>
+    <text x="672" y="407">GND</text>
+  </g>
+  <!-- trigger-mode jumper -->
+  <rect x="742" y="202" width="96" height="16" rx="3" fill="#2b2b2b"/>
+  <rect x="744" y="204" width="58" height="12" rx="2" fill="#3a7bd5"/>
+  <text x="790" y="236" font-size="11" fill="#e8f5e9" text-anchor="middle">jumper: Re-trig (left pair)</text>
+
+  <!-- ===== notes ===== -->
+  <line x1="32" y1="630" x2="928" y2="630" stroke="#ddd"/>
+  <text x="32" y="658" font-size="15" font-weight="bold" fill="#1d1d1f">Check before you plug in</text>
+  <g font-size="13" fill="#1d1d1f">
+    <text x="32" y="684">• Wire by the labels printed on each board, not by</text>
+    <text x="46" y="702">position. The PIR guide doesn't name the pins, and</text>
+    <text x="46" y="720">the Stick's header labels are on its back face.</text>
+    <text x="32" y="746">• Use 3V3, not 5V out (5V out needs the AXP192</text>
+    <text x="46" y="764">boost, which this firmware leaves off).</text>
+    <text x="32" y="790">• Jumper on Re-trig: OUT stays high while motion</text>
+    <text x="46" y="808">continues. N-Retrig (~4 s pulses) also works.</text>
+
+    <text x="490" y="684">• Keep the PIR ≥10 cm from the Stick, facing away:</text>
+    <text x="504" y="702">WiFi bursts can false-trigger a PIR near the antenna.</text>
+    <text x="490" y="728">• G26 has its internal pull-down on, so a loose OUT</text>
+    <text x="504" y="746">wire reads "no motion", not a stream of fake entries.</text>
+    <text x="490" y="772">• The first 30 s after boot are ignored while the</text>
+    <text x="504" y="790">sensor settles (screen: WARMING UP).</text>
+  </g>
+  <text x="32" y="836" font-size="12" fill="#555">PIR: 3.3–5 V, 500 µA at 3.3 V · 120°, up to 9 m · needs ≥1 m/s movement · 0–40 °C (RadioShack 2760347 guide). Pin: src/board_stickc.h BOARD_PIR_GPIO.</text>
+</svg>
