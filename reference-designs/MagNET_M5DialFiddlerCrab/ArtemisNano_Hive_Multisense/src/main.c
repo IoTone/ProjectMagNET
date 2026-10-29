@@ -34,6 +34,7 @@
 #include "rv1805.h"
 #include "opt4048.h"
 #include "bno085.h"
+#include "person_sensor.h"
 #include "multisense.h"
 #include "hive_ble.h"
 
@@ -41,6 +42,7 @@
 #define RV1805_ADDR  0x69
 #define OPT4048_ADDR 0x44
 #define BNO085_ADDR  0x4A
+#define PERSON_ADDR  PERSON_SENSOR_ADDR
 
 /*
  * Full-bus sweep at boot, in addition to the targeted probe of known[].
@@ -71,6 +73,17 @@
 #define LED_CONN_ON_MS    80
 #define LED_CONN_OFF_MS 2420
 
+/*
+ * Last OPT4048 read, kept for the console only (not part of ms_readings, which
+ * crosses to hive_ble). M3 printed the error code and the raw channel codes;
+ * M4 dropped both, which is why a node whose light sensor stopped reporting
+ * could only say "no data" -- no errno, no way to tell darkness from a fault.
+ */
+static int light_err;
+static int presence_err;
+static uint32_t light_raw[4];
+static uint8_t light_counter;
+
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 static const struct device *const qwiic = DEVICE_DT_GET(DT_NODELABEL(qwiic_i2c));
 static const struct device *const rtc = DEVICE_DT_GET(DT_ALIAS(rtc));
@@ -93,11 +106,10 @@ static const struct {
 	 * recorded it as an unexpected address from a faulty AK9753 board; 0x62 is
 	 * this part's documented address, so it was most likely answering correctly.
 	 *
-	 * caps stays 0 on purpose: there is no driver yet, and setting
-	 * MS_CAP_PRESENCE with nothing to read it would advertise a sensor that
-	 * never reports a reading.
+	 * src/person_sensor.c reads it, so the capability is claimed here and
+	 * cleared again by sensors_bringup() if the probe does not answer.
 	 */
-	{0x62, "Person Sensor (Useful Sensors)", 0},
+	{0x62, "Person Sensor (Useful Sensors)", MS_CAP_PRESENCE},
 	{0x69, "RV-1805 RTC", MS_CAP_TIME},
 };
 
@@ -268,6 +280,13 @@ static void sensors_bringup(void)
 		printk("bno085: start failed (%d)\n", err);
 		probed_caps &= ~MS_CAP_ORIENTATION;
 	}
+	if (probed_caps & MS_CAP_PRESENCE) {
+		err = person_sensor_init(qwiic, PERSON_ADDR);
+		if (err) {
+			printk("person: init failed (%d)\n", err);
+			probed_caps &= ~MS_CAP_PRESENCE;
+		}
+	}
 	if (!device_is_ready(gauge)) {
 		probed_caps &= ~MS_CAP_BATTERY;
 	}
@@ -323,12 +342,32 @@ static void sample(void)
 	if (r.caps & MS_CAP_LUX) {
 		struct opt4048_sample s;
 
-		if (opt4048_read(qwiic, OPT4048_ADDR, &s) == 0) {
+		light_err = opt4048_read(qwiic, OPT4048_ADDR, &s);
+		if (light_err == 0) {
 			r.light_ok = true;
 			r.lux = s.lux;
 			r.cie_x = s.cie_x;
 			r.cie_y = s.cie_y;
 			r.cct = s.cct;
+			light_raw[0] = s.raw[0];
+			light_raw[1] = s.raw[1];
+			light_raw[2] = s.raw[2];
+			light_raw[3] = s.raw[3];
+			light_counter = s.counter;
+		}
+	}
+
+	if (r.caps & MS_CAP_PRESENCE) {
+		struct person_sensor_sample s;
+
+		presence_err = person_sensor_read(qwiic, PERSON_ADDR, &s);
+		if (presence_err == 0) {
+			const struct person_sensor_face *f = person_sensor_best(&s);
+
+			r.presence_ok = true;
+			r.faces = s.num_faces;
+			r.best_id = (f && f->id_confidence > 0) ? f->id : -1;
+			r.facing = f ? f->is_facing : false;
 		}
 	}
 
@@ -369,10 +408,24 @@ static void print_snapshot(void)
 	printk("\n");
 
 	if (r.light_ok) {
-		printk("light  %.1f lux  xy %.4f,%.4f  cct %.0f K\n", (double)r.lux,
-		       (double)r.cie_x, (double)r.cie_y, (double)r.cct);
+		printk("light  %.1f lux  xy %.4f,%.4f  cct %.0f K  raw %u/%u/%u/%u  cnt %u\n",
+		       (double)r.lux, (double)r.cie_x, (double)r.cie_y, (double)r.cct,
+		       light_raw[0], light_raw[1], light_raw[2], light_raw[3], light_counter);
+	} else if (r.caps & MS_CAP_LUX) {
+		/* -EIO bus, -EBADMSG CRC. Detected at boot, so this is not a cable. */
+		printk("light  err %d\n", light_err);
 	} else {
-		printk("light  %s\n", (r.caps & MS_CAP_LUX) ? "no data" : "absent");
+		printk("light  absent\n");
+	}
+
+	if (r.presence_ok) {
+		printk("person %u face(s)%s%s\n", r.faces,
+		       r.faces && r.facing ? ", facing" : "",
+		       r.best_id >= 0 ? ", recognised" : "");
+	} else if (r.caps & MS_CAP_PRESENCE) {
+		printk("person err %d\n", presence_err);
+	} else {
+		printk("person absent\n");
 	}
 
 	if (r.imu_ok) {

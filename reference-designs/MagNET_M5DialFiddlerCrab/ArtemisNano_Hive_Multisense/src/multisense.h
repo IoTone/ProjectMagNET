@@ -20,7 +20,7 @@
 #define MS_CAP_ORIENTATION BIT(6)
 
 #define MS_ROLE_MULTISENSOR 15
-#define MS_FW_VERSION       "0.4.1-m4"
+#define MS_FW_VERSION       "0.5.0-m4"
 
 /* Battery temperature sentinel until a thermistor is fitted (deci-degrees C). */
 #define TBAT_NONE_DC INT16_MIN
@@ -46,6 +46,12 @@ struct ms_readings {
 	float heading_acc_deg;
 	uint8_t stability;	/* 0 unknown, 1 on table, 2 stationary, 3 stable, 4 motion */
 	uint32_t sig_motion;
+
+	/* presence (MS_CAP_PRESENCE) -- Person Sensor at 0x62 */
+	bool presence_ok;
+	uint8_t faces;		/* 0-4 in frame */
+	int8_t best_id;		/* recognised ID 0-7, or -1 */
+	bool facing;		/* the best face is looking at the sensor */
 
 	/* time (MS_CAP_TIME) */
 	bool time_ok;

@@ -3,6 +3,8 @@
 **Status:** 🔧 **BRING-UP.** Platform proven 2026-10-18 (P1–P2). M1–M2 passed; M3 sensors reporting (IMU
 INT/RST wiring and hand checks pending); M4 BLE advert + HCP GATT working from the PC and **readable in
 `magnet_app`** (§7). Upstreaming the board to Zephyr: §8.
+**fw `0.5.0-m4` is written but NOT BUILT** (LED cadence, Person Sensor presence, light diagnostics):
+it needs a build on the Windows bench before any of it is real.
 **Build / flash:** `west build -b sparkfun_artemis_nano -d C:/zephyr-artemis/build/multisense <this dir>`
 then `python scripts/flash.py --monitor 10` (Zephyr venv; workspace from `scripts/setup_zephyr_ws.sh`).
 **BLE check from the PC:** `python scripts/ble_probe.py` (scan + decode) or `--hcp WHOAMI CAPS SENSE` (needs
@@ -42,6 +44,7 @@ time, its own energy) and tells the hive which ones it has (§5).
 | 2026-10-29 | `magnet_app` **release** build installed on the Galaxy S20 FE (`RF8R71GWDYL`). `flutter install` uninstalled the old debug build first, so app storage was wiped: **this phone has a new operator key**, and any node whose allow-list holds the old one must be re-enrolled. The Artemis is unaffected — its allow-list is still empty. |
 | 2026-10-29 | **Bench test from the Mac** (`scripts/ble_probe.py` + bleak, node at -44 dBm). Two findings. (1) **The OPT4048 is detected but not reading.** `CAPS` lists `lux:opt4048,cct:opt4048` — so the boot probe ACKed `0x44` *and* `opt4048_init()` returned 0 — while `SENSE` omits `lux=`/`cct=` entirely and the advert carries the `0xFFFF` sentinel in both fields. So `opt4048_read()` is failing on every sample; this is a regression since M3 (2026-10-19, `ID=0x0821`, 15.2 lux) and is **not** a loose breakout: battery, IMU and RTC all answer on the same bus. Next: serial monitor for the per-sample path, and whether M4's BLE changed bus timing. (2) **The §5.1 readings offset was wrong in both decoders** — see the note in §5.1. Everything else checks out: `WHOAMI` id `029d7d8f`, fw `0.4.0-m4`, MTU 247, `SENSE` `yaw=172.0 pitch=-4.3 roll=-6.1 motion=stable sigmo=5 vbat=4.184 soc=98`, RTC `2026-10-29T13:46:24`. |
 | 2026-10-29 | **The "faulty" presence board was probably answering correctly.** `0x62` is the documented I2C address of the **Useful Sensors Person Sensor** (confirmed in the vendor developer guide and in ESPHome's `sen21231` driver: `PERSON_SENSOR_I2C_ADDRESS = 0x62`). M1 probed `0x64/0x65/0x67` for an AK9753, got nothing, saw an ACK at `0x62`, and recorded the board as the wrong part or faulty — but `0x62` is exactly where a Person Sensor answers. It was then pulled from the chain. `0x39` and `0x4F` are still unexplained: a single device should not ACK three addresses, so either something else was on the chain or those were phantom ACKs from the four sets of parallel Qwiic pull-ups (§4.1). Added `0x62` to `known[]` (caps 0 — no driver yet) and an opt-in full-bus sweep (`MS_BUS_SWEEP` in `src/main.c`, default 0) so an address nobody expected is named rather than guessed at. **Note `MS_CAP_PRESENCE` is defined in `multisense.h` and assigned nowhere**, so presence cannot reach `CAPS`, `SENSE` or the advert even with the board fitted. Hardware check before any driver work: the sensor ships in continuous mode with its debug LED on, so powering it at 3.3 V and showing it a face should light the LED green — no firmware needed. |
+| 2026-10-29 | **Light-sensor regression traced to M4, and presence implemented.** `src/opt4048.c` is byte-identical to the working M3 bench — what M4 removed was the *diagnostics*: M3 printed `light err %d` and `raw %u/%u/%u/%u`, M4 reduced both to a bare "no data", which is why the failure has been opaque. Restored (plus the conversion counter). Two driver fixes fell out of reading it: **zero is a valid reading** — a covered sensor really does report zero on all four channels, and returning `-EAGAIN` for that made darkness indistinguishable from a fault, so the node published "no light data" instead of "0 lux"; and `opt4048_init()` now waits out the first 100 ms conversion, which is what `-EAGAIN` was really there for. **Presence**: `src/person_sensor.c` + `.h` (39-byte plain read, no register pointer; register-style writes; `MS_CAP_PRESENCE` wired through the probe, `CAPS` as `presence:person_sensor`, and `SENSE` as `faces=/facing=/faceid=`). Unverified in it: the single-shot trigger value and whether packet bytes 8/9 are right/bottom or width/height. Also hardened `hive_ble.c`'s line builders — `n += snprintf(buf + n, cap - n, …)` overruns once `n` reaches `cap`, and adding presence cut the CAPS headroom to 69 of 320 bytes. fw `0.5.0-m4`, **unbuilt**. |
 
 ---
 
@@ -106,7 +109,8 @@ Worth soldering if BLE (M4) or deep sleep (M5) produce silent failures; not need
 | LC709203F | [Adafruit 4712](https://learn.adafruit.com/adafruit-lc709203f-lipo-lipoly-battery-monitor/overview) | LiPo voltage, state of charge, optional 10k thermistor (not fitted: temperature reported as n/a) | `0x0B` | powered from the battery | ✅ `onnn,lc709203f` (fuel gauge API) |
 | SPH0641 (on the Nano) | built in | Sound level (PDM mic, pads 36/37) | — | — | ✅ `dmic` (optional, power-hungry; off by default) |
 
-**Person Sensor (Useful Sensors, v1.1) — candidate, not fitted.** `0x62`, 3.3 V only. Face
+**Person Sensor (Useful Sensors, v1.1) — driver written (`src/person_sensor.c`), never built or
+tested against hardware.** `0x62`, 3.3 V only. Face
 detection and optional recognition (up to 4 faces, 8 stored IDs); results are a **39-byte plain I2C
 read with no register pointer** (a register-style read fails — the likeliest way a new driver looks
 dead against a healthy board), while writes are register-style `[reg, value]`. Defaults: continuous
@@ -241,7 +245,10 @@ Name (13 bytes) + this block (18 bytes) fills the 31-byte scan response exactly.
 > `cct` 25088 — plausible-looking numbers that are really the header's own bytes. Both
 > `scripts/ble_probe.py` and `magnet_app`'s decoder had this bug; fixed 2026-10-29.
 **The bitmap is detected, not hard-coded:** set from the boot-time bus probe, so a missing or
-loose breakout clears its bit.
+loose breakout clears its bit. Bit b0 (presence) became reachable with the Person Sensor driver;
+before that it was defined and never assigned. **The face *count* is connected-only (`SENSE`
+`faces=`/`facing=`/`faceid=`)** — name plus the readings block already fills the 31-byte scan
+response exactly, so there is no room for it without a format version 2.
 
 **Layer 2 — connected (HCP).** `CAPS` gains `role=multisensor sensors=orientation:bno085,motion:bno085,lux:opt4048,cct:opt4048,time:rv1805,battery:lc709203f`
 (names shared with the WiFi hive's `caps[]` vocabulary, so a RoleBundle's `caps_req` can be checked

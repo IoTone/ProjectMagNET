@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -264,6 +265,35 @@ static const char *stability_str(uint8_t s)
 	return s < ARRAY_SIZE(names) ? names[s] : "?";
 }
 
+/*
+ * Append to a line, saturating at the end of the buffer.
+ *
+ * The plain `n = append(buf, cap, n, ...)` idiom is fine until `n`
+ * reaches `cap`: then `cap - n` is a *negative value converted to size_t*,
+ * snprintf is told the buffer is gigantic, and it writes off the end. snprintf
+ * also returns the length it *would* have written, so `n` can exceed `cap`
+ * after a clean truncation and the next call is the one that overruns. Both
+ * lines below are within budget today (CAPS 251, SENSE 210 of 320 worst case),
+ * but the margin is one new sensor wide, so the idiom goes away.
+ */
+static int append(char *buf, size_t cap, int n, const char *fmt, ...)
+{
+	va_list ap;
+	int w;
+
+	if (n < 0 || (size_t)n >= cap) {
+		return (int)cap;
+	}
+	va_start(ap, fmt);
+	w = vsnprintf(buf + n, cap - n, fmt, ap);
+	va_end(ap);
+	if (w < 0) {
+		return (int)cap;
+	}
+	n += w;
+	return (size_t)n > cap ? (int)cap : n;
+}
+
 static void sense_line(char *buf, size_t cap)
 {
 	struct ms_readings r;
@@ -272,22 +302,28 @@ static void sense_line(char *buf, size_t cap)
 	ms_readings_get(&r);
 	n = snprintf(buf, cap, "+OK seq=%u", r.seq);
 	if (r.time_ok) {
-		n += snprintf(buf + n, cap - n, " time=%s", r.time_iso);
+		n = append(buf, cap, n, " time=%s", r.time_iso);
 	}
 	if (r.caps & MS_CAP_BATTERY) {
-		n += snprintf(buf + n, cap - n, " vbat=%u.%03u soc=%u", r.vbat_mv / 1000,
+		n = append(buf, cap, n, " vbat=%u.%03u soc=%u", r.vbat_mv / 1000,
 			      r.vbat_mv % 1000, r.soc_pct);
-		n += snprintf(buf + n, cap - n, r.tbat_dc == TBAT_NONE_DC ? " tbat=na" : " tbat=%d.%d",
+		n = append(buf, cap, n, r.tbat_dc == TBAT_NONE_DC ? " tbat=na" : " tbat=%d.%d",
 			      r.tbat_dc / 10, r.tbat_dc % 10);
 	}
+	if (r.presence_ok) {
+		n = append(buf, cap, n, " faces=%u facing=%u", r.faces, r.facing ? 1 : 0);
+		if (r.best_id >= 0) {
+			n = append(buf, cap, n, " faceid=%d", r.best_id);
+		}
+	}
 	if (r.light_ok) {
-		n += snprintf(buf + n, cap - n, " lux=%.1f cct=%.0f x=%.4f y=%.4f", (double)r.lux,
+		n = append(buf, cap, n, " lux=%.1f cct=%.0f x=%.4f y=%.4f", (double)r.lux,
 			      (double)r.cct, (double)r.cie_x, (double)r.cie_y);
 	}
 	if (r.imu_ok) {
-		snprintf(buf + n, cap - n, " yaw=%.1f pitch=%.1f roll=%.1f hacc=%.0f motion=%s sigmo=%u",
-			 (double)r.yaw, (double)r.pitch, (double)r.roll, (double)r.heading_acc_deg,
-			 stability_str(r.stability), r.sig_motion);
+		n = append(buf, cap, n, " yaw=%.1f pitch=%.1f roll=%.1f hacc=%.0f motion=%s sigmo=%u",
+			   (double)r.yaw, (double)r.pitch, (double)r.roll, (double)r.heading_acc_deg,
+			   stability_str(r.stability), r.sig_motion);
 	}
 }
 
@@ -303,20 +339,24 @@ static void caps_line(char *buf, size_t cap)
 		     LINE_MAX);
 	const char *sep = "";
 
+	if (r.caps & MS_CAP_PRESENCE) {
+		n = append(buf, cap, n, "%spresence:person_sensor", sep);
+		sep = ",";
+	}
 	if (r.caps & MS_CAP_ORIENTATION) {
-		n += snprintf(buf + n, cap - n, "%sorientation:bno085,motion:bno085", sep);
+		n = append(buf, cap, n, "%sorientation:bno085,motion:bno085", sep);
 		sep = ",";
 	}
 	if (r.caps & MS_CAP_LUX) {
-		n += snprintf(buf + n, cap - n, "%slux:opt4048,cct:opt4048", sep);
+		n = append(buf, cap, n, "%slux:opt4048,cct:opt4048", sep);
 		sep = ",";
 	}
 	if (r.caps & MS_CAP_TIME) {
-		n += snprintf(buf + n, cap - n, "%stime:rv1805", sep);
+		n = append(buf, cap, n, "%stime:rv1805", sep);
 		sep = ",";
 	}
 	if (r.caps & MS_CAP_BATTERY) {
-		snprintf(buf + n, cap - n, "%sbattery:lc709203f", sep);
+		n = append(buf, cap, n, "%sbattery:lc709203f", sep);
 	}
 }
 
