@@ -18,6 +18,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../magnet/credentials.dart';
 import '../magnet/hcp.dart';
 import '../magnet/magnet_ble.dart';
+import '../magnet/multisense.dart';
 import '../magnet/operator_identity.dart';
 
 class MagnetNodeScreen extends StatefulWidget {
@@ -30,10 +31,48 @@ class MagnetNodeScreen extends StatefulWidget {
   State<MagnetNodeScreen> createState() => _MagnetNodeScreenState();
 }
 
+/// Where the BLE link stands. The screen must show this: a node that reboots
+/// — because it was reflashed, or because the battery took over from USB —
+/// drops the link, and until this was rendered the screen simply kept its
+/// stale values and every button failed silently.
+enum _LinkState { connecting, live, reconnecting, lost }
+
 class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
+  /// Retry the same node for this long after the link drops. A reboot is back
+  /// within a couple of seconds; a power-source changeover plus sensor
+  /// bring-up takes longer, and a node carried out of range may well come
+  /// back. Matches `MeshSession.reconnectWindow`.
+  static const Duration _reconnectWindow = Duration(minutes: 3);
+  static const List<Duration> _reconnectDelays = <Duration>[
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 3),
+    Duration(seconds: 5),
+  ];
+
+  /// How often to re-read `SENSE` while the link is live.
+  static const Duration _sensePeriod = Duration(seconds: 5);
+
   MagnetBleTransport? _transport;
   HcpClient? _hcp;
   StreamSubscription<String>? _trafficSub;
+  StreamSubscription<BluetoothConnectionState>? _connSub;
+
+  _LinkState _link = _LinkState.connecting;
+  int _reconnectGen = 0; // bumped to cancel a running reconnect loop
+  int _reconnects = 0;
+  Timer? _senseTimer;
+
+  /// Latest `SENSE` reply, or null when this node has no sensors to report.
+  MultisenseReadings? _sense;
+
+  /// What the node found at boot, from `CAPS`. Read once per connect — a
+  /// sensor cannot appear on the bus without a reboot, so polling it is waste.
+  MsSensorSet _detected = MsSensorSet.unknown;
+
+  /// False once the node answers `E_UNKNOWN` to `SENSE` — firmware without
+  /// the verb, so stop asking and hide the card.
+  bool _senseSupported = true;
 
   final List<String> _console = <String>[];
   final TextEditingController _credCtl = TextEditingController();
@@ -59,6 +98,9 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
 
   @override
   void dispose() {
+    _reconnectGen++; // stop any retry loop before the state object goes away
+    _senseTimer?.cancel();
+    _connSub?.cancel();
     _trafficSub?.cancel();
     _hcp?.dispose();
     _transport?.dispose();
@@ -75,27 +117,147 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
     });
   }
 
+  /// Connect by hand: the first attempt, and the Retry/Reconnect buttons.
+  /// Cancels any automatic retry in flight so the two never race.
   Future<void> _connect() async {
+    _reconnectGen++;
+    await _teardown();
     setState(() {
       _connecting = true;
+      _link = _LinkState.connecting;
       _error = null;
     });
     try {
-      final BluetoothDevice dev = BluetoothDevice.fromId(widget.deviceId);
-      final MagnetBleTransport t = MagnetBleTransport(dev);
-      await t.connect();
-      final HcpClient c = HcpClient(t);
-      _trafficSub = c.traffic.listen(_log);
-      _transport = t;
-      _hcp = c;
-      // The operator key is this phone's claim to administer the fleet; it is
-      // created on first use and lives in the keystore from then on.
-      _operator = await OperatorIdentity.loadOrCreate();
-      await _refresh();
+      await _attach();
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) {
+        setState(() {
+          _error = '$e';
+          _link = _LinkState.lost;
+        });
+      }
     } finally {
       if (mounted) setState(() => _connecting = false);
+    }
+  }
+
+  /// Open the link and wire everything that depends on it. Throws if the node
+  /// does not answer; the caller decides whether to retry or show the error.
+  Future<void> _attach() async {
+    final BluetoothDevice dev = BluetoothDevice.fromId(widget.deviceId);
+    final MagnetBleTransport t = MagnetBleTransport(dev);
+    await t.connect();
+    final HcpClient c = HcpClient(t);
+    _trafficSub = c.traffic.listen(_log);
+    _transport = t;
+    _hcp = c;
+
+    // Watch the platform's own view of the link. This is the only thing that
+    // notices a node that went away on its own — HCP commands would just time
+    // out, one at a time, with nothing on screen to say why.
+    _connSub = dev.connectionState.listen((BluetoothConnectionState s) {
+      if (s == BluetoothConnectionState.disconnected &&
+          _link == _LinkState.live) {
+        _onLinkLost();
+      }
+    });
+
+    // The operator key is this phone's claim to administer the fleet; it is
+    // created on first use and lives in the keystore from then on.
+    _operator ??= await OperatorIdentity.loadOrCreate();
+    if (mounted) setState(() => _link = _LinkState.live);
+    await _refresh();
+    _startSensePoll();
+  }
+
+  /// Drop the current link and everything hanging off it, leaving the screen
+  /// ready for a fresh [_attach].
+  Future<void> _teardown() async {
+    _senseTimer?.cancel();
+    _senseTimer = null;
+    await _connSub?.cancel();
+    _connSub = null;
+    await _trafficSub?.cancel();
+    _trafficSub = null;
+    final HcpClient? c = _hcp;
+    final MagnetBleTransport? t = _transport;
+    _hcp = null;
+    _transport = null;
+    await c?.dispose();
+    await t?.dispose();
+  }
+
+  void _onLinkLost() {
+    _log('! link lost — reconnecting');
+    if (mounted) setState(() => _link = _LinkState.reconnecting);
+    unawaited(_reconnectLoop());
+  }
+
+  /// Retry the same node until [_reconnectWindow] runs out.
+  ///
+  /// The node keeps its BLE address across a reboot (it advertises the public
+  /// MAC), so the device id this screen was opened with stays valid and there
+  /// is nothing to re-discover.
+  Future<void> _reconnectLoop() async {
+    final int gen = ++_reconnectGen;
+    final DateTime deadline = DateTime.now().add(_reconnectWindow);
+    await _teardown();
+    for (int attempt = 0; DateTime.now().isBefore(deadline); attempt++) {
+      final Duration wait = _reconnectDelays[
+          attempt < _reconnectDelays.length ? attempt : _reconnectDelays.length - 1];
+      await Future<void>.delayed(wait);
+      if (gen != _reconnectGen || !mounted) return;
+      try {
+        await _attach();
+        _reconnects++;
+        _log('# reconnected (${_reconnects}x this session)');
+        if (mounted) setState(() => _error = null);
+        return;
+      } catch (_) {
+        await _teardown();
+        if (gen != _reconnectGen || !mounted) return;
+      }
+    }
+    if (gen != _reconnectGen || !mounted) return;
+    _log('! gave up reconnecting');
+    setState(() {
+      _link = _LinkState.lost;
+      _error = 'link lost — the node did not come back';
+    });
+  }
+
+  /// Poll `SENSE` while the link is live. Readings are the point of a
+  /// multisensor node, so they refresh on their own rather than waiting for
+  /// someone to press Refresh.
+  void _startSensePoll() {
+    _senseTimer?.cancel();
+    if (!_senseSupported) return;
+    _senseTimer = Timer.periodic(_sensePeriod, (_) {
+      if (_link == _LinkState.live) unawaited(_readSense());
+    });
+  }
+
+  /// Read the node's sensors. An `E_UNKNOWN` here is not an error: it means
+  /// this firmware has no sensors to report, so stop asking.
+  Future<void> _readSense() async {
+    final HcpClient? c = _hcp;
+    if (c == null || !_senseSupported) return;
+    try {
+      final MultisenseReadings r = MultisenseReadings.fromSense(await c.sense());
+      if (mounted) setState(() => _sense = r);
+    } on HcpError catch (e) {
+      if (e.code == 'E_UNKNOWN') {
+        _senseTimer?.cancel();
+        _senseTimer = null;
+        if (mounted) {
+          setState(() {
+            _senseSupported = false;
+            _sense = null;
+          });
+        }
+      }
+    } catch (_) {
+      // A timeout here is the link going; the connection watcher handles it.
     }
   }
 
@@ -114,6 +276,15 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
         _nameCtl.text = w['name'] == '-' ? '' : (w['name'] ?? '');
       });
       await _readAdmins();
+      await _readSense();
+      // Which sensors the node actually detected. This is what tells a blank
+      // Light row apart from a missing OPT4048.
+      try {
+        _detected = MsSensorSet.fromCaps(await c.caps());
+        if (mounted) setState(() {});
+      } on HcpError catch (_) {
+        // Firmware without CAPS: leave it unknown rather than claim nothing.
+      }
     } catch (e) {
       _log('! $e');
     }
@@ -442,19 +613,50 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
         actions: <Widget>[
           IconButton(
             tooltip: 'Refresh',
-            onPressed: _hcp == null ? null : _refresh,
+            onPressed:
+                _hcp == null || _link != _LinkState.live ? null : _refresh,
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
-      body: _connecting
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? _ErrorView(error: _error!, onRetry: _connect)
-              : ListView(
+      body: Column(
+        children: <Widget>[
+          if (_link != _LinkState.live && _who.isNotEmpty)
+            _LinkBanner(
+              link: _link,
+              reconnects: _reconnects,
+              onReconnect: _connect,
+              cs: cs,
+            ),
+          Expanded(child: _body(cs)),
+        ],
+      ),
+    );
+  }
+
+  Widget _body(ColorScheme cs) {
+    // Only a failure with nothing to show yet replaces the screen. Once the
+    // node has answered once, a drop keeps the page — including the console —
+    // and the banner above carries the state.
+    if (_connecting && _who.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && _who.isEmpty) {
+      return _ErrorView(error: _error!, onRetry: _connect);
+    }
+    return ListView(
                   padding: const EdgeInsets.all(16),
                   children: <Widget>[
                     _StatusCard(status: _status, who: _who, channel: _channel, cs: cs),
+                    if (_sense != null) ...<Widget>[
+                      const SizedBox(height: 16),
+                      _Section('Sensors'),
+                      _SensorsCard(
+                          readings: _sense!,
+                          detected: _detected,
+                          stale: _link != _LinkState.live,
+                          cs: cs),
+                    ],
                     const SizedBox(height: 16),
                     _Section('Display name'),
                     Row(
@@ -579,9 +781,246 @@ class _MagnetNodeScreenState extends State<MagnetNodeScreen> {
                     _Section('Console'),
                     _Console(lines: _console, cs: cs),
                   ],
-                ),
+                );
+  }
+}
+
+/// The link's state, across the top of the screen.
+///
+/// The node reboots for ordinary reasons — a reflash, or the battery taking
+/// over when USB is unplugged — and each one drops the BLE link. Without this
+/// the screen kept showing the last values it read and every command failed
+/// into a snackbar, which reads as the app being broken rather than the node
+/// having restarted.
+class _LinkBanner extends StatelessWidget {
+  const _LinkBanner({
+    required this.link,
+    required this.reconnects,
+    required this.onReconnect,
+    required this.cs,
+  });
+
+  final _LinkState link;
+  final int reconnects;
+  final VoidCallback onReconnect;
+  final ColorScheme cs;
+
+  @override
+  Widget build(BuildContext context) {
+    final (String text, Color bg, Color fg, bool busy) = switch (link) {
+      _LinkState.connecting => ('Connecting…', cs.surfaceContainerHighest, cs.onSurface, true),
+      _LinkState.reconnecting => (
+          'Node went away — reconnecting…'
+              '${reconnects > 0 ? '  (came back ${reconnects}x already)' : ''}',
+          cs.tertiaryContainer,
+          cs.onTertiaryContainer,
+          true
+        ),
+      _LinkState.lost => (
+          'Disconnected. The node may be rebooting or out of range.',
+          cs.errorContainer,
+          cs.onErrorContainer,
+          false
+        ),
+      _LinkState.live => ('', cs.surface, cs.onSurface, false),
+    };
+    return Material(
+      color: bg,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+        child: Row(
+          children: <Widget>[
+            if (busy)
+              SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: fg))
+            else
+              Icon(Icons.bluetooth_disabled, size: 16, color: fg),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(text, style: TextStyle(fontSize: 12, color: fg)),
+            ),
+            if (link == _LinkState.lost)
+              TextButton(
+                onPressed: onReconnect,
+                child: const Text('Reconnect'),
+              ),
+          ],
+        ),
+      ),
     );
   }
+}
+
+/// Live readings from a multisensor node (role 15), from HCP `SENSE`.
+///
+/// Only the sensors the node actually found are listed: the firmware omits a
+/// key for anything that did not answer the boot-time bus probe, so a missing
+/// row means "not fitted", never "zero".
+class _SensorsCard extends StatelessWidget {
+  const _SensorsCard({
+    required this.readings,
+    required this.detected,
+    required this.stale,
+    required this.cs,
+  });
+
+  final MultisenseReadings readings;
+
+  /// What the node reported finding at boot.
+  final MsSensorSet detected;
+
+  /// True while the link is down: the numbers are the last ones read, not now.
+  final bool stale;
+  final ColorScheme cs;
+
+  @override
+  Widget build(BuildContext context) {
+    final MultisenseReadings r = readings;
+    final List<Widget> rows = <Widget>[
+      // Light and colour both come from the OPT4048, so a claimed-but-silent
+      // part shows as such instead of leaving a hole where a row should be.
+      if (r.lux != null)
+        _row('Light', '${r.lux!.toStringAsFixed(1)} lx',
+            Icons.light_mode_outlined)
+      else if (detected.has('lux'))
+        _missing('Light', detected.parts['lux']!, Icons.light_mode_outlined),
+      if (r.cct != null)
+        _row(
+          'Colour',
+          '${r.cct!.round()} K'
+              '${r.cieX != null && r.cieY != null ? '   xy ${r.cieX!.toStringAsFixed(3)}/${r.cieY!.toStringAsFixed(3)}' : ''}',
+          Icons.palette_outlined,
+        )
+      else if (detected.has('cct'))
+        _missing('Colour', detected.parts['cct']!, Icons.palette_outlined),
+      if (r.yawDeg != null)
+        _row(
+          'Orientation',
+          'yaw ${r.yawDeg!.round()}°  pitch ${r.pitchDeg?.round() ?? '?'}°  '
+              'roll ${r.rollDeg?.round() ?? '?'}°',
+          Icons.explore_outlined,
+        )
+      else if (detected.has('orientation'))
+        _missing('Orientation', detected.parts['orientation']!,
+            Icons.explore_outlined),
+      if (r.stability != null)
+        _row(
+          'Motion',
+          '${stabilityLabel(r.stability!)}'
+              '${r.sigMotion != null ? '   ${r.sigMotion} events' : ''}',
+          Icons.vibration,
+        ),
+      if (r.socPct == null && detected.has('battery'))
+        _missing('Battery', detected.parts['battery']!,
+            Icons.battery_std_outlined),
+      if (r.socPct != null)
+        _row(
+          'Battery',
+          '${r.socPct}%'
+              '${r.vbatVolts != null ? '   ${r.vbatVolts!.toStringAsFixed(3)} V' : ''}'
+              '${r.tbatCelsius != null ? '   ${r.tbatCelsius!.toStringAsFixed(1)} °C' : ''}',
+          Icons.battery_std_outlined,
+        ),
+      if (r.timeIso != null)
+        _row('Node clock', r.timeIso!, Icons.schedule_outlined),
+    ];
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            ...rows,
+            const SizedBox(height: 8),
+            Text(
+              stale
+                  ? 'last reading before the link dropped (seq ${r.seq ?? "?"})'
+                  : 'updating every 5 s · seq ${r.seq ?? "?"}',
+              style: TextStyle(
+                  fontSize: 11,
+                  color: stale ? cs.error : cs.onSurfaceVariant),
+            ),
+            if (detected.isKnown) ...<Widget>[
+              const SizedBox(height: 4),
+              Text(
+                'detected at boot: ${detected.parts.keys.join(", ")}',
+                style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+              ),
+              Text(
+                'A sensor missing from that list did not answer the node\'s '
+                'boot-time bus scan — reseat its Qwiic breakout and reboot.',
+                style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+              ),
+            ],
+            if (r.headingAccDeg != null && r.headingAccDeg! > 25) ...<Widget>[
+              const SizedBox(height: 6),
+              Row(
+                children: <Widget>[
+                  const Icon(Icons.warning_amber, color: Colors.amber, size: 16),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Heading accuracy ±${r.headingAccDeg!.round()}° — move '
+                      'the node in a figure-8 to calibrate its magnetometer.',
+                      style:
+                          TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// A sensor the node says it found, but that produced no reading. The part
+  /// name matters: it is the difference between "reseat the breakout" and
+  /// "the driver is returning an error".
+  Widget _missing(String label, String part, IconData icon) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Icon(icon, size: 16, color: cs.error),
+            const SizedBox(width: 8),
+            SizedBox(
+                width: 88,
+                child: Text(label,
+                    style: TextStyle(fontSize: 12, color: cs.error))),
+            Expanded(
+              child: Text('no data from $part',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: cs.error)),
+            ),
+          ],
+        ),
+      );
+
+  Widget _row(String label, String value, IconData icon) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Icon(icon, size: 16, color: cs.onSurfaceVariant),
+            const SizedBox(width: 8),
+            SizedBox(
+                width: 88,
+                child: Text(label, style: const TextStyle(fontSize: 12))),
+            Expanded(
+              child: Text(value,
+                  style: const TextStyle(
+                      fontSize: 12, fontFamily: 'monospace')),
+            ),
+          ],
+        ),
+      );
 }
 
 class _StatusCard extends StatelessWidget {

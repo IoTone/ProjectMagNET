@@ -255,6 +255,14 @@ class HcpClient {
   Future<Map<String, String>> channel() async =>
       parseKv(await command('CHANNEL SHOW'));
 
+  /// Current sensor readings from a multisensor node (role 15).
+  ///
+  /// Only keys for sensors the node actually found are present, so the caller
+  /// must treat a missing key as "not fitted" rather than zero. Firmware
+  /// without the verb answers `-ERR E_UNKNOWN`, which surfaces as [HcpError]
+  /// — that is the signal that this node has no sensors to show.
+  Future<Map<String, String>> sense() async => parseKv(await command('SENSE'));
+
   /// Join/derive a channel. A typed passphrase runs PBKDF2 on-device, which
   /// takes seconds — hence the long default timeout.
   Future<Map<String, String>> setChannel(String credential,
