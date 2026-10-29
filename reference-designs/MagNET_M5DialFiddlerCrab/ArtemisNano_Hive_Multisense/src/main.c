@@ -42,6 +42,19 @@
 #define OPT4048_ADDR 0x44
 #define BNO085_ADDR  0x4A
 
+/*
+ * Full-bus sweep at boot, in addition to the targeted probe of known[].
+ *
+ * Off by default: it puts a 1-byte read on every one of the ~112 valid 7-bit
+ * addresses, including ones no driver owns, and a working node does not need
+ * that traffic on every boot. Turn it on when a part that should be present is
+ * missing — it is the only way to see a device that moved address (an OPT4048
+ * strapped to 0x45 instead of 0x44, say) or one that nobody has added to
+ * known[] yet. known[] alone answers "is the Person Sensor there", so the sweep
+ * is for the addresses we have not thought of.
+ */
+#define MS_BUS_SWEEP 0
+
 #define REPORT_PERIOD_MS 10000
 
 /*
@@ -74,6 +87,17 @@ static const struct {
 	{0x46, "OPT4048 color (alt)", 0},
 	{0x4A, "BNO085 IMU", MS_CAP_ORIENTATION},
 	{0x4B, "BNO085 IMU (alt)", 0},
+	/*
+	 * Useful Sensors Person Sensor. v1.0, v1.1 and v2.0 all answer here and are
+	 * software-compatible. The M1 scan (2026-10-19) saw an ACK at 0x62 and
+	 * recorded it as an unexpected address from a faulty AK9753 board; 0x62 is
+	 * this part's documented address, so it was most likely answering correctly.
+	 *
+	 * caps stays 0 on purpose: there is no driver yet, and setting
+	 * MS_CAP_PRESENCE with nothing to read it would advertise a sensor that
+	 * never reports a reading.
+	 */
+	{0x62, "Person Sensor (Useful Sensors)", 0},
 	{0x69, "RV-1805 RTC", MS_CAP_TIME},
 };
 
@@ -128,6 +152,35 @@ static void device_id_init(void)
  * error, so a full 0x08-0x77 sweep floods the console. Answers set the advert's
  * sensor bitmap; a driver that then fails to start clears its bit again.
  */
+#if MS_BUS_SWEEP
+/* 0x00-0x07 and 0x78-0x7F are reserved by the I2C spec, so they are skipped. */
+static void qwiic_sweep(void)
+{
+	int found = 0;
+
+	printk("qwiic sweep (0x08-0x77):");
+	for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+		uint8_t b;
+
+		if (i2c_read(qwiic, &b, 1, addr) != 0) {
+			continue;
+		}
+
+		const char *name = "not in known[]";
+
+		for (size_t i = 0; i < ARRAY_SIZE(known); i++) {
+			if (known[i].addr == addr) {
+				name = known[i].name;
+				break;
+			}
+		}
+		printk("\n  0x%02x  %s", addr, name);
+		found++;
+	}
+	printk(found ? "\n  %d device(s)\n" : " nothing\n", found);
+}
+#endif /* MS_BUS_SWEEP */
+
 static void qwiic_scan(void)
 {
 	int found = 0;
@@ -347,6 +400,9 @@ int main(void)
 	}
 
 	device_id_init();
+#if MS_BUS_SWEEP
+	qwiic_sweep();
+#endif
 	qwiic_scan();
 	rtc_bringup();
 	sensors_bringup();
