@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
+#include <stdbool.h>
+
 /*
  * MagNET BLE for the Multisensor (M4).
  *
@@ -25,3 +27,9 @@ int hive_ble_start(void);
 
 /* Refresh advert + scan response from the latest snapshot. */
 void hive_ble_update(void);
+
+/*
+ * True while a central is connected. Used by main() to slow the blue LED to a
+ * heartbeat, so the board says which state it is in without a console.
+ */
+bool hive_ble_connected(void);

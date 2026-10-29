@@ -12,6 +12,11 @@
  *
  * Boot check (from P2): blue LED lights before the kernel starts.
  *   LED on, no text -> console pins/baud wrong.  LED off -> image never ran.
+ *
+ * Blue LED, once running:
+ *   1 Hz even blink      -> up, advertising, nobody connected
+ *   short pulse / 2.5 s  -> a central is connected
+ *   solid on             -> never reached main() (see the boot check above)
  */
 
 #include <stdio.h>
@@ -37,7 +42,21 @@
 #define OPT4048_ADDR 0x44
 #define BNO085_ADDR  0x4A
 
-#define REPORT_PERIOD_TICKS 20	/* x 500 ms = 10 s */
+#define REPORT_PERIOD_MS 10000
+
+/*
+ * Blue LED cadence — the only thing this board can say without a console, so
+ * the two states must not look alike from across the bench:
+ *   advertising, nobody connected : 1 Hz even blink (as it has always been)
+ *   a central connected           : a short pulse every 2.5 s
+ * The connected pattern is also the cheaper one (80 ms on in 2500 ms, ~3% duty
+ * against 50%), which matters for M5: the red power LED is ~1.5 mA and this one
+ * is on the same order.
+ */
+#define LED_ADV_ON_MS    500
+#define LED_ADV_OFF_MS   500
+#define LED_CONN_ON_MS    80
+#define LED_CONN_OFF_MS 2420
 
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 static const struct device *const qwiic = DEVICE_DT_GET(DT_NODELABEL(qwiic_i2c));
@@ -338,14 +357,44 @@ int main(void)
 		printk("ble: not started; sensors only\n");
 	}
 
-	for (uint32_t tick = 1;; tick++) {
-		gpio_pin_toggle_dt(&led);
-		if ((tick % REPORT_PERIOD_TICKS) == 0) {
+	/*
+	 * Two independent deadlines on one thread: the report period is wall-clock
+	 * and must not drift when the LED slows down on connect, and an LED phase
+	 * must not stretch because a sample happened to land inside it.
+	 */
+	int64_t next_sample = k_uptime_get() + REPORT_PERIOD_MS;
+	int64_t next_led = k_uptime_get() + LED_ADV_ON_MS;
+	bool led_on = true;	/* already on: GPIO_OUTPUT_ACTIVE, and early_led_on() */
+
+	for (;;) {
+		const int64_t now = k_uptime_get();
+
+		if (now >= next_sample) {
 			sample();
 			print_snapshot();
 			hive_ble_update();
+			next_sample += REPORT_PERIOD_MS;
+			continue;
 		}
-		k_msleep(500);
+
+		if (now >= next_led) {
+			led_on = !led_on;
+			gpio_pin_set_dt(&led, led_on ? 1 : 0);
+			/*
+			 * The cadence is read at each edge, so a connect or disconnect
+			 * shows up within one phase (at worst the 2.4 s off-phase).
+			 */
+			const bool conn = hive_ble_connected();
+
+			if (led_on) {
+				next_led = now + (conn ? LED_CONN_ON_MS : LED_ADV_ON_MS);
+			} else {
+				next_led = now + (conn ? LED_CONN_OFF_MS : LED_ADV_OFF_MS);
+			}
+			continue;
+		}
+
+		k_msleep((uint32_t)(MIN(next_sample, next_led) - now));
 	}
 	return 0;
 }

@@ -77,6 +77,11 @@ static void build_payloads(void)
 	memcpy(adv_mfg, rsp_mfg, sizeof(adv_mfg));
 }
 
+bool hive_ble_connected(void)
+{
+	return cur_conn != NULL;
+}
+
 static void start_adv(void)
 {
 	int err;

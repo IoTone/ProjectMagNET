@@ -20,7 +20,7 @@
 #define MS_CAP_ORIENTATION BIT(6)
 
 #define MS_ROLE_MULTISENSOR 15
-#define MS_FW_VERSION       "0.4.0-m4"
+#define MS_FW_VERSION       "0.4.1-m4"
 
 /* Battery temperature sentinel until a thermistor is fitted (deci-degrees C). */
 #define TBAT_NONE_DC INT16_MIN

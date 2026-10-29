@@ -1,7 +1,8 @@
 # ArtemisNano_Hive_Multisense — low-power multi-sensor hive member
 
 **Status:** 🔧 **BRING-UP.** Platform proven 2026-10-18 (P1–P2). M1–M2 passed; M3 sensors reporting (IMU
-INT/RST wiring and hand checks pending); M4 BLE advert + HCP GATT working from the PC (§7).
+INT/RST wiring and hand checks pending); M4 BLE advert + HCP GATT working from the PC and **readable in
+`magnet_app`** (§7). Upstreaming the board to Zephyr: §8.
 **Build / flash:** `west build -b sparkfun_artemis_nano -d C:/zephyr-artemis/build/multisense <this dir>`
 then `python scripts/flash.py --monitor 10` (Zephyr venv; workspace from `scripts/setup_zephyr_ws.sh`).
 **BLE check from the PC:** `python scripts/ble_probe.py` (scan + decode) or `--hcp WHOAMI CAPS SENSE` (needs
@@ -36,6 +37,10 @@ time, its own energy) and tells the hive which ones it has (§5).
 | 2026-10-19 | **M4 checked from the PC** (`scripts/ble_probe.py`, bleak over the PC's adapter): advert decodes as role 15, sensors lux/color/time/battery/orientation (bitmap `0x5e`), battery 96%, live lux/CCT/yaw/stability from the scan response. GATT HCP: `PING WHOAMI STATUS CAPS SENSE` all answer; an unknown verb returns `-ERR E_UNKNOWN`; the node logged ATT MTU tx 527 / rx 247 and the console mirrors every `hcp<`/`hcp>` line. Removed Hanasu's on-connect Security Request: Windows turned it into a pairing prompt that cancelled the first write (`WinError -2147023673`). One SVL upload failed (`frame 7/84 rejected 4 times`, cause unknown); the immediate retry was clean. Phone/`magnet_app` check pending (the Galaxy did not show in `adb devices`). |
 | 2026-10-19 | **M4 checked on the phone** (Galaxy S20 FE, SM-G780G, `magnet_app` debug build from `dev`): the Devices list shows `MagNET-7d8f` with the MagNET node badge; the node screen reads `READY`, role `multisensor`, id `029d7d8f`, fw `0.4.0-m4`, channel `none`. Two firmware fixes were needed: (1) the app's refresh also sends `CHANNEL SHOW` and `ADMIN LIST`, and an `-ERR` there left every field at `?`, so both now answer (no channel, empty allow-list); (2) **notification chunking bug**: a line exactly `MTU-3` long had its `
 ` appended in the same notification, `bt_gatt_notify` rejected it and the reply vanished (CAPS with the app's `@a0005` tag hit this). Fixed with a strict `<`. Hanasu's `magnet_ble_zephyr.c` has the same `n <= chunk` line. Note: opening the serial monitor resets the board (RTS is wired to RESET), which drops any BLE link. The app does not display the advert readings yet; it would need a decoder for the §5.1 bytes or a `SENSE` panel. |
+| 2026-10-29 | **`magnet_app` shows the readings.** New `lib/magnet/multisense.dart` decodes the §5.1 manufacturer block, so the Devices list prints live `lux · CCT · yaw · SOC` under any multisensor **without connecting**; the node screen gained a Sensors card fed by a 5 s `SENSE` poll (`HcpClient.sense()`), with the heading-accuracy hint when the magnetometer is uncalibrated. Unit tests cover both decoders including the `0xFFFF`/`0x8000` sentinels and the 6-byte header-only advert (`test/magnet/multisense_test.dart`). Also fixed: **the node screen never watched the BLE link**, so a reboot — a reflash, or the battery taking over from USB — left it showing stale values while every command failed into a snackbar. It now watches `connectionState`, shows a banner, and retries the same address for 3 minutes (1/2/3/5 s backoff), the same policy `MeshSession` already used. |
+| 2026-10-29 | **Blue LED now says whether anyone is connected** (fw `0.4.1-m4`, **not yet built or flashed** — the Zephyr workspace is on the Windows bench): 1 Hz even blink while advertising, an 80 ms pulse every 2.5 s once a central connects (`hive_ble_connected()` is new). The main loop was `toggle + k_msleep(500)` with the 10 s report counted in LED ticks; it now runs the LED and the report off two independent wall-clock deadlines, so a variable LED period neither drifts the report nor gets its phase stretched by a sample. Connected is also the cheaper pattern (~3% duty vs 50%), which helps M5. |
+| 2026-10-29 | `magnet_app` **release** build installed on the Galaxy S20 FE (`RF8R71GWDYL`). `flutter install` uninstalled the old debug build first, so app storage was wiped: **this phone has a new operator key**, and any node whose allow-list holds the old one must be re-enrolled. The Artemis is unaffected — its allow-list is still empty. |
+| 2026-10-29 | **Bench test from the Mac** (`scripts/ble_probe.py` + bleak, node at -44 dBm). Two findings. (1) **The OPT4048 is detected but not reading.** `CAPS` lists `lux:opt4048,cct:opt4048` — so the boot probe ACKed `0x44` *and* `opt4048_init()` returned 0 — while `SENSE` omits `lux=`/`cct=` entirely and the advert carries the `0xFFFF` sentinel in both fields. So `opt4048_read()` is failing on every sample; this is a regression since M3 (2026-10-19, `ID=0x0821`, 15.2 lux) and is **not** a loose breakout: battery, IMU and RTC all answer on the same bus. Next: serial monitor for the per-sample path, and whether M4's BLE changed bus timing. (2) **The §5.1 readings offset was wrong in both decoders** — see the note in §5.1. Everything else checks out: `WHOAMI` id `029d7d8f`, fw `0.4.0-m4`, MTU 247, `SENSE` `yaw=172.0 pitch=-4.3 roll=-6.1 motion=stable sigmo=5 vbat=4.184 soc=98`, RTC `2026-10-29T13:46:24`. |
 
 ---
 
@@ -146,6 +151,15 @@ Two power architectures, chosen after measuring (M5):
   so the hive sees a periodic visitor, not a resident. **Open question:** the PSW pin sees `VIN`
   (up to 4.2 V) through R1 while the RTC runs from its supercap; check the RV-1805 pin limits first.
 
+**Unplugging USB resets the board** (suspected, 2026-10-29). `V_BATT` reaches `VIN` through a
+Schottky, so the changeover dips the rail below the AP2112's headroom and the Apollo3 brown-outs —
+which drops BLE, drops the hive membership, and restarts the sensors. `magnet_app` now survives this
+(it reconnects, §5), but the node side is unconfirmed. **To confirm rather than assume:** report
+`hwinfo_get_reset_cause()` in `STATUS` (and clear it at boot) — `hwinfo` is already linked for the
+node id — then watch whether a changeover shows `BROWNOUT`/`POR` and how long the gap is. If it does,
+the fixes are ordinary: more bulk capacitance on `VIN`, or accept the reboot and make it cheap (the
+RTC already keeps wall-clock time across it, §4.1, and the BLE identity and bonds survive in NVS).
+
 ## 5. Hive integration — Role 15: Multisensor
 
 Named 2026-10-19. Not yet in the top-level role list (README Roles 1–14); proposed wording:
@@ -185,7 +199,7 @@ prototype):
 
 Latest readings go in the scan response next to the name. **As built (M4):** the scan response carries
 manufacturer data under the same `0xFFFF`, holding the 6-byte header again plus 8 bytes of readings,
-because Android merges advert and scan response per company ID (a readings-only block would hide the header):
+because hosts merge advert and scan response per company ID (a readings-only block would hide the header):
 
 | Byte | Field |
 |---|---|
@@ -197,6 +211,20 @@ because Android merges advert and scan response per company ID (a readings-only 
 | 13 | significant-motion count, low byte |
 
 Name (13 bytes) + this block (18 bytes) fills the 31-byte scan response exactly.
+
+> **Decoders must take the readings from the last 8 bytes, not offset 6.** Measured off the air
+> 2026-10-29: the host **concatenates** the two manufacturer blocks rather than replacing one with
+> the other, so a scanner sees **20 bytes** — the 6-byte header *twice*, then the readings:
+>
+> ```
+> 1f 5e 00 62 84 00 | 1f 5e 00 62 84 00 | ff ff ff ff ab 00 03 05
+>    header               header again       lux   cct  yaw  st sig
+> ```
+>
+> `length - 8` is correct for both shapes (offset 6 for a lone 14-byte scan response, 12 for the
+> concatenated 20). A fixed offset 6 decodes the repeated header as data and reports `lux` 24095,
+> `cct` 25088 — plausible-looking numbers that are really the header's own bytes. Both
+> `scripts/ble_probe.py` and `magnet_app`'s decoder had this bug; fixed 2026-10-29.
 **The bitmap is detected, not hard-coded:** set from the boot-time bus probe, so a missing or
 loose breakout clears its bit.
 
@@ -239,10 +267,106 @@ Platform phases P1–P2 are done (bench log). Multisense phases:
 | M1 | Qwiic bus up (`qwiic_i2c` enabled, 100 kHz); bus scan | All four addresses ACK: `0x0B 0x44 0x4A 0x69` |
 | M2 | In-tree drivers: RV-1805 via `ambiq,am1805` (set/get time, alarm interrupt), LC709203F (voltage, SOC) | Time survives a reset; SOC and voltage plausible against a meter |
 | M3 | *IMU test rig idea:* once the Turret exists, it can turn the Multisensor through known angles so the hive checks yaw against commanded position (two members collaborating). OPT4048 driver (XYZ → lux, CIE xy, CCT) in `src/opt4048.c`; BNO085 via CEVA SH-2 + Zephyr HAL. **Polled version working**; INT-driven version once D8/D10 are wired | Lux tracks a phone light meter; rotation vector follows the board by hand; significant-motion event fires |
-| M4 | **BLE**: Ambiq HCI up; BLEIF pins (resolved: none used); §5.1 advert + readings; Hanasu HCP GATT service with a built-in `PING/HELP/WHOAMI/STATUS/CAPS/SENSE` dispatcher. **Working from the PC and in `magnet_app` on the phone**; app has no readings view yet | Phone sees adverts with live readings |
+| M4 | **BLE**: Ambiq HCI up; BLEIF pins (resolved: none used); §5.1 advert + readings; Hanasu HCP GATT service with a built-in `PING/HELP/WHOAMI/STATUS/CAPS/SENSE` dispatcher. **Working from the PC and in `magnet_app` on the phone**, readings shown in the list and on the node screen (2026-10-29) | Phone sees adverts with live readings ✅ |
 | M5 | **Power:** PM `suspend-to-ram`, sensors in one-shot/standby, interrupt wake; measure; LED/jumper mods; decide architecture A vs. B | Measured average current against a target set after the first measurement |
 | M6 | Forth: ESPIDFORTH platform layer + Multisense words; REPL on the console | `presence@ . lux@ .` prints live values |
 | M7 | Hive: HCP over GATT, signed `BUNDLE` install, role lifecycle | A signed Multisensor bundle installs over BLE and its `role-tick` reports readings |
+
+## 8. Upstreaming the Artemis Nano support to Zephyr
+
+**What we actually changed:** nothing inside Zephyr. The whole port is the out-of-tree board
+`boards/sparkfun/artemis_nano/` (8 files, §1) plus two app-level sensor drivers and
+`scripts/flash.py`. `hal_ambiq`, `soc/ambiq/apollo3x` and the Apollo3 BLE HCI driver are used
+unmodified — that is the single most important fact for upstreaming, because it means there is no
+fork to reconcile and the submission is purely additive.
+
+Upstream has no Artemis board today. [zephyr#74116](https://github.com/zephyrproject-rtos/zephyr/issues/74116)
+and [discussion #74478](https://github.com/zephyrproject-rtos/zephyr/discussions/74478) are one
+earlier attempt that stopped at the SVL upload failure (a personal `new_board/artemis_nano` fork,
+never a PR). So our port would be the first, and we would be its maintainer — Zephyr requires a
+named maintainer with the hardware in hand for every board. We have three boards (one retired).
+
+### 8.1 Order of work
+
+| Stage | Deliverable | Risk | Why in this order |
+|---|---|---|---|
+| **0** | Rebase the board onto Zephyr `main` and keep it building there | low | Upstream only takes PRs against `main`; we develop on the `v4.4.2` tag. Do this first or every later stage is rework. |
+| **1** | **PR: `boards: sparkfun: add RedBoard Artemis Nano`** | low | The one piece with real value to anyone else, and purely additive. |
+| **2** | **PR: SVL west runner** (`west flash -r svl`) | medium | Makes the board flashable out of the box with no J-Link. Reviewers *will* ask; see §8.3. |
+| **3** | **PR: `ti,opt4048` sensor driver** | medium-high | Useful to the whole ecosystem, but needs an answer on channels (§8.4). |
+| **4** | BNO085 / CEVA SH-2 | high | Needs a new west module, not a driver PR. Stays out-of-tree; see §8.5. |
+
+### 8.2 Stage 1 — the board PR
+
+What we have already matches the upstream layout (`board.yml`, `Kconfig.sparkfun_artemis_nano`,
+`Kconfig.defconfig`, `sparkfun_artemis_nano_defconfig`, the DTS + pinctrl dtsi, `board.cmake`,
+`sparkfun_artemis_nano.yaml`). What has to be added or cleaned up:
+
+- **Docs.** `boards/sparkfun/artemis_nano/doc/index.rst`: supported-features table, the flash map
+  (§3.3), the `0xC000` vs `0x10000` trap written up properly (it is the thing that wastes everyone
+  else's week), programming via SVL *and* via J-Link on J11, plus a board photo under `doc/img/`.
+- **Drop the project-specific bits.** The parked servo `pwm2` node and `pwm2_default` pinctrl group
+  carry turret comments (Appendix A). Keep the PWM node — exposing a header pin's timer is normal —
+  but rewrite the comments to describe pad 39 / timer 2 segment B, not our servo.
+- **`vendor: sparkfun`** already exists upstream (`sparkfun_pro_micro_rp2040` and friends), so no
+  `vendor-prefixes.txt` change is needed.
+- **Twister.** `sparkfun_artemis_nano.yaml` must be honest about `supported:`; `bluetooth` belongs
+  in the list now that M4 works. Confirm `samples/hello_world`, `samples/basic/blinky` and
+  `tests/kernel/common` build, and that `west build -b sparkfun_artemis_nano` is clean on `main`.
+- **Process.** DCO `Signed-off-by`, one logical commit, and a compliance-clean PR (checkpatch, DTS
+  lint, `scripts/ci/check_compliance.py`).
+
+### 8.3 Stage 2 — the SVL runner
+
+Upstream's instinct for a board whose debug footprint is unpopulated is "document the bootloader",
+but `west flash` working with nothing but the USB-C cable is what makes the board pleasant, and we
+already own a correct implementation: `scripts/flash.py` speaks the SVL protocol natively and its
+CRC was checked against SparkFun's on 2,000 random vectors (bench log, 2026-10-18). Port it to
+`scripts/west_commands/runners/svl.py` (a `ZephyrBinaryRunner` subclass), add the usual
+`scripts/tests/` unit test, then make `svl` the board's default runner in `board.cmake` with
+`jlink` as the alternative. Carry over the two hard-won behaviours: **pad the image to a multiple
+of 4** (the SVL rejects anything else — the cause of #74116) and **validate before upload**
+(initial SP in SRAM, reset vector inside `0x10000–0xFC000`), which is what stops a stock
+`apollo3_evb` image from bricking the recovery path.
+
+### 8.4 Stage 3 — the OPT4048 driver
+
+`src/opt4048.c` is an app-level register driver; upstream wants `drivers/sensor/ti/opt4048/` with a
+`ti,opt4048.yaml` binding, Kconfig, and `fetch`/`channel_get` over the sensor API. The design
+question to settle *before* writing the PR: Zephyr has `SENSOR_CHAN_LIGHT` for lux but nothing for
+CIE XYZ, CIE xy or CCT. Proposed answer — lux on `SENSOR_CHAN_LIGHT`, everything else as
+driver-specific channels above `SENSOR_CHAN_PRIV_START`, documented in the binding; a new *generic*
+colour channel is an API change and a long bikeshed we should not make a prerequisite. Keep the
+per-channel CRC check (counter + CRC on every register read) — it is the part of this part worth
+having and no other Zephyr light driver does it. Note the Linux IIO driver by Paul Kocialkowski as
+prior art for the register map and auto-range handling.
+
+### 8.5 Stage 4 — BNO085, and what stays ours
+
+The BNO085 is driven by CEVA's SH-2 library, vendored unmodified in `lib/sh2` (Apache-2.0). Zephyr
+does not take third-party trees into `drivers/`; this would have to become a west module
+(`modules/hal/ceva` shape) with a thin sensor driver on top, which needs upstream buy-in before any
+code is written. **Not worth starting now.** It costs us nothing to keep out-of-tree, and the
+vendored copy is already pinned (`lib/sh2/VENDORED.txt`).
+
+Also staying ours on purpose: the ESPIDFORTH Zephyr platform layer goes upstream in
+**IoTone/ESPIDFORTH**, not Zephyr (§6), and `magnet_crypto`/HCP are MagNET, not of general interest.
+
+### 8.6 Until it is merged
+
+Zephyr board PRs take weeks to months. In the meantime:
+
+1. **Keep this directory the source of truth** and consume it via `BOARD_ROOT`, as today.
+2. **Publish it as a Zephyr board module** (`zephyr/module.yml` with a `board_root` setting) in its
+   own small repo, so `PetWear_r1_zephos` and anyone else can `west` it in without copying files.
+   Cheap, and it is also the thing to point a reviewer at.
+3. **Comment on [#74116](https://github.com/zephyrproject-rtos/zephyr/issues/74116)** with the two
+   findings that unblock it (the `FLASH_LOAD_OFFSET` collision and the 4-byte padding) and state the
+   intent to upstream. That is how a reviewer gets interested early and how we avoid colliding with
+   the existing fork.
+4. **Do not let the two copies drift.** Once the board is merged, delete the local copy, pin a
+   Zephyr revision at or after the merge in `scripts/setup_zephyr_ws.sh`, and keep only
+   `app.overlay` here.
 
 ## Appendix A — parked: turret (FS0307 servo)
 
