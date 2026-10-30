@@ -73,6 +73,19 @@ the cap), low power (wall-powered), or microstepping (a ULN2003 has no current
 control). The accuracy limits — 1–2° of gearbox backlash and the 1:63.68395 gear
 ratio — are mechanical, and no controller fixes them.
 
+## Pins
+
+`rtl/perfv.xdc` has the Vivado constraints, every `PACKAGE_PIN` read off
+`perfv_schematic.pdf` rather than guessed. PerfXLab shipped no `.xdc`, so that
+file is the project's own and the only record of the mapping — keep it with the
+archived bitstream. UART to the Artemis is **P2 D0 = N6, D1 = M6**; the pan
+stepper is **JP1 1–4 = E12, E13, E11, D11**; limits are **JP1 7–8 = D14, D15**;
+the clock is **N14**. There is also a second UART on J3 (**N9 / P9**) for bench
+bring-up that leaves the Artemis link alone.
+
+Every P2 and JP1 signal already has a 200 Ω series resistor and an ESD array
+fitted, so do not add series resistors of your own.
+
 ## Before touching anything
 
 - **The OPT4048 needs a baffle, and G2 does not work without one.** Bare, the
@@ -80,8 +93,12 @@ ratio — are mechanical, and no controller fixes them.
   there is no peak to find. A tube over it — ~±10° is the sweet spot — is what
   sets the angular resolution, not the stepper's 0.088°. **Plot its response
   against a lamp at a known bearing before writing any peak-finding code.**
-- **Fit 10 kΩ pull-downs on ULN2003 IN1–IN4.** FPGA pins float until `FPGA_DONE`,
-  and floating Darlington inputs can energize the motor during configuration.
+- **Fit 1 kΩ — not 10 kΩ — pull-downs on ULN2003 IN1–IN4.** The pins do not
+  merely float during configuration: `PUDC_B` (L15) is strapped **low** on this
+  board (`R49` NC, `R50` 1 kΩ to GND), so the Artix-7 enables its internal
+  pull-ups on every I/O for the whole of configuration and actively pulls the
+  phase lines **high** — the one direction that turns a ULN2003 on. A 10 kΩ
+  pull-down divides against that to ~1.7 V and is not enough.
 - **Do not use 4096 half-steps/rev.** The gear ratio is 1:63.68395, so a
   revolution is 4075.77 half-steps. The round number costs ~1.8° per revolution.
 - **The motor gets its own 5 V supply**, common ground — not the Perf-V's `5V_IN`.

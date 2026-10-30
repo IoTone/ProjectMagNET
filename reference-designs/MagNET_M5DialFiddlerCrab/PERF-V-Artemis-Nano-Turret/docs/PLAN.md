@@ -138,8 +138,9 @@ settled regardless of the exact figure: **the turret is mains-powered.** Multise
 
 ### 3.3 Proposed pin map
 
-Perf-V — **all pin names from the manual's tables; the UART assignment is Arduino
-convention and must be confirmed against the schematic (O2):**
+Perf-V — **confirmed against `perfv_schematic.pdf` on 2026-10-30 (O2 closed).**
+Every pin below was read off the schematic, not inferred from Arduino convention.
+Method and the full header tables are in §3.3.1.
 
 | Signal | Connector | Pin | FPGA pin |
 |---|---|---|---|
@@ -150,15 +151,99 @@ convention and must be confirmed against the schematic (O2):**
 | Tilt IN1–IN4 (axis 2, later) | P2 | D4, D5, D6, D7 | P13, N13, R11, R10 |
 | Ground to ULN2003 + Artemis | JP1 | 5, 11 | — |
 
-Deliberately avoiding P2 D2/D3 — they are the same FPGA pins as `SDA`/`SCL`
-(T8/T7), and keeping I²C free costs nothing. Limit switches use Vivado
-`PULLUP TRUE` and switch to ground, so they need no external parts.
+Deliberately avoiding P2 D2/D3 — the schematic confirms they are literally the
+same nets as the dedicated `SDA`/`SCL` pins (`B14_L21N` = T8, `B14_L21P` = T7),
+so using them would take I²C away. Limit switches use Vivado `PULLUP TRUE` and
+switch to ground, so they need no external parts.
 
-**Artemis UART1 pads: not yet chosen (O3).** Only UART0 is in use (CH340E).
-The Apollo3 has a second UART but its TX/RX can only land on specific pads;
-pick from the Apollo3 pin-mux table and the board DTS before wiring.
+**Every signal on P2 and JP1 already carries a 200 Ω series resistor** — packs
+`Rp11`–`Rp13` on P2 and `Rp14`/`Rp15` on JP1, each with an ESD diode array
+(`E1`/`E2`). Two consequences:
 
-Series 100–330 Ω on the UART pair, cheap insurance against both ends driving.
+- **The series resistors this section used to call for are already fitted.** The
+  "100–330 Ω on the UART pair, cheap insurance against both ends driving" is on
+  the board. Do not add more. 200 Ω into a CMOS input is nothing at 115200
+  (~2 ns with 10 pF).
+- **It does not weaken R3.** 200 Ω and an ESD clamp do not define a floating
+  pin's level, so the 10 kΩ pull-downs on IN1–IN4 are still required, and they
+  still belong at the **ULN2003 end**, after the series resistor.
+
+**Artemis UART1 pads: still not chosen (O3).** Only UART0 is in use (CH340E).
+The Apollo3 has a second UART but its TX/RX can only land on specific pads; pick
+from the Apollo3 pin-mux table and the board DTS before wiring. **Nothing in the
+O2 work touched this** — it is a separate document on the other board.
+
+#### 3.3.1 The header maps, read off the schematic
+
+`perfv_schematic.pdf` (Altium, 10 sheets, 2018-05-28) has no net list, and its
+text layer is in drawing order rather than reading order, so the tables below
+were built by joining on **coordinates**, not on text adjacency: on each sheet a
+pin name and its net label share a y, and a resistor-pack position pairs top-side
+pin *n* with bottom-side pin *9−n* at the same x. Every row in the UART and
+stepper paths was then **confirmed by rendering that region of the PDF and
+reading the drawing** — the text layer alone had the two UART nets unlabelled.
+
+Sheet 3 (bank 14) and sheet 4 (bank 15) give net → FPGA pin for 213 of 256 pads.
+Sheet 10 is the Arduino headers; sheet 9 is the PMOD.
+
+**P2, Arduino digital — all bank 14:**
+
+| P2 pin | Net at the header | Via | Net at the FPGA | FPGA pin |
+|---|---|---|---|---|
+| D0 / RX1 | `D0/RX1` | Rp13.5–4 | `B14_L19N` | **N6** |
+| D1 / TX1 | `D1/TX1` | Rp13.6–3 | `B14_L19P` | **M6** |
+| D2 / SDA | `D2/SDA` | — | `B14_L21N` | T8 |
+| D3 / SCL | `D3/SCL` | — | `B14_L21P` | T7 |
+| D4 | `D4` | Rp13.7–2 | `B14_L11SRCCN` | P13 |
+| D5 | `D5` | Rp13.8–1 | `B14_L11SRCCP` | N13 |
+| D6 | `D6` | Rp12.5–4 | `B14_L17N` | R11 |
+| D7 | `D7` | Rp12.6–3 | `B14_L17P` | R10 |
+| D8 | `IO8` | Rp12.7–2 | `B14_L16N` | T13 |
+| D9 | `IO9` | Rp12.8–1 | `B14_L16P` | R13 |
+| D10 | `IO10` | Rp11.5–4 | `CK_SS` | R7 |
+| D11 | `IO11` | Rp11.6–3 | `CK_MOSI` | R6 |
+| D12 | `IO12` | Rp11.7–2 | `CK_MISO` | T5 |
+| D13 | `IO13` | Rp11.8–1 | `CK_SCK` | R5 |
+| SDA | `D2/SDA` | — | `B14_L21N` | T8 |
+| SCL | `D3/SCL` | — | `B14_L21P` | T7 |
+
+**P2, Arduino analog — all bank 15:**
+
+| P2 pin | Net | FPGA pin |
+|---|---|---|
+| A0 | `B15_L4P` | B10 |
+| A1 | `B15_L4N` | B11 |
+| A2 | `B15_L6P` | D8 |
+| A3 | `B15_L6N` | D9 |
+| A4 | `B15_L11P` | C11 |
+| A5 | `B15_L11N` | C12 |
+
+**JP1, PMOD (12-pin) — all bank 15:**
+
+| JP1 pin | Via | Net | FPGA pin |
+|---|---|---|---|
+| 1 | Rp14.8–1 | `B15_L13P` | E12 |
+| 2 | Rp14.7–2 | `B15_L13N` | E13 |
+| 3 | Rp14.6–3 | `B15_L14P` | E11 |
+| 4 | Rp14.5–4 | `B15_L14N` | D11 |
+| 5, 11 | — | GND | — |
+| 6, 12 | — | VCC | — |
+| 7 | Rp15.8–1 | `B15_L15P` | D14 |
+| 8 | Rp15.7–2 | `B15_L15N` | D15 |
+| 9 | Rp15.6–3 | `B15_L16P` | F12 |
+| 10 | Rp15.5–4 | `B15_L16N` | F13 |
+
+**Also confirmed, and useful elsewhere:**
+
+| Net | FPGA pin | Why it matters |
+|---|---|---|
+| `SYS_CLK` | **N14** | Independently confirms the manual's 50 MHz oscillator pin. `CLK_HZ = 50_000_000` in the RTL is right |
+| `reset` | L13 | — |
+| `JTAG1_RX0` / `JTAG1_TX0` | **N9 / P9** | A **second UART**, on header J3 alongside JTAG. T2 can be brought up on this one with a USB-serial adapter, leaving P2 D0/D1 untouched for the Artemis — the two links can be tested independently and can coexist |
+
+That last row is worth the trouble on its own: T2's "tested from a USB-serial on
+the bench, not yet the Artemis" now has a dedicated pin pair, so bring-up does
+not mean repeatedly unplugging the Artemis.
 
 ## 4. What this design makes possible
 
@@ -454,7 +539,7 @@ stage that has not been seen working.
 | # | Stage | Done when |
 |---|---|---|
 | **T0** | Settle the open items in §8. Confirm the FPGA part, the Perf-V UART pins against the schematic, the Artemis UART1 pads | O1–O3 closed |
-| **T1** | **Vivado hello.** Project for the right part, 50 MHz on N14, blink a user LED, read a toggle switch. Flash it. **Measure board current.** | LED blinks from flash after a power cycle; a current figure exists |
+| **T1** | **Vivado hello.** Project for the right part, 50 MHz on N14, blink a user LED, read a button. Flash it. **Measure board current.** `rtl/perfv.xdc` already has the pins, so this is a wiring-free sitting | LED blinks from flash after a power cycle; a current figure exists; **button polarity recorded** (the `.xdc` says it is unverified, and the e-stop depends on it) |
 | **T2** | **UART loopback in RTL.** 115200 8N1 RX+TX, echo, tested from a USB-serial on the bench — not yet the Artemis | Characters round-trip; no framing errors over a minute |
 | **T3** | **Step generator + ramp, simulated then on LEDs.** Testbench first; then drive the 4 red LEDs slowly enough to read the phase pattern by eye | Phase sequence correct in sim and visibly correct on the LEDs; ramp observable |
 | **T4** | **Motor moves.** ULN2003 wired with its pull-downs (§3.2), own 5 V supply. Limit switches and e-stop in the path | Commanded revolution lands within a step; e-stop halts mid-move; a limit stops it |
@@ -474,7 +559,7 @@ stage that has not been seen working.
 | **R1** | **Vivado is a 50+ GB install, Windows/Linux only.** It lands on the same Windows bench as the Zephyr workspace (`C:\zephyr-artemis`) — there is no macOS path for either | Accept. Both toolchains on the one bench machine. Nothing in this project can be built on the Mac |
 | **R2** | **Perf-V tooling is 2019-era**; the IDE needs an emailed licence code and the forum may be dead | Option A needs none of it. Keep Vivado-only as the spine (D5) |
 | **R2b** | **The board is discontinued and out of stock at Seeed** (confirmed 2026-10-29). No spare, no replacement path | Two consequences. (a) Treat the FPGA flash as precious: never leave the board mid-program, and archive a known-good bitstream in this repo from T1 onward. (b) It sharpens R2 — depend on Vivado and the schematic, not on PerfXLab's servers, email or forum, none of which are guaranteed to answer. Option B's reliance on an emailed licence code is now a real single point of failure |
-| **R3** | **Motor energizes during FPGA configuration** — pins float until `FPGA_DONE` | 10 kΩ pull-downs on IN1–IN4, designed in at T4, not retrofitted. Verify by watching the ULN2003's own phase LEDs through a power cycle |
+| **R3** | **Motor energizes during FPGA configuration — and it is worse than "the pins float."** **Found 2026-10-30 in the schematic:** `PUDC_B` is pin **L15**, where `R49` (pull-up to 3V3) is **not fitted** and `R50` (1 kΩ to GND) **is**. PUDC_B low makes the Artix-7 enable its **internal pull-ups on every SelectIO pin for the whole of configuration**, so the phase pins are not floating — they are actively driven toward 3.3 V, the one direction that turns a ULN2003 on | **The 10 kΩ this row used to specify is too weak.** Against a ~10 kΩ internal pull-up it divides to ~1.7 V, well above the Darlington's turn-on. Use **1 kΩ** pull-downs at the ULN2003 inputs (after the board's own 200 Ω pack), which holds the node near 0.35 V worst case; the FPGA then sinks 2.75 mA when driving high, hence `DRIVE 12` in `rtl/perfv.xdc`. Do **not** fix this by moving R49/R50 — the board is irreplaceable (R2b). Still verify by watching the ULN2003's phase LEDs through a power cycle at T4 |
 | **R4** | **4096 vs 4075.77 half-steps/rev** silently accumulates ~1.8°/rev | Use the true ratio; home against a limit switch. Do not let the round number into the RTL |
 | **R5** | **Gearbox backlash (1–2°) dominates accuracy** | Accept for v1 — it is well within what person-tracking needs. Approach from one direction if it matters; an output-shaft encoder is the real fix |
 | **R6** | **Nothing in the Artemis firmware has ever been compiled** (`0.5.0-m4`). That debt lands here | T6 is where it gets paid. Expect the first build to turn up real errors |
@@ -491,7 +576,7 @@ stage that has not been seen working.
 | # | Item | Needed by |
 |---|---|---|
 | ~~O1~~ | **Closed 2026-10-29. It is the XC7A35T.** Seeed SKU `102110277`, $79, tagged `XC7A35T`. The 126,800 CLB / 4,680 Kb figures that suggested a 100T belong to a *different* Seeed listing. No design change — the plan was already written against the 35T floor. Still worth a Vivado JTAG autodetect at T1 as a sanity check | ~~T1~~ done |
-| **O2** | **Perf-V UART pins.** The manual says P2 carries "a set of UART ports" but assigns no pins. D0/D1 is Arduino convention. Confirm against `perfv_schematic.pdf` | T2 |
+| **O2** | ✅ **closed 2026-10-30.** Read off `perfv_schematic.pdf`: P2 `D0/RX1` = `B14_L19N` = **N6**, P2 `D1/TX1` = `B14_L19P` = **M6**, both through a 200 Ω element of pack `Rp13`. The Arduino-convention guess was right. Full header tables and method in §3.3.1; `SYS_CLK` = N14 and a second UART on N9/P9 fell out of the same work | — |
 | **O3** | **Artemis UART1 pads.** Not chosen. Apollo3 UART1 TX/RX can only land on particular pads — check the Apollo3 pin-mux table against the board DTS | T7 |
 | ~~O4~~ | **Closed 2026-10-29 by D8.** Person Sensor standby current is undocumented everywhere checked, but with the battery gone it no longer matters: the sensor runs continuous and its 45 mA comes off the Perf-V's 3 A rail | ~~T6~~ moot |
 | **O5** | **Hive role number.** Multisense claimed Role 15 and is not yet in the top-level list; the Ear and Sentinel READMEs both claim Role 13. A turret is a new role — propose **Role 16: Turret** — but the existing collision should be resolved first | T9 |

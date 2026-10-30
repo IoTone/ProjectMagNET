@@ -9,6 +9,7 @@ not on hardware.** This is PLAN.md **T5a** plus the parts of T3/T4 it stands on.
 | `phase_seq.v` | 8-state half-step table → ULN2003 IN1–IN4; all-zero when disabled |
 | `motion_axis.v` | Trapezoidal planner, signed position counter, limit + e-stop gating |
 | `sweep.v` | **T5a.** Walks an arc from one register write, strobing the host at each station |
+| `perfv.xdc` | Vivado pin constraints, every pin read off the schematic. PerfXLab shipped none — this is the project's own, and the only record of the mapping |
 
 ```sh
 brew install icarus-verilog   # once
@@ -66,6 +67,22 @@ while accelerating and deceleration begins when the steps remaining fall to it.
 For a symmetric ramp that is exact, and it keeps the planner free of the
 `v²/2a` that would otherwise want a divider. No multiply, no divide, no square
 root anywhere in `motion_axis`.
+
+## The configuration hazard, in one place
+
+`PUDC_B` is pin **L15**, and on this board `R49` (pull-up to 3V3) is **not
+fitted** while `R50` (1 kΩ to GND) **is** — so PUDC_B is held low and the
+Artix-7 enables its internal pull-ups on **every** SelectIO pin for the whole of
+configuration. The stepper phase pins are therefore not floating before
+`FPGA_DONE`; they are actively pulled **high**, which is the one direction that
+turns a ULN2003 on.
+
+So **fit 1 kΩ pull-downs, not 10 kΩ.** Ten divides against a ~10 kΩ internal
+pull-up to about 1.7 V, comfortably above the Darlington's turn-on; one holds
+the node near 0.35 V. `DRIVE 12` on those pins in the `.xdc` is there because
+the FPGA then has to sink 2.75 mA through the pull-down when driving high.
+Nothing in the RTL or in Vivado fixes this — `PULLDOWN TRUE` and
+`BITSTREAM.CONFIG.UNUSEDPIN` both apply only *after* configuration.
 
 ## Not verified by any of this
 
