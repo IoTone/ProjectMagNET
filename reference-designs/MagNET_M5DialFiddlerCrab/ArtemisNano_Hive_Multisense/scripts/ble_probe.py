@@ -40,12 +40,21 @@ def decode(mfg: bytes) -> dict:
         "bundle": mfg[5],
     }
     if len(mfg) >= 14:
-        lux, cct, yaw = struct.unpack_from("<HHh", mfg, 6)
+        # The host CONCATENATES the advert's manufacturer block with the scan
+        # response's rather than replacing it: measured on CoreBluetooth
+        # 2026-10-29, 20 bytes carrying the header twice then the readings
+        #   1f 5e 00 62 84 00 | 1f 5e 00 62 84 00 | ff ff ff ff ab 00 03 05
+        # so the readings are the LAST 8 bytes, which is also offset 6 when
+        # only the 14-byte scan response arrives. Decoding at a fixed offset 6
+        # reads the repeated header as data (lux 24095 = the second `1f 5e`).
+        o = len(mfg) - 8
+        lux, cct, yaw = struct.unpack_from("<HHh", mfg, o)
         out["lux"] = None if lux == 0xFFFF else lux
         out["cct"] = None if cct == 0xFFFF else cct
         out["yaw"] = None if yaw == -0x8000 else yaw
-        out["stability"] = None if mfg[12] == 0xFF else STABILITY[mfg[12]] if mfg[12] < 5 else mfg[12]
-        out["sig_motion"] = mfg[13]
+        stab = mfg[o + 6]
+        out["stability"] = None if stab == 0xFF else STABILITY[stab] if stab < 5 else stab
+        out["sig_motion"] = mfg[o + 7]
     return out
 
 

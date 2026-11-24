@@ -86,9 +86,12 @@ class MagnetBleTransport implements HcpTransport {
     if (!_device.isConnected) {
       await _device.connect(timeout: timeout);
     }
-    // A larger MTU means fewer notification chunks per line.
+    // A larger MTU means fewer notification chunks per line. Ask for the ATT
+    // maximum; the node caps it (MG24 247, C6 its NimBLE preference) and
+    // Android grants up to 517, so a bulk `!XFER` takes about half the
+    // notifications it would at 247 (#102).
     try {
-      await _device.requestMtu(247);
+      await _device.requestMtu(517);
     } catch (_) {
       // Not supported on iOS (negotiated automatically) — harmless.
     }

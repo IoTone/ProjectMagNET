@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <errno.h>
+#include <zephyr/kernel.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/sys/printk.h>
 #include "opt4048.h"
@@ -62,7 +63,21 @@ int opt4048_init(const struct device *i2c, uint16_t addr)
 	if (id != DEVICE_ID) {
 		return -ENOTSUP;
 	}
-	return reg_write(i2c, addr, REG_CONFIG, CONFIG_CONTINUOUS);
+
+	int err = reg_write(i2c, addr, REG_CONFIG, CONFIG_CONTINUOUS);
+
+	if (err) {
+		return err;
+	}
+
+	/*
+	 * Wait out the first conversion (CONVERSION_TIME = 100 ms) so every later
+	 * read is against converted data. Without this the first read lands on
+	 * all-zero registers, which is also what a sensor in the dark reports --
+	 * the ambiguity that used to be papered over with -EAGAIN.
+	 */
+	k_msleep(120);
+	return 0;
 }
 
 int opt4048_read(const struct device *i2c, uint16_t addr, struct opt4048_sample *s)
@@ -89,10 +104,15 @@ int opt4048_read(const struct device *i2c, uint16_t addr, struct opt4048_sample 
 		if ((p[3] & 0x0F) != channel_crc(e, r, c)) {
 			return -EBADMSG;
 		}
+		/*
+		 * RANGE=12 (auto) keeps the exponent within 0-8, so 20 + 8 bits fit.
+		 * A larger exponent would overflow this shift; the CRC above is what
+		 * stands between us and a bogus one.
+		 */
 		s->raw[ch] = r << e;
-	}
-	if (s->raw[0] == 0 && s->raw[1] == 0 && s->raw[2] == 0 && s->raw[3] == 0) {
-		return -EAGAIN;
+		if (ch == 0) {
+			s->counter = c;
+		}
 	}
 
 	for (int i = 0; i < 3; i++) {

@@ -274,6 +274,14 @@ static void checkin_task(void *arg) {
                         led_rgb(0, 0, 0);   vTaskDelay(pdMS_TO_TICKS(120));
                     }
                     led_rgb(0, 32, 8);
+                } else if (ota_verify_failure_transient()) {
+                    /* The path failed, not the release (#101): a dropped link
+                     * or an expired URL. Retry on the next check-in without
+                     * counting it against the release. */
+                    usb_printf("[ota] fetch failed, will retry: %s\r\n", ota_verify_status());
+                    draw_status("FETCH RETRY", UI_AMBER,
+                                heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+                    led_rgb(48, 28, 0);
                 } else {
                     const ota_release_t *pr = ota_pending();
                     poisoned_release = pr ? pr->release_id : 0;

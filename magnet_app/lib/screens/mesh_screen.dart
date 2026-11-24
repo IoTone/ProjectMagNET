@@ -182,6 +182,7 @@ class _LiveMeshViewState extends State<_LiveMeshView> {
     final (String stateLabel, Color stateColor) = switch (session.state) {
       MeshLinkState.connecting => (l.meshStateConnecting, cs.tertiary),
       MeshLinkState.connected => (l.meshStateConnected, cs.primary),
+      MeshLinkState.reconnecting => (l.meshStateReconnecting, cs.tertiary),
       MeshLinkState.idle => (l.meshStateDisconnected, cs.onSurfaceVariant),
       MeshLinkState.error => (l.meshStateError, cs.error),
     };

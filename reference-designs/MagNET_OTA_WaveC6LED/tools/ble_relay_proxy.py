@@ -16,6 +16,14 @@ same 12-byte header + CRC as relay_frame.c and relay_frame.dart; the CRC
 check value 0x29B1 for "123456789" is asserted at start-up so a copy-paste
 error in the constant cannot masquerade as a firmware bug.
 
+Writes (#100): when the rx characteristic offers Write Without Response
+(firmware after f8916c19) frames go out unacknowledged, several per
+connection event; the link layer still acks and retransmits each packet, so
+nothing is lost that an acknowledged write would have saved. --ack-writes
+forces acknowledged writes for a link that misbehaves. Connection priority
+and PHY cannot be set from bleak on macOS; the firmware asks for a fast link
+itself, and macOS takes it.
+
 Plan §5.3 (a), said plainly: the device's dvc_ token crosses this script in
 clear text and is attached to the HTTP request. It is not written anywhere.
 """
@@ -77,8 +85,9 @@ def chunk(t: int, seq: int, msg: bytes, max_frame: int):
 
 
 class Proxy:
-    def __init__(self, client, server: str, max_frame: int, timeout: float):   # client: BleakClient
+    def __init__(self, client, server: str, max_frame: int, timeout: float, ack: bool = True):   # client: BleakClient
         self.client, self.server, self.max_frame, self.timeout = client, server.rstrip("/"), max_frame, timeout
+        self.ack = ack       # acknowledged writes, or Write Without Response
         self.cur = None      # (seq, total, next_idx, chunks)
         self.n_in = self.n_out = self.n_req = 0
 
@@ -140,7 +149,7 @@ class Proxy:
     async def reply(self, seq: int, t: int, status: int, body: bytes):
         msg = struct.pack("<H", status) + body
         for frame in chunk(t, seq, msg, self.max_frame):
-            await self.client.write_gatt_char(RX, frame, response=True)
+            await self.client.write_gatt_char(RX, frame, response=self.ack)
             self.n_out += 1
 
 
@@ -154,6 +163,8 @@ async def main():
     ap.add_argument("--name", default="ROBOTARME-", help="advertised-name prefix to accept (default ROBOTARME-)")
     ap.add_argument("--timeout", type=float, default=15.0, help="HTTP timeout seconds")
     ap.add_argument("--scan", type=float, default=15.0, help="scan seconds")
+    ap.add_argument("--ack-writes", action="store_true",
+                    help="always use acknowledged writes (slower; for a link that misbehaves)")
     args = ap.parse_args()
 
     print(f"scanning {args.scan:.0f} s for {args.name}* with service {SVC} ...")
@@ -173,9 +184,14 @@ async def main():
             print(f"device info: {info}")
         except Exception as e:  # noqa: BLE001
             print(f"(info read failed: {e})")
-        proxy = Proxy(client, args.server or "", max_frame, args.timeout)
+        rx = client.services.get_characteristic(RX)
+        no_rsp = rx is not None and "write-without-response" in rx.properties
+        ack = args.ack_writes or not no_rsp
+        proxy = Proxy(client, args.server or "", max_frame, args.timeout, ack=ack)
         await client.start_notify(TX, proxy.on_notify)
-        print(f"ATTACHED (mtu {mtu}, frames <= {max_frame} B). Relaying; Ctrl-C to stop.")
+        mode = "acknowledged writes" + (" (forced)" if args.ack_writes and no_rsp else "") if ack \
+            else "write without response"
+        print(f"ATTACHED (mtu {mtu}, frames <= {max_frame} B, {mode}). Relaying; Ctrl-C to stop.")
         if not args.server:
             print("  no --server: only devices that carry their own server_url will work")
         try:

@@ -1,7 +1,10 @@
 # ArtemisNano_Hive_Multisense — low-power multi-sensor hive member
 
 **Status:** 🔧 **BRING-UP.** Platform proven 2026-10-18 (P1–P2). M1–M2 passed; M3 sensors reporting (IMU
-INT/RST wiring and hand checks pending); M4 BLE advert + HCP GATT working from the PC (§7).
+INT/RST wiring and hand checks pending); M4 BLE advert + HCP GATT working from the PC and **readable in
+`magnet_app`** (§7). Upstreaming the board to Zephyr: §8.
+**fw `0.5.0-m4` is written but NOT BUILT** (LED cadence, Person Sensor presence, light diagnostics):
+it needs a build on the Windows bench before any of it is real.
 **Build / flash:** `west build -b sparkfun_artemis_nano -d C:/zephyr-artemis/build/multisense <this dir>`
 then `python scripts/flash.py --monitor 10` (Zephyr venv; workspace from `scripts/setup_zephyr_ws.sh`).
 **BLE check from the PC:** `python scripts/ble_probe.py` (scan + decode) or `--hcp WHOAMI CAPS SENSE` (needs
@@ -27,8 +30,8 @@ time, its own energy) and tells the hive which ones it has (§5).
 | 2026-10-18 | First Nano unreachable: no SVL, no ROM-bootloader (ASB) answer, only the red LED lit, RX/TX LEDs dark. **Root cause: its Artemis module had been physically torn off.** The CH340 and 3V3 rail still worked, so COM4 enumerated. Board retired. Lesson: if the SVL *and* the ROM bootloader are silent while COM4 enumerates, inspect the board. |
 | 2026-10-18 | **P2 passed on hardware** (second Nano, no J-Link). SVL v5, 9 frames at 115200. Console: `Booting Zephyr OS build v4.4.2`, `VTOR=0x00010000`, tick 10 at 5021 ms (clocks correct). Blue LED blinking. One stray byte on TX at reset (harmless). |
 | 2026-10-19 | Project repurposed: **Turret → Multisense** (low-power multi-sensor node). Design below. |
-| 2026-10-19 | **M1 scan** (chain attached): `0x0B` LC709203F ✅, `0x44` OPT4048 ✅, `0x69` RV-1805 ✅, stable over 3 scans. AK9753 not seen at `0x64/65/67`; unexpected ACKs at `0x39 0x4F 0x62` (to recheck after the swap). **AK9753 dropped; replaced by BNO085 IMU** (`0x4A`). |
-| 2026-10-19 | **M1 passed.** After the swap: `0x0B` LC709203F, `0x44` OPT4048, `0x4A` BNO085, `0x69` RV-1805, nothing else. The `0x39/0x4F/0x62` ACKs left with the presence board, which never answered as an AK9753 (wrong part or faulty board). |
+| 2026-10-19 | **M1 scan** (chain attached): `0x0B` LC709203F ✅, `0x44` OPT4048 ✅, `0x69` RV-1805 ✅, stable over 3 scans. AK9753 not seen at `0x64/65/67`; unexpected ACKs at `0x39 0x4F 0x62` (to recheck after the swap). **AK9753 dropped; replaced by BNO085 IMU** (`0x4A`). **(`0x62` was misread — see 2026-10-29.)** |
+| 2026-10-19 | **M1 passed.** After the swap: `0x0B` LC709203F, `0x44` OPT4048, `0x4A` BNO085, `0x69` RV-1805, nothing else. The `0x39/0x4F/0x62` ACKs left with the presence board, which never answered as an AK9753 (wrong part or faulty board). **This conclusion was wrong for `0x62` — see 2026-10-29.** |
 | 2026-10-19 | **M2 on the bench.** RV-1805 reports `ID0=0x18 ID1=0x05` (AM1805 part number): the upstream `ambiq,am1805` driver works unmodified. Trickle charger enabled by `src/rv1805.c` (reads back `0xA5`); first boot found year 1900 (never set) and loaded the build time; **time kept across reset** ✅. LC709203F (APA 2000 mAh, 4.2 V profile): `vbat 4.067 V soc 87%` on USB charge. Requesting `FUEL_GAUGE_TEMPERATURE` without a thermistor fails the *whole* `get_props` call (`-134`), so it is not requested. Remaining checks: voltage against a meter; time across a full power-off on the supercap (allow ~10 min to charge first). Alarm waits for RV-1805 INT → D6. |
 | 2026-10-19 | **M3 on the bench, first flash.** OPT4048 `ID=0x0821`; continuous auto-range at 100 ms, CRC checked on every channel: `15.2 lux, xy 0.398/0.379, CCT 3577 K` under room light. BNO085 via vendored CEVA SH-2 (`lib/sh2`, unmodified): `part 10004148 v3.2.13 build 6`; rotation vector at 10 Hz (~100 reports per 10 s) and stability classifier (`on-table`). **INT and RST not wired yet**: SH-2 runs polled every 10 ms with a soft reset at open. Heading accuracy reads ±180° until the magnetometer is calibrated (move the board in a figure-8). Battery temperature is a placeholder (`tbat n/a (no thermistor)`, sentinel `TBAT_NONE_DC`) until a 10k thermistor is fitted. Build: 52 KB flash, 26 KB RAM. |
 | 2026-10-19 | M3: significant-motion (one-shot) enabled and re-armed after each event; reads `sigmo=0` at rest, firing still to be checked by moving the board. |
@@ -38,6 +41,14 @@ time, its own energy) and tells the hive which ones it has (§5).
 | 2026-10-20 | **SENSE crashed the node** once the IMU had data: `USAGE FAULT`, PC `0x00000032`, mid-reply. The HCP thread's 2 KB stack overflowed (three line buffers ≈ 900 B plus float formatting); my earlier PC test ran before the IMU's first reading, so it missed this. The fault halted the board, which then vanished from the phone. Fixes: HCP stack 4 KB; a fatal-error handler that prints `FATAL <reason>` and reboots instead of halting. Verified: 10 back-to-back SENSE with full IMU fields, then CAPS and STATUS, no fault. Tried `CONFIG_STACK_SENTINEL`: that boot stopped before Bluetooth came up and USB dropped at the same time, so cause unknown; left off. `CONFIG_HW_STACK_PROTECTION` is unavailable (no MPU support in this port). |
 | 2026-10-20 | **magnet_app readings view** on the phone: the node screen's Readings card showed live time, battery, light, orientation and motion. The Devices list summary first decoded wrong (`24095 K`, header bytes read as readings) because Android concatenates the advert and scan-response blocks rather than merging them (§5.1); decoder fixed and checked on the phone: `multisensor · 94% · 0 lx · 5223 K · yaw …`. CCT at ~0 lux is noise; worth suppressing below a lux floor. |
 ` appended in the same notification, `bt_gatt_notify` rejected it and the reply vanished (CAPS with the app's `@a0005` tag hit this). Fixed with a strict `<`. Hanasu's `magnet_ble_zephyr.c` has the same `n <= chunk` line. Note: opening the serial monitor resets the board (RTS is wired to RESET), which drops any BLE link. The app does not display the advert readings yet; it would need a decoder for the §5.1 bytes or a `SENSE` panel. |
+| 2026-10-29 | **`magnet_app` shows the readings.** New `lib/magnet/multisense.dart` decodes the §5.1 manufacturer block, so the Devices list prints live `lux · CCT · yaw · SOC` under any multisensor **without connecting**; the node screen gained a Sensors card fed by a 5 s `SENSE` poll (`HcpClient.sense()`), with the heading-accuracy hint when the magnetometer is uncalibrated. Unit tests cover both decoders including the `0xFFFF`/`0x8000` sentinels and the 6-byte header-only advert (`test/magnet/multisense_test.dart`). Also fixed: **the node screen never watched the BLE link**, so a reboot — a reflash, or the battery taking over from USB — left it showing stale values while every command failed into a snackbar. It now watches `connectionState`, shows a banner, and retries the same address for 3 minutes (1/2/3/5 s backoff), the same policy `MeshSession` already used. |
+| 2026-10-29 | **Blue LED now says whether anyone is connected** (fw `0.4.1-m4`, **not yet built or flashed** — the Zephyr workspace is on the Windows bench): 1 Hz even blink while advertising, an 80 ms pulse every 2.5 s once a central connects (`hive_ble_connected()` is new). The main loop was `toggle + k_msleep(500)` with the 10 s report counted in LED ticks; it now runs the LED and the report off two independent wall-clock deadlines, so a variable LED period neither drifts the report nor gets its phase stretched by a sample. Connected is also the cheaper pattern (~3% duty vs 50%), which helps M5. |
+| 2026-10-29 | `magnet_app` **release** build installed on the Galaxy S20 FE (`RF8R71GWDYL`). `flutter install` uninstalled the old debug build first, so app storage was wiped: **this phone has a new operator key**, and any node whose allow-list holds the old one must be re-enrolled. The Artemis is unaffected — its allow-list is still empty. |
+| 2026-10-29 | **Bench test from the Mac** (`scripts/ble_probe.py` + bleak, node at -44 dBm). Two findings. (1) **The OPT4048 is detected but not reading.** `CAPS` lists `lux:opt4048,cct:opt4048` — so the boot probe ACKed `0x44` *and* `opt4048_init()` returned 0 — while `SENSE` omits `lux=`/`cct=` entirely and the advert carries the `0xFFFF` sentinel in both fields. So `opt4048_read()` is failing on every sample; this is a regression since M3 (2026-10-19, `ID=0x0821`, 15.2 lux) and is **not** a loose breakout: battery, IMU and RTC all answer on the same bus. Next: serial monitor for the per-sample path, and whether M4's BLE changed bus timing. (2) **The §5.1 readings offset was wrong in both decoders** — see the note in §5.1. Everything else checks out: `WHOAMI` id `029d7d8f`, fw `0.4.0-m4`, MTU 247, `SENSE` `yaw=172.0 pitch=-4.3 roll=-6.1 motion=stable sigmo=5 vbat=4.184 soc=98`, RTC `2026-10-29T13:46:24`. |
+| 2026-10-29 | **Turret revived as a two-board project** (`PERF-V-Artemis-Nano-Turret`, planning only). A Perf-V Artix-7 FPGA drives an ELEGOO ULN2003 + 28BYJ-48; this node drops the BNO085, RV-1805 **and the fuel gauge** (corrected later the same day: the turret is mains-fed from the Perf-V, so there is no cell to gauge) and keeps the OPT4048 and Person Sensor, bridging hive HCP to the FPGA over UART. Dropping the IMU also removes the 11.00 mA that §4.3 had just named the dominant load, though the turret is mains-powered so §4.3's targets do not apply to it. |
+| 2026-10-29 | **Power budget modelled (§4.3), no measurements.** Pulled the real BNO085 numbers out of the CEVA BNO08X datasheet rev 1.16 Fig 6-17 and the result reorders M5: the IMU in nine-axis fusion is **11.00 mA**, 75% of the node's 14.74 mA, and its 7.50 mA VDD rail is constant across every fusion row, so our 10 Hz rate buys nothing over the table's 100 Hz. Significant-motion only is 0.54 mA — a 20× cut, and the single highest-leverage change available. By contrast the red power LED is 10% (4.5 d → 5.0 d). Person Sensor continuous = 27 h; duty-cycling it hinges on an **undocumented standby current**, so it needs a hard power switch rather than `0x01`=0. Capacity derated to 1600 mAh: the Schottky + AP2112 dropout strands 15–20% of the cell, which is also the suspected brownout cause. Biggest remaining unknowns: CH340E (modelled 0.5 mA on a guess) and the no-PM MCU average. |
+| 2026-10-29 | **The "faulty" presence board was probably answering correctly.** `0x62` is the documented I2C address of the **Useful Sensors Person Sensor** (confirmed in the vendor developer guide and in ESPHome's `sen21231` driver: `PERSON_SENSOR_I2C_ADDRESS = 0x62`). M1 probed `0x64/0x65/0x67` for an AK9753, got nothing, saw an ACK at `0x62`, and recorded the board as the wrong part or faulty — but `0x62` is exactly where a Person Sensor answers. It was then pulled from the chain. `0x39` and `0x4F` are still unexplained: a single device should not ACK three addresses, so either something else was on the chain or those were phantom ACKs from the four sets of parallel Qwiic pull-ups (§4.1). Added `0x62` to `known[]` (caps 0 — no driver yet) and an opt-in full-bus sweep (`MS_BUS_SWEEP` in `src/main.c`, default 0) so an address nobody expected is named rather than guessed at. **Note `MS_CAP_PRESENCE` is defined in `multisense.h` and assigned nowhere**, so presence cannot reach `CAPS`, `SENSE` or the advert even with the board fitted. Hardware check before any driver work: the sensor ships in continuous mode with its debug LED on, so powering it at 3.3 V and showing it a face should light the LED green — no firmware needed. |
+| 2026-10-29 | **Light-sensor regression traced to M4, and presence implemented.** `src/opt4048.c` is byte-identical to the working M3 bench — what M4 removed was the *diagnostics*: M3 printed `light err %d` and `raw %u/%u/%u/%u`, M4 reduced both to a bare "no data", which is why the failure has been opaque. Restored (plus the conversion counter). Two driver fixes fell out of reading it: **zero is a valid reading** — a covered sensor really does report zero on all four channels, and returning `-EAGAIN` for that made darkness indistinguishable from a fault, so the node published "no light data" instead of "0 lux"; and `opt4048_init()` now waits out the first 100 ms conversion, which is what `-EAGAIN` was really there for. **Presence**: `src/person_sensor.c` + `.h` (39-byte plain read, no register pointer; register-style writes; `MS_CAP_PRESENCE` wired through the probe, `CAPS` as `presence:person_sensor`, and `SENSE` as `faces=/facing=/faceid=`). Unverified in it: the single-shot trigger value and whether packet bytes 8/9 are right/bottom or width/height. Also hardened `hive_ble.c`'s line builders — `n += snprintf(buf + n, cap - n, …)` overruns once `n` reaches `cap`, and adding presence cut the CAPS headroom to 69 of 320 bytes. fw `0.5.0-m4`, **unbuilt**. |
 
 ---
 
@@ -102,6 +113,21 @@ Worth soldering if BLE (M4) or deep sleep (M5) produce silent failures; not need
 | LC709203F | [Adafruit 4712](https://learn.adafruit.com/adafruit-lc709203f-lipo-lipoly-battery-monitor/overview) | LiPo voltage, state of charge, optional 10k thermistor (not fitted: temperature reported as n/a) | `0x0B` | powered from the battery | ✅ `onnn,lc709203f` (fuel gauge API) |
 | SPH0641 (on the Nano) | built in | Sound level (PDM mic, pads 36/37) | — | — | ✅ `dmic` (optional, power-hungry; off by default) |
 
+**Person Sensor (Useful Sensors, v1.1) — driver written (`src/person_sensor.c`), never built or
+tested against hardware.** `0x62`, 3.3 V only. Face
+detection and optional recognition (up to 4 faces, 8 stored IDs); results are a **39-byte plain I2C
+read with no register pointer** (a register-style read fails — the likeliest way a new driver looks
+dead against a healthy board), while writes are register-style `[reg, value]`. Defaults: continuous
+mode (`0x01`=1, ~7 Hz, ~200 ms latency) and debug LED on (`0x07`=1). v1.0/v1.1/v2.0 are
+software-compatible; v1.1's changes are mechanical (snap-off panel, individual signal pads, camera
+module glued rather than press-fit). **The catch is power: ~150 mW, about 45 mA at 3.3 V** — roughly
+1800x the OPT4048's 24 µA and far beyond the red power LED (1.5 mA) that §4.2 calls the dominant
+sleep load. Running it continuously sets the floor for the whole node and makes both M5 power
+architectures moot while it is awake, so it has to be duty-cycled from standby (`0x01`=0) via
+single-shot (`0x03`), most naturally on the BNO085's significant-motion event. Undocumented in the
+sources checked: the CRC16 parameters (the vendor's `person_sensor_pico_c` driver is authoritative),
+the endianness of `data_size`/checksum, and whether bytes 8/9 are right/bottom or width/height.
+
 - **No address conflicts.** Bus: IOM2 on the Qwiic connector (SCL pad 27, SDA pad 25), already in
   the board DTS as `qwiic_i2c`. Run it at **100 kHz** (conservative for the LC709203F; confirm its limit).
 - **Pull-ups:** every breakout adds its own. Four sets in parallel load the bus and waste current
@@ -148,6 +174,61 @@ Two power architectures, chosen after measuring (M5):
   so the hive sees a periodic visitor, not a resident. **Open question:** the PSW pin sees `VIN`
   (up to 4.2 V) through R1 while the RTC runs from its supercap; check the RV-1805 pin limits first.
 
+**Unplugging USB resets the board** (suspected, 2026-10-29). `V_BATT` reaches `VIN` through a
+Schottky, so the changeover dips the rail below the AP2112's headroom and the Apollo3 brown-outs —
+which drops BLE, drops the hive membership, and restarts the sensors. `magnet_app` now survives this
+(it reconnects, §5), but the node side is unconfirmed. **To confirm rather than assume:** report
+`hwinfo_get_reset_cause()` in `STATUS` (and clear it at boot) — `hwinfo` is already linked for the
+node id — then watch whether a changeover shows `BROWNOUT`/`POR` and how long the gap is. If it does,
+the fixes are ordinary: more bulk capacitance on `VIN`, or accept the reboot and make it cheap (the
+RTC already keeps wall-clock time across it, §4.1, and the BLE identity and bonds survive in NVS).
+
+### 4.3 Power budget (estimate, 2026-10-29 — nothing here is measured)
+
+Modelled average current at the 3.3 V rail, 10 s report period, advertising and not connected.
+Runtime is **1600 mAh** — 80% of the 2000 mAh nameplate, because `V_BATT` reaches `VIN` through a
+Schottky and the AP2112 needs ~3.36 V in, so the rail starts sagging at ~3.58 V on the cell with
+15–20% of charge unused. Chart: `docs/power-budget.html` (published artifact).
+
+| Configuration | Person | BNO085 | Red LED | Blue LED | MCU+BLE | Other | Total | Runtime |
+|---|---|---|---|---|---|---|---|---|
+| **As built today** (both LEDs, no PM) | — | 11.000 | 1.500 | 0.500 | 0.550 | 1.194 | **14.74 mA** | **4.5 d** |
+| Red power LED removed | — | 11.000 | — | 0.500 | 0.550 | 1.194 | 13.24 mA | 5.0 d |
+| Both LEDs removed | — | 11.000 | — | — | 0.550 | 1.194 | 12.74 mA | 5.2 d |
+| + Person Sensor, continuous | 45.000 | 11.000 | 1.500 | 0.032 | 0.550 | 1.194 | **59.28 mA** | **1.1 d** |
+| + Person Sensor, 250 ms/10 s, standby 1 mA | 2.100 | 11.000 | 1.500 | 0.500 | 0.550 | 1.194 | 16.84 mA | 4.0 d |
+| + Person Sensor, 250 ms/10 s, standby 10 mA | 10.875 | 11.000 | 1.500 | 0.500 | 0.550 | 1.194 | 25.62 mA | 2.6 d |
+| **M5 target**, no Person Sensor | — | 0.540 | — | — | 0.060 | 0.182 | **0.78 mA** | **85 d** |
+| M5 + Person Sensor on a hard power switch | 0.031 | 0.540 | — | — | 0.060 | 0.182 | 0.81 mA | 82 d |
+| M5 + Person Sensor parked in standby (1 mA) | 1.031 | 0.540 | — | — | 0.060 | 0.182 | 1.81 mA | 37 d |
+
+"Other" = AP2112 55 µA + LC709203F 15 µA + RV-1805 22 nA + OPT4048 24 µA (2 µA one-shot) + CH340E
+0.5 mA + Qwiic pull-up waste 0.5 mA + IMU breakout regulator 0.1 mA.
+
+**Four conclusions, and they reorder the M5 work:**
+
+1. **The BNO085 is the budget, not the LEDs.** 11.00 mA in nine-axis fusion is 75% of today's draw.
+   The CEVA BNO08X datasheet rev 1.16 Fig 6-17 gives Rotation Vector @100 Hz as VDDIO 3.50 mA + VDD
+   7.50 mA = 11.00 mA (35.25 mW), and **the 7.50 mA VDD rail is identical in every fusion row**, so
+   our 10 Hz report rate saves nothing against the table's 100 Hz. The Significant Motion Detector is
+   0.40 + 0.14 = **0.54 mA** — a 20× cut, and the only change in the whole budget with that leverage.
+   M5 should do this before anything else.
+2. **The red LED is worth half a day.** 1.5 of 14.74 mA = 10%; 4.5 d → 5.0 d. Worth removing on field
+   units, but it is a trim. For comparison the connected-state blue cadence already shipped in
+   `0.4.1-m4` cut that LED from 0.50 to 0.03 mA average — a larger proportional win, for free.
+3. **The Person Sensor needs a hard power switch, not the standby register.** Continuous 45 mA is
+   27 hours. Duty-cycled it is affordable *only* if standby is low, and **standby current is
+   undocumented** in every source checked. In the M5 configuration a 1 mA standby alone drops 85 d to
+   37 d, so parking it in standby defeats the point. Use a load switch on its 3.3 V, or the RV-1805
+   power-switch output (§4.2 architecture B), and measure standby before trusting `0x01`=0.
+4. **Two unmeasured inputs can still move the answer.** The CH340E is modelled at 0.5 mA on a README
+   guess of "hundreds of µA to mA"; at 2 mA it would be the second-largest load today, and the M5
+   floor depends entirely on isolating it. The no-PM Apollo3 average (0.30 mA) is inferred from the
+   100 Hz SH-2 poll rate, not measured. One bench session with a current meter settles both.
+
+Datasheet figures are typical, 25 °C, underated. Estimates carry no margin. Treat every runtime as
+order-of-magnitude until M5 puts a meter on the board.
+
 ## 5. Hive integration — Role 15: Multisensor
 
 Named 2026-10-19. Not yet in the top-level role list (README Roles 1–14); proposed wording:
@@ -187,10 +268,7 @@ prototype):
 
 Latest readings go in the scan response next to the name. **As built (M4):** the scan response carries
 manufacturer data under the same `0xFFFF`, holding the 6-byte header again plus 8 bytes of readings,
-so the header survives however a stack combines the two packets. **Measured:** bleak/Windows keeps only the
-scan response's block (14 bytes); Android (flutter_blue_plus, Galaxy S20 FE) **concatenates** both under one key,
-second company ID included: `header(6) · FF FF · header+readings(14)` = 22 bytes. Decoders must accept both
-(`magnet_app/lib/magnet/multisense_advert.dart` does, with tests from both captures):
+so the header survives however a host combines the two packets (see the note below the table):
 
 | Byte | Field |
 |---|---|
@@ -202,8 +280,33 @@ second company ID included: `header(6) · FF FF · header+readings(14)` = 22 byt
 | 13 | significant-motion count, low byte |
 
 Name (13 bytes) + this block (18 bytes) fills the 31-byte scan response exactly.
+
+> **Decoders must take the readings from the last 8 bytes, not offset 6.** Measured off the air
+> 2026-10-29: the host **concatenates** the two manufacturer blocks rather than replacing one with
+> the other, so a scanner sees **20 bytes** — the 6-byte header *twice*, then the readings:
+>
+> ```
+> 1f 5e 00 62 84 00 | 1f 5e 00 62 84 00 | ff ff ff ff ab 00 03 05
+>    header               header again       lux   cct  yaw  st sig
+> ```
+>
+> `length - 8` is correct for both shapes (offset 6 for a lone 14-byte scan response, 12 for the
+> concatenated 20). Android (flutter_blue_plus, Galaxy S20 FE, 2026-10-20) concatenates too but keeps
+> the scan response's own company ID between the blocks — **22 bytes**:
+>
+> ```
+> 1f 5e 00 5e 16 00 | ff ff | 1f 5e 00 5e 16 00 00 00 43 0b 64 ff 01 00
+>    header          | 2nd id |  header again        lux   cct  yaw  st sig
+> ```
+>
+> `length - 8` lands on the readings there as well; bleak/Windows hands over the 14-byte block alone. A fixed offset 6 decodes the repeated header as data and reports `lux` 24095,
+> `cct` 25088 — plausible-looking numbers that are really the header's own bytes. Both
+> `scripts/ble_probe.py` and `magnet_app`'s decoder had this bug; fixed 2026-10-29.
 **The bitmap is detected, not hard-coded:** set from the boot-time bus probe, so a missing or
-loose breakout clears its bit.
+loose breakout clears its bit. Bit b0 (presence) became reachable with the Person Sensor driver;
+before that it was defined and never assigned. **The face *count* is connected-only (`SENSE`
+`faces=`/`facing=`/`faceid=`)** — name plus the readings block already fills the 31-byte scan
+response exactly, so there is no room for it without a format version 2.
 
 **Layer 2 — connected (HCP).** `CAPS` gains `role=multisensor sensors=orientation:bno085,motion:bno085,lux:opt4048,cct:opt4048,time:rv1805,battery:lc709203f`
 (names shared with the WiFi hive's `caps[]` vocabulary, so a RoleBundle's `caps_req` can be checked
@@ -244,12 +347,114 @@ Platform phases P1–P2 are done (bench log). Multisense phases:
 | M1 | Qwiic bus up (`qwiic_i2c` enabled, 100 kHz); bus scan | All four addresses ACK: `0x0B 0x44 0x4A 0x69` |
 | M2 | In-tree drivers: RV-1805 via `ambiq,am1805` (set/get time, alarm interrupt), LC709203F (voltage, SOC) | Time survives a reset; SOC and voltage plausible against a meter |
 | M3 | *IMU test rig idea:* once the Turret exists, it can turn the Multisensor through known angles so the hive checks yaw against commanded position (two members collaborating). OPT4048 driver (XYZ → lux, CIE xy, CCT) in `src/opt4048.c`; BNO085 via CEVA SH-2 + Zephyr HAL. **Polled version working**; INT-driven version once D8/D10 are wired | Lux tracks a phone light meter; rotation vector follows the board by hand; significant-motion event fires |
-| M4 | **BLE**: Ambiq HCI up; BLEIF pins (resolved: none used); §5.1 advert + readings; Hanasu HCP GATT service with a built-in `PING/HELP/WHOAMI/STATUS/CAPS/SENSE` dispatcher. **Working from the PC and in `magnet_app` on the phone**; app has no readings view yet | Phone sees adverts with live readings |
+| M4 | **BLE**: Ambiq HCI up; BLEIF pins (resolved: none used); §5.1 advert + readings; Hanasu HCP GATT service with a built-in `PING/HELP/WHOAMI/STATUS/CAPS/SENSE` dispatcher. **Working from the PC and in `magnet_app` on the phone**, readings shown in the list and on the node screen (2026-10-29) | Phone sees adverts with live readings ✅ |
 | M5 | **Power:** PM `suspend-to-ram`, sensors in one-shot/standby, interrupt wake; measure; LED/jumper mods; decide architecture A vs. B | Measured average current against a target set after the first measurement |
 | M6 | Forth: ESPIDFORTH platform layer + Multisense words; REPL on the console | `presence@ . lux@ .` prints live values |
 | M7 | Hive: HCP over GATT, signed `BUNDLE` install, role lifecycle | A signed Multisensor bundle installs over BLE and its `role-tick` reports readings |
 
+## 8. Upstreaming the Artemis Nano support to Zephyr
+
+**What we actually changed:** nothing inside Zephyr. The whole port is the out-of-tree board
+`boards/sparkfun/artemis_nano/` (8 files, §1) plus two app-level sensor drivers and
+`scripts/flash.py`. `hal_ambiq`, `soc/ambiq/apollo3x` and the Apollo3 BLE HCI driver are used
+unmodified — that is the single most important fact for upstreaming, because it means there is no
+fork to reconcile and the submission is purely additive.
+
+Upstream has no Artemis board today. [zephyr#74116](https://github.com/zephyrproject-rtos/zephyr/issues/74116)
+and [discussion #74478](https://github.com/zephyrproject-rtos/zephyr/discussions/74478) are one
+earlier attempt that stopped at the SVL upload failure (a personal `new_board/artemis_nano` fork,
+never a PR). So our port would be the first, and we would be its maintainer — Zephyr requires a
+named maintainer with the hardware in hand for every board. We have three boards (one retired).
+
+### 8.1 Order of work
+
+| Stage | Deliverable | Risk | Why in this order |
+|---|---|---|---|
+| **0** | Rebase the board onto Zephyr `main` and keep it building there | low | Upstream only takes PRs against `main`; we develop on the `v4.4.2` tag. Do this first or every later stage is rework. |
+| **1** | **PR: `boards: sparkfun: add RedBoard Artemis Nano`** | low | The one piece with real value to anyone else, and purely additive. |
+| **2** | **PR: SVL west runner** (`west flash -r svl`) | medium | Makes the board flashable out of the box with no J-Link. Reviewers *will* ask; see §8.3. |
+| **3** | **PR: `ti,opt4048` sensor driver** | medium-high | Useful to the whole ecosystem, but needs an answer on channels (§8.4). |
+| **4** | BNO085 / CEVA SH-2 | high | Needs a new west module, not a driver PR. Stays out-of-tree; see §8.5. |
+
+### 8.2 Stage 1 — the board PR
+
+What we have already matches the upstream layout (`board.yml`, `Kconfig.sparkfun_artemis_nano`,
+`Kconfig.defconfig`, `sparkfun_artemis_nano_defconfig`, the DTS + pinctrl dtsi, `board.cmake`,
+`sparkfun_artemis_nano.yaml`). What has to be added or cleaned up:
+
+- **Docs.** `boards/sparkfun/artemis_nano/doc/index.rst`: supported-features table, the flash map
+  (§3.3), the `0xC000` vs `0x10000` trap written up properly (it is the thing that wastes everyone
+  else's week), programming via SVL *and* via J-Link on J11, plus a board photo under `doc/img/`.
+- **Drop the project-specific bits.** The parked servo `pwm2` node and `pwm2_default` pinctrl group
+  carry turret comments (Appendix A). Keep the PWM node — exposing a header pin's timer is normal —
+  but rewrite the comments to describe pad 39 / timer 2 segment B, not our servo.
+- **`vendor: sparkfun`** already exists upstream (`sparkfun_pro_micro_rp2040` and friends), so no
+  `vendor-prefixes.txt` change is needed.
+- **Twister.** `sparkfun_artemis_nano.yaml` must be honest about `supported:`; `bluetooth` belongs
+  in the list now that M4 works. Confirm `samples/hello_world`, `samples/basic/blinky` and
+  `tests/kernel/common` build, and that `west build -b sparkfun_artemis_nano` is clean on `main`.
+- **Process.** DCO `Signed-off-by`, one logical commit, and a compliance-clean PR (checkpatch, DTS
+  lint, `scripts/ci/check_compliance.py`).
+
+### 8.3 Stage 2 — the SVL runner
+
+Upstream's instinct for a board whose debug footprint is unpopulated is "document the bootloader",
+but `west flash` working with nothing but the USB-C cable is what makes the board pleasant, and we
+already own a correct implementation: `scripts/flash.py` speaks the SVL protocol natively and its
+CRC was checked against SparkFun's on 2,000 random vectors (bench log, 2026-10-18). Port it to
+`scripts/west_commands/runners/svl.py` (a `ZephyrBinaryRunner` subclass), add the usual
+`scripts/tests/` unit test, then make `svl` the board's default runner in `board.cmake` with
+`jlink` as the alternative. Carry over the two hard-won behaviours: **pad the image to a multiple
+of 4** (the SVL rejects anything else — the cause of #74116) and **validate before upload**
+(initial SP in SRAM, reset vector inside `0x10000–0xFC000`), which is what stops a stock
+`apollo3_evb` image from bricking the recovery path.
+
+### 8.4 Stage 3 — the OPT4048 driver
+
+`src/opt4048.c` is an app-level register driver; upstream wants `drivers/sensor/ti/opt4048/` with a
+`ti,opt4048.yaml` binding, Kconfig, and `fetch`/`channel_get` over the sensor API. The design
+question to settle *before* writing the PR: Zephyr has `SENSOR_CHAN_LIGHT` for lux but nothing for
+CIE XYZ, CIE xy or CCT. Proposed answer — lux on `SENSOR_CHAN_LIGHT`, everything else as
+driver-specific channels above `SENSOR_CHAN_PRIV_START`, documented in the binding; a new *generic*
+colour channel is an API change and a long bikeshed we should not make a prerequisite. Keep the
+per-channel CRC check (counter + CRC on every register read) — it is the part of this part worth
+having and no other Zephyr light driver does it. Note the Linux IIO driver by Paul Kocialkowski as
+prior art for the register map and auto-range handling.
+
+### 8.5 Stage 4 — BNO085, and what stays ours
+
+The BNO085 is driven by CEVA's SH-2 library, vendored unmodified in `lib/sh2` (Apache-2.0). Zephyr
+does not take third-party trees into `drivers/`; this would have to become a west module
+(`modules/hal/ceva` shape) with a thin sensor driver on top, which needs upstream buy-in before any
+code is written. **Not worth starting now.** It costs us nothing to keep out-of-tree, and the
+vendored copy is already pinned (`lib/sh2/VENDORED.txt`).
+
+Also staying ours on purpose: the ESPIDFORTH Zephyr platform layer goes upstream in
+**IoTone/ESPIDFORTH**, not Zephyr (§6), and `magnet_crypto`/HCP are MagNET, not of general interest.
+
+### 8.6 Until it is merged
+
+Zephyr board PRs take weeks to months. In the meantime:
+
+1. **Keep this directory the source of truth** and consume it via `BOARD_ROOT`, as today.
+2. **Publish it as a Zephyr board module** (`zephyr/module.yml` with a `board_root` setting) in its
+   own small repo, so `PetWear_r1_zephos` and anyone else can `west` it in without copying files.
+   Cheap, and it is also the thing to point a reviewer at.
+3. **Comment on [#74116](https://github.com/zephyrproject-rtos/zephyr/issues/74116)** with the two
+   findings that unblock it (the `FLASH_LOAD_OFFSET` collision and the 4-byte padding) and state the
+   intent to upstream. That is how a reviewer gets interested early and how we avoid colliding with
+   the existing fork.
+4. **Do not let the two copies drift.** Once the board is merged, delete the local copy, pin a
+   Zephyr revision at or after the merge in `scripts/setup_zephyr_ws.sh`, and keep only
+   `app.overlay` here.
+
 ## Appendix A — parked: turret (FS0307 servo)
+
+**Superseded 2026-10-29** for the stepper path: the turret is revived as a separate
+two-board project, [`../PERF-V-Artemis-Nano-Turret`](../PERF-V-Artemis-Nano-Turret),
+with a Perf-V (Artix-7) driving an ELEGOO ULN2003 + 28BYJ-48 and this node reduced to
+three sensors (fuel gauge, colour, person detector). The FS0307 servo notes below stay
+parked. See that project's `docs/PLAN.md`.
 
 Set aside 2026-10-19 because the platform is better suited to low power. Kept for a future board
 from the inventory.

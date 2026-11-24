@@ -1,6 +1,6 @@
 #ifndef CRAW_WIFI_H
 #define CRAW_WIFI_H
-#define CRAW_WIFI_VERSION "0.1.0"
+#define CRAW_WIFI_VERSION "0.2.0"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -40,6 +40,12 @@ void craw_wifi_connect_best(const char *ssid, const char *pass);
 
 // Disconnect from the current network.
 void craw_wifi_disconnect(void);
+
+// Hold off (true) or resume (false) connecting. While held the STA stays
+// idle: no retries, no reconnect scans — which matters when the radio also
+// runs an AP, because every STA scan drags the AP across channels and phones
+// lose it. Holding disconnects; resuming reconnects to the last config.
+void craw_wifi_hold(bool hold);
 
 // Check connection state.
 bool craw_wifi_is_connected(void);

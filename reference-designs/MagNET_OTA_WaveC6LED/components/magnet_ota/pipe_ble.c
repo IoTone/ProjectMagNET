@@ -8,7 +8,7 @@
  *
  *   service  4d41474e-4554-0002-0000-000000000000   "MAGNET" + 0002
  *   tx       ...0001   NOTIFY   device → proxy   (REQ frames)
- *   rx       ...0002   WRITE    proxy  → device  (RESP / ERR frames)
+ *   rx       ...0002   WRITE, WRITE_NO_RSP   proxy → device  (RESP / ERR frames)
  *   info     ...0003   READ     JSON: name, fw, mtu, has_token, has_server
  *
  * "Attached" means a central is connected AND subscribed to tx. A phone that
@@ -19,6 +19,17 @@
  * the scan response, since the 31-byte advertisement is full with flags +
  * name) and shows the name. The MAC suffix lets an operator with two boards
  * on the bench pick the right one.
+ *
+ * Throughput (#100): with acknowledged writes a proxy sends one frame per
+ * connection event and waits for the ATT response, so the rate is set by the
+ * interval — ~5 KB/s at Android's default 48.75 ms. Accepting Write Without
+ * Response lets several frames go out per event; the link layer still acks
+ * and retransmits every packet, so no frame loss is added (~26,500 frames
+ * clean in the RobotARme fork's runs). On connect this side also asks for a
+ * 7.5–15 ms interval and the 2M PHY. Android's own high-priority request
+ * overrides the interval (15 ms); desktop and iOS centrals take ours. The
+ * negotiated link is logged: with high priority + 2M + no-response writes the
+ * fork measured 44–59 KB/s against 4.9 KB/s by default.
  *
  * Coexistence: the C6 has one radio for WiFi and BLE. IDF's coex handles it;
  * the observable cost is BLE throughput while WiFi is busy, which the relay
@@ -112,7 +123,7 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
         .uuid = &svc_uuid.u,
         .characteristics = (struct ble_gatt_chr_def[]) {
             { .uuid = &tx_uuid.u,   .access_cb = access_tx,   .flags = BLE_GATT_CHR_F_NOTIFY, .val_handle = &s_tx_handle },
-            { .uuid = &rx_uuid.u,   .access_cb = access_rx,   .flags = BLE_GATT_CHR_F_WRITE,  .val_handle = &s_rx_handle },
+            { .uuid = &rx_uuid.u,   .access_cb = access_rx,   .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP, .val_handle = &s_rx_handle },
             { .uuid = &info_uuid.u, .access_cb = access_info, .flags = BLE_GATT_CHR_F_READ,   .val_handle = &s_info_handle },
             { 0 },
         },
@@ -121,6 +132,29 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
 };
 
 /* ---- GAP ----------------------------------------------------------------- */
+
+/* The link as negotiated: the central decides, so log what it settled on. */
+static void link_read(const char *why) {
+    struct ble_gap_conn_desc d;
+    uint8_t tx = 0, rx = 0;
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || ble_gap_conn_find(s_conn, &d) != 0) return;
+    ble_gap_read_le_phy(s_conn, &tx, &rx);
+    ESP_LOGI(TAG, "link (%s): interval %u.%02u ms, latency %u, timeout %u ms, phy tx %uM rx %uM",
+             why, d.conn_itvl * 125 / 100, (d.conn_itvl * 125) % 100, d.conn_latency,
+             d.supervision_timeout * 10, tx, rx);
+}
+
+/* Ask for a fast link: 7.5–15 ms interval and the 2M PHY (#100). */
+static void ask_fast_link(void) {
+    struct ble_gap_upd_params p = {
+        .itvl_min = 6, .itvl_max = 12,       /* units of 1.25 ms */
+        .latency = 0,
+        .supervision_timeout = 400,          /* 4 s */
+    };
+    int rc = ble_gap_update_params(s_conn, &p);
+    int rp = ble_gap_set_prefered_le_phy(s_conn, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);
+    if (rc || rp) ESP_LOGI(TAG, "fast-link request: interval rc=%d, phy rc=%d", rc, rp);
+}
 
 static int gap_event(struct ble_gap_event *ev, void *arg) {
     (void)arg;
@@ -131,6 +165,8 @@ static int gap_event(struct ble_gap_event *ev, void *arg) {
             s_subscribed = false;
             s_mtu = ble_att_mtu(s_conn);
             ESP_LOGI(TAG, "central connected (mtu %u)", (unsigned)s_mtu);
+            link_read("connect");
+            ask_fast_link();
         } else {
             advertise();
         }
@@ -140,6 +176,12 @@ static int gap_event(struct ble_gap_event *ev, void *arg) {
         s_conn = BLE_HS_CONN_HANDLE_NONE;
         s_subscribed = false;
         advertise();
+        break;
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        link_read("update");
+        break;
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        link_read("phy");
         break;
     case BLE_GAP_EVENT_MTU:
         s_mtu = ev->mtu.value;

@@ -12,6 +12,11 @@
  *
  * Boot check (from P2): blue LED lights before the kernel starts.
  *   LED on, no text -> console pins/baud wrong.  LED off -> image never ran.
+ *
+ * Blue LED, once running:
+ *   1 Hz even blink      -> up, advertising, nobody connected
+ *   short pulse / 2.5 s  -> a central is connected
+ *   solid on             -> never reached main() (see the boot check above)
  */
 
 #include <stdio.h>
@@ -31,6 +36,7 @@
 #include "rv1805.h"
 #include "opt4048.h"
 #include "bno085.h"
+#include "person_sensor.h"
 #include "multisense.h"
 #include "hive_ble.h"
 
@@ -38,8 +44,47 @@
 #define RV1805_ADDR  0x69
 #define OPT4048_ADDR 0x44
 #define BNO085_ADDR  0x4A
+#define PERSON_ADDR  PERSON_SENSOR_ADDR
 
-#define REPORT_PERIOD_TICKS 20	/* x 500 ms = 10 s */
+/*
+ * Full-bus sweep at boot, in addition to the targeted probe of known[].
+ *
+ * Off by default: it puts a 1-byte read on every one of the ~112 valid 7-bit
+ * addresses, including ones no driver owns, and a working node does not need
+ * that traffic on every boot. Turn it on when a part that should be present is
+ * missing — it is the only way to see a device that moved address (an OPT4048
+ * strapped to 0x45 instead of 0x44, say) or one that nobody has added to
+ * known[] yet. known[] alone answers "is the Person Sensor there", so the sweep
+ * is for the addresses we have not thought of.
+ */
+#define MS_BUS_SWEEP 0
+
+#define REPORT_PERIOD_MS 10000
+
+/*
+ * Blue LED cadence — the only thing this board can say without a console, so
+ * the two states must not look alike from across the bench:
+ *   advertising, nobody connected : 1 Hz even blink (as it has always been)
+ *   a central connected           : a short pulse every 2.5 s
+ * The connected pattern is also the cheaper one (80 ms on in 2500 ms, ~3% duty
+ * against 50%), which matters for M5: the red power LED is ~1.5 mA and this one
+ * is on the same order.
+ */
+#define LED_ADV_ON_MS    500
+#define LED_ADV_OFF_MS   500
+#define LED_CONN_ON_MS    80
+#define LED_CONN_OFF_MS 2420
+
+/*
+ * Last OPT4048 read, kept for the console only (not part of ms_readings, which
+ * crosses to hive_ble). M3 printed the error code and the raw channel codes;
+ * M4 dropped both, which is why a node whose light sensor stopped reporting
+ * could only say "no data" -- no errno, no way to tell darkness from a fault.
+ */
+static int light_err;
+static int presence_err;
+static uint32_t light_raw[4];
+static uint8_t light_counter;
 
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 static const struct device *const qwiic = DEVICE_DT_GET(DT_NODELABEL(qwiic_i2c));
@@ -57,6 +102,16 @@ static const struct {
 	{0x46, "OPT4048 color (alt)", 0},
 	{0x4A, "BNO085 IMU", MS_CAP_ORIENTATION},
 	{0x4B, "BNO085 IMU (alt)", 0},
+	/*
+	 * Useful Sensors Person Sensor. v1.0, v1.1 and v2.0 all answer here and are
+	 * software-compatible. The M1 scan (2026-10-19) saw an ACK at 0x62 and
+	 * recorded it as an unexpected address from a faulty AK9753 board; 0x62 is
+	 * this part's documented address, so it was most likely answering correctly.
+	 *
+	 * src/person_sensor.c reads it, so the capability is claimed here and
+	 * cleared again by sensors_bringup() if the probe does not answer.
+	 */
+	{0x62, "Person Sensor (Useful Sensors)", MS_CAP_PRESENCE},
 	{0x69, "RV-1805 RTC", MS_CAP_TIME},
 };
 
@@ -123,6 +178,35 @@ static void device_id_init(void)
  * error, so a full 0x08-0x77 sweep floods the console. Answers set the advert's
  * sensor bitmap; a driver that then fails to start clears its bit again.
  */
+#if MS_BUS_SWEEP
+/* 0x00-0x07 and 0x78-0x7F are reserved by the I2C spec, so they are skipped. */
+static void qwiic_sweep(void)
+{
+	int found = 0;
+
+	printk("qwiic sweep (0x08-0x77):");
+	for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+		uint8_t b;
+
+		if (i2c_read(qwiic, &b, 1, addr) != 0) {
+			continue;
+		}
+
+		const char *name = "not in known[]";
+
+		for (size_t i = 0; i < ARRAY_SIZE(known); i++) {
+			if (known[i].addr == addr) {
+				name = known[i].name;
+				break;
+			}
+		}
+		printk("\n  0x%02x  %s", addr, name);
+		found++;
+	}
+	printk(found ? "\n  %d device(s)\n" : " nothing\n", found);
+}
+#endif /* MS_BUS_SWEEP */
+
 static void qwiic_scan(void)
 {
 	int found = 0;
@@ -210,6 +294,13 @@ static void sensors_bringup(void)
 		printk("bno085: start failed (%d)\n", err);
 		probed_caps &= ~MS_CAP_ORIENTATION;
 	}
+	if (probed_caps & MS_CAP_PRESENCE) {
+		err = person_sensor_init(qwiic, PERSON_ADDR);
+		if (err) {
+			printk("person: init failed (%d)\n", err);
+			probed_caps &= ~MS_CAP_PRESENCE;
+		}
+	}
 	if (!device_is_ready(gauge)) {
 		probed_caps &= ~MS_CAP_BATTERY;
 	}
@@ -265,12 +356,32 @@ static void sample(void)
 	if (r.caps & MS_CAP_LUX) {
 		struct opt4048_sample s;
 
-		if (opt4048_read(qwiic, OPT4048_ADDR, &s) == 0) {
+		light_err = opt4048_read(qwiic, OPT4048_ADDR, &s);
+		if (light_err == 0) {
 			r.light_ok = true;
 			r.lux = s.lux;
 			r.cie_x = s.cie_x;
 			r.cie_y = s.cie_y;
 			r.cct = s.cct;
+			light_raw[0] = s.raw[0];
+			light_raw[1] = s.raw[1];
+			light_raw[2] = s.raw[2];
+			light_raw[3] = s.raw[3];
+			light_counter = s.counter;
+		}
+	}
+
+	if (r.caps & MS_CAP_PRESENCE) {
+		struct person_sensor_sample s;
+
+		presence_err = person_sensor_read(qwiic, PERSON_ADDR, &s);
+		if (presence_err == 0) {
+			const struct person_sensor_face *f = person_sensor_best(&s);
+
+			r.presence_ok = true;
+			r.faces = s.num_faces;
+			r.best_id = (f && f->id_confidence > 0) ? f->id : -1;
+			r.facing = f ? f->is_facing : false;
 		}
 	}
 
@@ -311,10 +422,24 @@ static void print_snapshot(void)
 	printk("\n");
 
 	if (r.light_ok) {
-		printk("light  %.1f lux  xy %.4f,%.4f  cct %.0f K\n", (double)r.lux,
-		       (double)r.cie_x, (double)r.cie_y, (double)r.cct);
+		printk("light  %.1f lux  xy %.4f,%.4f  cct %.0f K  raw %u/%u/%u/%u  cnt %u\n",
+		       (double)r.lux, (double)r.cie_x, (double)r.cie_y, (double)r.cct,
+		       light_raw[0], light_raw[1], light_raw[2], light_raw[3], light_counter);
+	} else if (r.caps & MS_CAP_LUX) {
+		/* -EIO bus, -EBADMSG CRC. Detected at boot, so this is not a cable. */
+		printk("light  err %d\n", light_err);
 	} else {
-		printk("light  %s\n", (r.caps & MS_CAP_LUX) ? "no data" : "absent");
+		printk("light  absent\n");
+	}
+
+	if (r.presence_ok) {
+		printk("person %u face(s)%s%s\n", r.faces,
+		       r.faces && r.facing ? ", facing" : "",
+		       r.best_id >= 0 ? ", recognised" : "");
+	} else if (r.caps & MS_CAP_PRESENCE) {
+		printk("person err %d\n", presence_err);
+	} else {
+		printk("person absent\n");
 	}
 
 	if (r.imu_ok) {
@@ -342,6 +467,9 @@ int main(void)
 	}
 
 	device_id_init();
+#if MS_BUS_SWEEP
+	qwiic_sweep();
+#endif
 	qwiic_scan();
 	rtc_bringup();
 	sensors_bringup();
@@ -352,14 +480,44 @@ int main(void)
 		printk("ble: not started; sensors only\n");
 	}
 
-	for (uint32_t tick = 1;; tick++) {
-		gpio_pin_toggle_dt(&led);
-		if ((tick % REPORT_PERIOD_TICKS) == 0) {
+	/*
+	 * Two independent deadlines on one thread: the report period is wall-clock
+	 * and must not drift when the LED slows down on connect, and an LED phase
+	 * must not stretch because a sample happened to land inside it.
+	 */
+	int64_t next_sample = k_uptime_get() + REPORT_PERIOD_MS;
+	int64_t next_led = k_uptime_get() + LED_ADV_ON_MS;
+	bool led_on = true;	/* already on: GPIO_OUTPUT_ACTIVE, and early_led_on() */
+
+	for (;;) {
+		const int64_t now = k_uptime_get();
+
+		if (now >= next_sample) {
 			sample();
 			print_snapshot();
 			hive_ble_update();
+			next_sample += REPORT_PERIOD_MS;
+			continue;
 		}
-		k_msleep(500);
+
+		if (now >= next_led) {
+			led_on = !led_on;
+			gpio_pin_set_dt(&led, led_on ? 1 : 0);
+			/*
+			 * The cadence is read at each edge, so a connect or disconnect
+			 * shows up within one phase (at worst the 2.4 s off-phase).
+			 */
+			const bool conn = hive_ble_connected();
+
+			if (led_on) {
+				next_led = now + (conn ? LED_CONN_ON_MS : LED_ADV_ON_MS);
+			} else {
+				next_led = now + (conn ? LED_CONN_OFF_MS : LED_ADV_OFF_MS);
+			}
+			continue;
+		}
+
+		k_msleep((uint32_t)(MIN(next_sample, next_led) - now));
 	}
 	return 0;
 }

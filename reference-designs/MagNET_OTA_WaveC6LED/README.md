@@ -74,6 +74,24 @@ the same `transport_relay`; an attached proxy takes precedence over WiFi.
   `checkin` then goes through it. The screen's NETWORK section reads
   `BLE RELAY` / `USB RELAY` while a proxy is attached.
 
+- **Speed (#100).** The rx characteristic accepts Write Without Response, and
+  on connect the board asks for a 7.5–15 ms interval and the 2M PHY; the
+  negotiated link is logged (`link (connect|update|phy): ...`). A proxy that
+  writes without response and asks for high priority + 2M (Android) moves
+  44–59 KB/s, against ~5 KB/s with acknowledged writes at Android's default
+  interval. `ble_relay_proxy.py` writes without response when offered;
+  `--ack-writes` forces the old way.
+- **Release downloads come in ranged chunks (#101).** Over the relay the body
+  is fetched as `?offset=&length=` slices (RobotARme server ≥ 0.139.0 answers
+  206), starting at 16 KB, halving on a failed chunk (floor 1 KB) and growing
+  2 KB per clean one (cap 64 KB), 8 tries per chunk. A lost frame costs one
+  chunk, not the fetch; a stream times out on 4 s of silence (30 s for the
+  first frame). An older server that ignores the range gets one whole-body
+  request. If the proxy drops mid-fetch the device waits up to 2 min for it.
+  A failed *path* (link, retries, expired URL) no longer counts toward the
+  3-strike limit that stops retrying a release; only a bad descriptor, digest,
+  signature or apply does.
+
 The device's bearer token crosses the proxy in clear text by decision (plan
 §5.3 (a)); the proxy is operator-controlled.
 

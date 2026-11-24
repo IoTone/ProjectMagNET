@@ -1,0 +1,137 @@
+[
+ {
+  "label": "Today, as built",
+  "group": "today",
+  "parts": {
+   "person": 0.0,
+   "imu": 11.0,
+   "red": 1.5,
+   "blue": 0.5,
+   "mcu": 0.55,
+   "other": 1.194
+  },
+  "total": 14.744,
+  "hours": 108.5,
+  "days": 4.52
+ },
+ {
+  "label": "Today, red LED removed",
+  "group": "today",
+  "parts": {
+   "person": 0.0,
+   "imu": 11.0,
+   "red": 0.0,
+   "blue": 0.5,
+   "mcu": 0.55,
+   "other": 1.194
+  },
+  "total": 13.244,
+  "hours": 120.8,
+  "days": 5.03
+ },
+ {
+  "label": "Today, both LEDs removed",
+  "group": "today",
+  "parts": {
+   "person": 0.0,
+   "imu": 11.0,
+   "red": 0.0,
+   "blue": 0.0,
+   "mcu": 0.55,
+   "other": 1.194
+  },
+  "total": 12.744,
+  "hours": 125.5,
+  "days": 5.23
+ },
+ {
+  "label": "+ Person Sensor, continuous",
+  "group": "today",
+  "parts": {
+   "person": 45.0,
+   "imu": 11.0,
+   "red": 1.5,
+   "blue": 0.032,
+   "mcu": 0.55,
+   "other": 1.194
+  },
+  "total": 59.276,
+  "hours": 27.0,
+  "days": 1.12
+ },
+ {
+  "label": "+ Person Sensor, 250 ms / 10 s (standby 1 mA)",
+  "group": "today",
+  "parts": {
+   "person": 2.1,
+   "imu": 11.0,
+   "red": 1.5,
+   "blue": 0.5,
+   "mcu": 0.55,
+   "other": 1.194
+  },
+  "total": 16.844,
+  "hours": 95.0,
+  "days": 3.96
+ },
+ {
+  "label": "+ Person Sensor, 250 ms / 10 s (standby 10 mA)",
+  "group": "today",
+  "parts": {
+   "person": 10.875,
+   "imu": 11.0,
+   "red": 1.5,
+   "blue": 0.5,
+   "mcu": 0.55,
+   "other": 1.194
+  },
+  "total": 25.619,
+  "hours": 62.5,
+  "days": 2.6
+ },
+ {
+  "label": "M5 target, no Person Sensor",
+  "group": "m5",
+  "parts": {
+   "person": 0.0,
+   "imu": 0.54,
+   "red": 0.0,
+   "blue": 0.0,
+   "mcu": 0.06,
+   "other": 0.182
+  },
+  "total": 0.782,
+  "hours": 2046.0,
+  "days": 85.25
+ },
+ {
+  "label": "M5 + Person Sensor on a hard power switch",
+  "group": "m5",
+  "parts": {
+   "person": 0.0312,
+   "imu": 0.54,
+   "red": 0.0,
+   "blue": 0.0,
+   "mcu": 0.06,
+   "other": 0.182
+  },
+  "total": 0.813,
+  "hours": 1967.5,
+  "days": 81.98
+ },
+ {
+  "label": "M5 + Person Sensor parked in standby (1 mA)",
+  "group": "m5",
+  "parts": {
+   "person": 1.0312,
+   "imu": 0.54,
+   "red": 0.0,
+   "blue": 0.0,
+   "mcu": 0.06,
+   "other": 0.182
+  },
+  "total": 1.813,
+  "hours": 882.4,
+  "days": 36.77
+ }
+]

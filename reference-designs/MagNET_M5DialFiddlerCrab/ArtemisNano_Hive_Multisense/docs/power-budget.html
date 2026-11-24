@@ -1,0 +1,522 @@
+<title>Multisense Power Budget</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+/* Layout: a lab worksheet — stat row, two stacked-bar panels on their own scales,
+   then the full numeric table and the provenance ledger that backs it. */
+:root {
+  --bg:        #f7f7f6;
+  --surface-1: #fcfcfb;
+  --surface-2: #f0f0ed;
+  --line:      #dedcd6;
+  --line-soft: #e9e7e1;
+  --ink:       #16161a;
+  --ink-2:     #52514e;
+  --ink-3:     #7d7b74;
+  --accent:    #1c5cab;
+
+  --s-person: #2a78d6;
+  --s-imu:    #eb6834;
+  --s-ledr:   #1baf7a;
+  --s-ledb:   #eda100;
+  --s-mcu:    #e87ba4;
+  --s-other:  #008300;
+
+  --ok:   #1d6f4b;
+  --warn: #8a5a00;
+  --bad:  #a33331;
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg:        #121213;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --line:      #383835;
+    --line-soft: #2b2b29;
+    --ink:       #f0efec;
+    --ink-2:     #c3c2b7;
+    --ink-3:     #918f86;
+    --accent:    #86b6ef;
+
+    --s-person: #3987e5;
+    --s-imu:    #d95926;
+    --s-ledr:   #199e70;
+    --s-ledb:   #c98500;
+    --s-mcu:    #d55181;
+    --s-other:  #008300;
+
+    --ok:   #4fae7f;
+    --warn: #d6a33a;
+    --bad:  #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:        #121213;
+  --surface-1: #1a1a19;
+  --surface-2: #232322;
+  --line:      #383835;
+  --line-soft: #2b2b29;
+  --ink:       #f0efec;
+  --ink-2:     #c3c2b7;
+  --ink-3:     #918f86;
+  --accent:    #86b6ef;
+
+  --s-person: #3987e5;
+  --s-imu:    #d95926;
+  --s-ledr:   #199e70;
+  --s-ledb:   #c98500;
+  --s-mcu:    #d55181;
+  --s-other:  #008300;
+
+  --ok:   #4fae7f;
+  --warn: #d6a33a;
+  --bad:  #e66767;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-text-size-adjust: 100%;
+}
+.wrap {
+  max-width: 1020px;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 38px;
+}
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(27px, 5.2vw, 38px); font-weight: 600; letter-spacing: -0.021em; line-height: 1.12; }
+h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.008em; }
+h3 { font-size: 14px; font-weight: 600; }
+p  { margin: 0; max-width: 68ch; }
+a  { color: var(--accent); }
+code, .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* ---- masthead ---- */
+header { display: flex; flex-direction: column; gap: 12px; }
+.lede { color: var(--ink-2); font-size: 16px; }
+.spec {
+  display: flex; flex-wrap: wrap; gap: 6px 20px;
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-2);
+  padding-top: 14px; border-top: 1px solid var(--line);
+}
+.spec b { color: var(--ink); font-weight: 500; }
+
+/* ---- stat row ---- */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; background: var(--line-soft); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+@media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+.stat { background: var(--surface-1); padding: 15px 16px 14px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.stat .k { font-size: 11.5px; color: var(--ink-3); font-weight: 500; line-height: 1.3; }
+.stat .v { font-family: var(--font-mono); font-size: clamp(23px, 4.6vw, 30px); font-weight: 600; letter-spacing: -0.028em; font-variant-numeric: tabular-nums; line-height: 1.05; }
+.stat .u { font-size: 0.45em; font-weight: 500; color: var(--ink-2); letter-spacing: 0; }
+.stat .d { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); }
+
+/* ---- panels ---- */
+/* Flex and grid children default to min-width:auto, which lets the wide tables
+   and the bar tracks push the page sideways. Pin them all to 0. */
+.panel, .panel > *, .row, .rowtop, .rowlabel, .track, .stat, .find, .find p { min-width: 0; }
+
+.panel { display: flex; flex-direction: column; gap: 4px; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.panel-note { font-size: 13px; color: var(--ink-2); max-width: 68ch; }
+.scale-tag {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  color: var(--ink-2); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px;
+  white-space: nowrap;
+}
+
+/* ---- legend ---- */
+.legend { display: flex; flex-wrap: wrap; gap: 5px 16px; padding: 12px 0 2px; }
+.legend span { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-2); }
+.legend i { width: 11px; height: 11px; border-radius: 2.5px; flex: none; }
+
+/* ---- chart ---- */
+.chart { margin-top: 16px; display: flex; flex-direction: column; gap: 3px; }
+.row { display: grid; grid-template-columns: 1fr; gap: 4px; padding: 7px 0; }
+.row + .row { border-top: 1px solid var(--line-soft); }
+.rowtop { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; }
+.rowlabel { font-size: 13.5px; font-weight: 500; min-width: 0; }
+.rowlabel small { display: block; font-weight: 400; font-size: 11.5px; color: var(--ink-3); font-family: var(--font-mono); }
+.rowval { font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rowval b { font-weight: 600; font-size: 14.5px; }
+.rowval .ma { color: var(--ink-3); }
+.track { display: flex; gap: 2px; height: 19px; align-items: stretch; background: var(--line-soft); border-radius: 4px; }
+.seg { border: 0; padding: 0; min-width: 2px; border-radius: 1px; cursor: default; transition: filter .12s; }
+.seg:first-child { border-radius: 4px 1px 1px 4px; }
+.seg:last-child  { border-radius: 1px 4px 4px 1px; }
+.seg:only-child  { border-radius: 4px; }
+.seg:hover, .seg:focus-visible { filter: brightness(1.14) saturate(1.1); }
+.axis { position: relative; height: 15px; margin-top: 6px; border-top: 1px solid var(--line); overflow: hidden; }
+.axis span { position: absolute; top: 2px; transform: translateX(-50%); font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+.axis span:first-child { transform: none; }
+.axis span:last-child { transform: translateX(-100%); }
+.axis-title { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-3); text-align: right; margin-top: 3px; }
+
+#tip {
+  position: fixed; z-index: 30; pointer-events: none; opacity: 0;
+  transition: opacity .1s; background: var(--surface-1); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px;
+  box-shadow: 0 5px 18px rgb(0 0 0 / .17); max-width: 260px;
+  font-size: 12.5px; line-height: 1.4;
+}
+#tip .t { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+#tip .t i { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+#tip .n { font-family: var(--font-mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+/* ---- tables ---- */
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-1); }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { padding: 7px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line-soft); }
+th { font-size: 10.5px; letter-spacing: 0.055em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; background: var(--surface-2); position: sticky; top: 0; }
+th:first-child, td:first-child { text-align: left; white-space: normal; min-width: 192px; }
+tbody tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+td.tot { font-weight: 600; }
+tbody tr.grp td { background: var(--surface-2); font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.055em; text-transform: uppercase; color: var(--ink-3); }
+.zero { color: var(--ink-3); }
+.swatch-th { display: inline-flex; align-items: center; gap: 5px; }
+.swatch-th i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+
+/* ---- provenance ---- */
+.src td:first-child { font-family: var(--font-mono); font-size: 12px; }
+.tag { font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; padding: 1.5px 6px; border-radius: 3px; white-space: nowrap; }
+.tag.m { color: var(--ok);   background: color-mix(in oklab, var(--ok) 14%, transparent); }
+.tag.e { color: var(--warn); background: color-mix(in oklab, var(--warn) 16%, transparent); }
+.tag.u { color: var(--bad);  background: color-mix(in oklab, var(--bad) 14%, transparent); }
+
+/* ---- findings ---- */
+.finds { display: flex; flex-direction: column; gap: 2px; background: var(--line-soft); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.find { background: var(--surface-1); padding: 14px 16px; display: flex; gap: 14px; align-items: baseline; }
+.find .n { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--ink-3); flex: none; width: 1.3em; }
+.find p { font-size: 13.5px; }
+.find b { font-weight: 600; }
+
+footer { border-top: 1px solid var(--line); padding-top: 16px; font-size: 12.5px; color: var(--ink-3); display: flex; flex-direction: column; gap: 5px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">ArtemisNano_Hive_Multisense · Role 15 · fw 0.5.0-m4</div>
+  <h1>Where the 2000&nbsp;mAh goes</h1>
+  <p class="lede">A power budget for the Artemis Nano multisensor on its single-cell LiPo. The question
+  was what the Person Sensor and the red power LED cost. The answer is that neither one is the problem:
+  the BNO085, fusing nine axes continuously, spends more than both together.</p>
+  <div class="spec">
+    <span><b>2000 mAh</b> nameplate</span>
+    <span><b>1600 mAh</b> modelled usable</span>
+    <span>3.7 V nominal → AP2112 → <b>3.3 V</b></span>
+    <span>10 s report period</span>
+    <span>advertising, not connected</span>
+  </div>
+</header>
+
+<section class="stats" aria-label="Headline runtimes">
+  <div class="stat">
+    <div class="k">As built today, no Person Sensor</div>
+    <div class="v">4.5<span class="u"> d</span></div>
+    <div class="d">14.74 mA · 109 h</div>
+  </div>
+  <div class="stat">
+    <div class="k">Red power LED removed</div>
+    <div class="v">5.0<span class="u"> d</span></div>
+    <div class="d">13.24 mA · +11%</div>
+  </div>
+  <div class="stat">
+    <div class="k">Person Sensor, continuous</div>
+    <div class="v">1.1<span class="u"> d</span></div>
+    <div class="d">59.28 mA · −75%</div>
+  </div>
+  <div class="stat">
+    <div class="k">M5 low-power target</div>
+    <div class="v">85<span class="u"> d</span></div>
+    <div class="d">0.78 mA · 2046 h</div>
+  </div>
+</section>
+
+<div class="legend" id="legend" role="list" aria-label="Load categories"></div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Firmware as written today</h2>
+    <span class="scale-tag">scale 0–60 mA</span>
+  </div>
+  <p class="panel-note">Bench configuration: no power management configured, the SH-2 driver polling the
+  IMU every 10&nbsp;ms, both LEDs fitted, USB serial bridge powered. This is what the three boards on
+  the bench actually draw once USB is unplugged.</p>
+  <div class="chart" id="chart-today"></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>M5 low-power target</h2>
+    <span class="scale-tag">scale 0–2 mA · 30× zoom</span>
+  </div>
+  <p class="panel-note">Suspend-to-RAM between samples, the IMU reduced to its significant-motion
+  detector, the OPT4048 one-shot, advertising slowed to 1&nbsp;s, both LEDs and the CH340E removed or
+  isolated. Note the axis: these bars are a thirtieth of the scale above.</p>
+  <div class="chart" id="chart-m5"></div>
+</section>
+
+<section class="panel">
+  <h2>Every number in the model</h2>
+  <p class="panel-note">Average current at the 3.3&nbsp;V rail, in mA. Runtime is 1600&nbsp;mAh divided
+  by the total.</p>
+  <div class="scroll" style="margin-top:14px">
+    <table id="tbl">
+      <thead><tr>
+        <th>Configuration</th>
+        <th><span class="swatch-th"><i style="background:var(--s-person)"></i>Person</span></th>
+        <th><span class="swatch-th"><i style="background:var(--s-imu)"></i>BNO085</span></th>
+        <th><span class="swatch-th"><i style="background:var(--s-ledr)"></i>Red LED</span></th>
+        <th><span class="swatch-th"><i style="background:var(--s-ledb)"></i>Blue LED</span></th>
+        <th><span class="swatch-th"><i style="background:var(--s-mcu)"></i>MCU+BLE</span></th>
+        <th><span class="swatch-th"><i style="background:var(--s-other)"></i>Other</span></th>
+        <th>Total</th><th>Hours</th><th>Days</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>What each figure rests on</h2>
+  <p class="panel-note">The model is only as good as its inputs, and they are not equally good. Three
+  rows carry the whole result and two of those three have never been measured on this hardware.</p>
+  <div class="scroll" style="margin-top:14px">
+    <table class="src">
+      <thead><tr><th>Input</th><th>Value</th><th>Basis</th><th style="text-align:left">Source</th></tr></thead>
+      <tbody>
+        <tr><td>BNO085, 9-axis rotation vector @100 Hz</td><td class="num">11.00 mA</td><td><span class="tag m">datasheet</span></td><td style="text-align:left">CEVA BNO08X rev 1.16, Fig 6-17: VDDIO 3.50 + VDD 7.50, 35.25 mW</td></tr>
+        <tr><td>BNO085, significant-motion only</td><td class="num">0.54 mA</td><td><span class="tag m">datasheet</span></td><td style="text-align:left">Same table, 31.25 Hz, 1.66 mW</td></tr>
+        <tr><td>BNO085 idle</td><td class="num">0.13 mA</td><td><span class="tag m">datasheet</span></td><td style="text-align:left">Same table, "Idle Power"</td></tr>
+        <tr><td>Person Sensor, active</td><td class="num">45.0 mA</td><td><span class="tag m">vendor</span></td><td style="text-align:left">~150 mW at 3.3 V, Useful Sensors developer guide</td></tr>
+        <tr><td>Person Sensor, standby</td><td class="num">1–10 mA</td><td><span class="tag u">unknown</span></td><td style="text-align:left">Undocumented. Modelled as a range; it decides the duty-cycled answer</td></tr>
+        <tr><td>Red power LED D6</td><td class="num">1.50 mA</td><td><span class="tag e">estimate</span></td><td style="text-align:left">3.3 V through R10 = 1 kΩ, from the Nano schematic</td></tr>
+        <tr><td>Blue status LED, pad 19</td><td class="num">1.00 mA</td><td><span class="tag e">estimate</span></td><td style="text-align:left">Full-on; duty is 50% advertising, 3.2% connected (fw 0.4.1-m4)</td></tr>
+        <tr><td>Apollo3, active</td><td class="num">6 µA/MHz</td><td><span class="tag m">datasheet</span></td><td style="text-align:left">Ambiq Apollo3 Blue at 3.3 V, flash or RAM</td></tr>
+        <tr><td>Apollo3, deep sleep</td><td class="num">~1 µA</td><td><span class="tag m">datasheet</span></td><td style="text-align:left">BLE block down, RTC running</td></tr>
+        <tr><td>Apollo3 average, no PM, 100 Hz poll</td><td class="num">0.30 mA</td><td><span class="tag e">estimate</span></td><td style="text-align:left">Awake fraction inferred from the poll rate, not measured</td></tr>
+        <tr><td>BLE advertising @125 ms / @1 s</td><td class="num">0.25 / 0.04 mA</td><td><span class="tag e">estimate</span></td><td style="text-align:left">BT_LE_ADV_CONN_FAST_2 is 100–150 ms; radio duty inferred</td></tr>
+        <tr><td>CH340E serial bridge</td><td class="num">0.50 mA</td><td><span class="tag u">unmeasured</span></td><td style="text-align:left">README §4.2 says "hundreds of µA to mA". Powered from 3V3, not USB</td></tr>
+        <tr><td>Qwiic pull-up waste, 4 sets in parallel</td><td class="num">0.50 mA</td><td><span class="tag e">estimate</span></td><td style="text-align:left">Only material at the current 100 Hz bus traffic</td></tr>
+        <tr><td>AP2112K-3.3 quiescent</td><td class="num">55 µA</td><td><span class="tag m">datasheet</span></td><td style="text-align:left">Typical</td></tr>
+        <tr><td>OPT4048 continuous / one-shot</td><td class="num">24 / 2 µA</td><td><span class="tag m">datasheet</span></td><td style="text-align:left">24 µA active, 2 µA standby, 100 ms conversion</td></tr>
+        <tr><td>LC709203F</td><td class="num">15 µA</td><td><span class="tag m">datasheet</span></td><td style="text-align:left">Operating</td></tr>
+        <tr><td>RV-1805</td><td class="num">22 nA</td><td><span class="tag m">datasheet</span></td><td style="text-align:left">Lowest-power mode; rounds to zero here</td></tr>
+        <tr><td>Usable capacity</td><td class="num">1600 mAh</td><td><span class="tag e">estimate</span></td><td style="text-align:left">80% of nameplate. See finding 4</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>What the chart says</h2>
+  <div class="finds" style="margin-top:14px">
+    <div class="find"><span class="n">1</span><p><b>The IMU is the budget.</b> At 11.00 mA the BNO085
+    in nine-axis fusion is 75% of today's draw — more than the red LED, the blue LED, the MCU, the
+    radio and everything else combined. Its gyro rail alone is a fixed 7.50 mA in every fusion mode,
+    so dropping the report rate from 100 Hz to our 10 Hz buys almost nothing. Reducing it to the
+    significant-motion detector takes it to 0.54 mA, a 20× cut, and is what makes the 85-day figure
+    possible. Nothing else in the budget has that leverage.</p></div>
+
+    <div class="find"><span class="n">2</span><p><b>The red LED is worth about half a day.</b>
+    1.50 mA of 14.74 is 10%: 4.5 days becomes 5.0. Removing D6 or R10 is cheap and worth doing on
+    field units, but it is a trim, not a fix. The blue status LED adds a further 0.2 days, and the
+    connected-state cadence we already shipped cut its share from 0.50 mA to 0.03 mA — a bigger
+    proportional win than removing the red one, for no hardware change.</p></div>
+
+    <div class="find"><span class="n">3</span><p><b>The Person Sensor cannot run continuously on a
+    battery.</b> 45 mA takes the node from 4.5 days to 27 hours. Duty-cycled at 250 ms every 10 s it
+    is affordable — but only if its standby current is low, and that number is undocumented. At 1 mA
+    standby the cost is 2.1 mA; at 10 mA it is 10.9 mA and the duty cycle has bought nothing. In the
+    M5 configuration this dominates completely: standby at 1 mA alone drops 85 days to 37. The design
+    conclusion is that it needs a hard power switch — a load switch on its 3.3 V, or the RV-1805
+    power-switch output — not the standby register.</p></div>
+
+    <div class="find"><span class="n">4</span><p><b>You will not get 2000 mAh.</b> V_BATT reaches VIN
+    through a Schottky, and the AP2112 needs roughly 3.36 V in to hold 3.3 V out. Add the diode drop
+    and the 3.3 V rail starts sagging at about 3.58 V on the cell — perhaps 15–20% of charge still
+    unused. Every figure here uses 1600 mAh. The same diode drop is the suspected cause of the
+    USB-to-battery brownout in §4.2, so one measurement settles two open questions.</p></div>
+
+    <div class="find"><span class="n">5</span><p><b>Two unmeasured inputs can still move the answer.</b>
+    The CH340E is modelled at 0.50 mA on a README note that says only "hundreds of µA to mA"; if it is
+    really 2 mA it is the second-largest load today and the whole M5 floor depends on isolating it.
+    The Apollo3 average without power management is inferred from the poll rate, not measured. Both are
+    one bench session with a current meter.</p></div>
+  </div>
+</section>
+
+<footer>
+  <span>Model: average current at the 3.3 V rail; an LDO supply, so rail mAh maps roughly 1:1 to cell mAh. Radio assumed advertising throughout, never connected.</span>
+  <span>Datasheet values are typical, at 25 °C, and not derated. Estimates carry no margin. Treat every runtime as an order-of-magnitude figure until M5 measures the board.</span>
+  <span>Sources: CEVA BNO08X datasheet rev 1.16 Fig 6-17 · Ambiq Apollo3 Blue SoC datasheet · TI OPT4048 · ON LC709203F · Micro Crystal RV-1805 · Diodes AP2112K · Useful Sensors Person Sensor developer guide · RedBoard Artemis Nano schematic.</span>
+</footer>
+</div>
+
+<div id="tip" role="status" aria-live="off"></div>
+
+<script>
+const SERIES = [
+  { k: "person", label: "Person Sensor (0x62)",   css: "--s-person" },
+  { k: "imu",    label: "BNO085 IMU",             css: "--s-imu"    },
+  { k: "red",    label: "Red power LED (D6)",     css: "--s-ledr"   },
+  { k: "blue",   label: "Blue status LED (p19)",  css: "--s-ledb"   },
+  { k: "mcu",    label: "Apollo3 + BLE radio",    css: "--s-mcu"    },
+  { k: "other",  label: "Other always-on",        css: "--s-other"  },
+];
+
+const NOTE = {
+  person: "Useful Sensors Person Sensor, 45 mA active",
+  imu:    "BNO085 via CEVA SH-2, both supply rails",
+  red:    "D6 through R10, 1 kΩ — always on",
+  blue:   "Status LED on pad 19, averaged over its blink",
+  mcu:    "Apollo3 core plus the BLE advertising duty",
+  other:  "AP2112 LDO, LC709203F, RV-1805, OPT4048, CH340E, Qwiic pull-ups, IMU breakout",
+};
+
+const ROWS = [
+  { g:"today", label:"As built, bench configuration", sub:"both LEDs, no PM",
+    p:{person:0, imu:11.000, red:1.500, blue:0.500, mcu:0.550, other:1.194} },
+  { g:"today", label:"Red power LED removed", sub:"D6 or R10 off",
+    p:{person:0, imu:11.000, red:0, blue:0.500, mcu:0.550, other:1.194} },
+  { g:"today", label:"Both LEDs removed", sub:"D6 and the status LED",
+    p:{person:0, imu:11.000, red:0, blue:0, mcu:0.550, other:1.194} },
+  { g:"today", label:"Person Sensor, continuous", sub:"vendor default mode",
+    p:{person:45.000, imu:11.000, red:1.500, blue:0.032, mcu:0.550, other:1.194} },
+  { g:"today", label:"Person Sensor, 250 ms / 10 s", sub:"standby 1 mA — optimistic",
+    p:{person:2.100, imu:11.000, red:1.500, blue:0.500, mcu:0.550, other:1.194} },
+  { g:"today", label:"Person Sensor, 250 ms / 10 s", sub:"standby 10 mA — pessimistic",
+    p:{person:10.875, imu:11.000, red:1.500, blue:0.500, mcu:0.550, other:1.194} },
+
+  { g:"m5", label:"No Person Sensor", sub:"sig-motion IMU, LEDs off",
+    p:{person:0, imu:0.540, red:0, blue:0, mcu:0.060, other:0.182} },
+  { g:"m5", label:"Person Sensor on a hard power switch", sub:"10 wakes/hour × 250 ms",
+    p:{person:0.031, imu:0.540, red:0, blue:0, mcu:0.060, other:0.182} },
+  { g:"m5", label:"Person Sensor parked in standby", sub:"standby 1 mA",
+    p:{person:1.031, imu:0.540, red:0, blue:0, mcu:0.060, other:0.182} },
+];
+
+const USABLE_MAH = 1600;
+const sum = r => SERIES.reduce((a, s) => a + (r.p[s.k] || 0), 0);
+const fmt = (n, d) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const days = t => USABLE_MAH / t / 24;
+
+const AXES = {
+  today: { max: 60, ticks: [0, 10, 20, 30, 40, 50, 60], dec: 0 },
+  m5:    { max: 2,  ticks: [0, 0.5, 1, 1.5, 2],        dec: 1 },
+};
+
+/* legend */
+document.getElementById("legend").innerHTML = SERIES.map(s =>
+  `<span role="listitem"><i style="background:var(${s.css})"></i>${s.label}</span>`).join("");
+
+/* charts */
+for (const g of ["today", "m5"]) {
+  const ax = AXES[g];
+  const host = document.getElementById("chart-" + g);
+  const rows = ROWS.filter(r => r.g === g);
+  host.innerHTML = rows.map(r => {
+    const t = sum(r);
+    const segs = SERIES.filter(s => (r.p[s.k] || 0) > 0).map(s => {
+      const v = r.p[s.k];
+      return `<button class="seg" style="flex:0 0 ${(v / ax.max * 100).toFixed(4)}%;background:var(${s.css})"
+        data-s="${s.k}" data-v="${v}" data-share="${(v / t * 100).toFixed(1)}"
+        aria-label="${s.label}: ${fmt(v, 3)} milliamps"></button>`;
+    }).join("");
+    return `<div class="row">
+      <div class="rowtop">
+        <div class="rowlabel">${r.label}<small>${r.sub}</small></div>
+        <div class="rowval"><b>${fmt(days(t), 1)} d</b> <span class="ma">· ${fmt(t, 2)} mA</span></div>
+      </div>
+      <div class="track" style="width:100%">${segs}</div>
+    </div>`;
+  }).join("") +
+  `<div class="axis">${ax.ticks.map(v =>
+     `<span style="left:${(v / ax.max * 100).toFixed(3)}%">${fmt(v, ax.dec)}</span>`).join("")}</div>
+   <div class="axis-title">average current at 3.3 V (mA)</div>`;
+}
+
+/* table */
+const tb = document.querySelector("#tbl tbody");
+let last = null;
+tb.innerHTML = ROWS.map(r => {
+  let head = "";
+  if (r.g !== last) {
+    last = r.g;
+    head = `<tr class="grp"><td colspan="10">${r.g === "today"
+      ? "Firmware as written today (fw 0.5.0-m4, bench configuration)"
+      : "M5 low-power target"}</td></tr>`;
+  }
+  const t = sum(r);
+  const cells = SERIES.map(s => {
+    const v = r.p[s.k] || 0;
+    return `<td class="num${v ? "" : " zero"}">${v ? fmt(v, 3) : "—"}</td>`;
+  }).join("");
+  return head + `<tr><td>${r.label}<br><span style="color:var(--ink-3);font-size:11.5px">${r.sub}</span></td>
+    ${cells}<td class="num tot">${fmt(t, 3)}</td>
+    <td class="num">${fmt(USABLE_MAH / t, 0)}</td>
+    <td class="num tot">${fmt(days(t), 1)}</td></tr>`;
+}).join("");
+
+/* tooltip */
+const tip = document.getElementById("tip");
+let shown = null;
+function show(el) {
+  const s = SERIES.find(x => x.k === el.dataset.s);
+  tip.innerHTML = `<div class="t"><i style="background:var(${s.css})"></i>${s.label}</div>
+    <div class="n">${fmt(+el.dataset.v, 3)} mA · ${el.dataset.share}% of this bar</div>
+    <div style="color:var(--ink-2);margin-top:3px">${NOTE[s.k]}</div>`;
+  tip.style.opacity = "1";
+  shown = el;
+  place(el);
+}
+function place(el) {
+  const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect();
+  let x = r.left + r.width / 2 - t.width / 2;
+  x = Math.max(8, Math.min(x, innerWidth - t.width - 8));
+  let y = r.top - t.height - 9;
+  if (y < 8) y = r.bottom + 9;
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+}
+function hide() { tip.style.opacity = "0"; shown = null; }
+document.addEventListener("pointerover", e => {
+  const el = e.target.closest(".seg");
+  if (el) show(el); else if (shown) hide();
+});
+document.addEventListener("focusin", e => {
+  const el = e.target.closest(".seg");
+  if (el) show(el);
+});
+document.addEventListener("focusout", hide);
+document.addEventListener("pointerleave", hide);
+addEventListener("scroll", () => { if (shown) place(shown); }, { passive: true });
+</script>

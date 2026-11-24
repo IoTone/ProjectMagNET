@@ -113,6 +113,7 @@ Roles for Nodes in this demo design concept will be 10 different roles:
 - Role 10: Spawn: Any new member of this tribe will first be a spawn.  It will have no responsibilities other than to learn anything it needs from the scribe and other roles before taking a new role.
 - Role 11: Eye: An eye is anything that can see, capture, scan, or otherwise cake a picture or video.  Should display a pair of cute eyes.
 - Role 12: Boombox: any speakers or audio playback device.  Different than the beeper, it can play full sounds, music, or recordings.  Should display an 80s style boombox.
+- Role 13: Sentinel: A sentinel watches for activity and reports back physical movement or specific activity detected.  Different than the eye, it is not looking at what something is, but the detection of a specific set of conditions and signals.  May collaborate with an eye.  Should display an 50s style radar.   
 
 ## Development
 

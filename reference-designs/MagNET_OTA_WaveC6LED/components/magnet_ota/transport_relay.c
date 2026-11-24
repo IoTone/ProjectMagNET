@@ -12,6 +12,12 @@
  *                                                                     │
  *   supervisor <──status/body── reassemble into caller's buffer <─relay_rx() ×N
  *
+ * Streaming (relay_request_stream, #101; brought back from the RobotARme
+ * Mobile OTA fork, which measured it): a body goes to a sink frame by frame,
+ * so ota_verify can fetch a release in ranged chunks and a lost frame costs
+ * one chunk instead of the whole fetch. A stream is judged by silence, not by
+ * its total time.
+ *
  * The response is written STRAIGHT INTO THE CALLER'S BUFFER as frames arrive:
  * a check-in answer fits in 2 KB, a bundle in 64 KB, and both buffers already
  * exist in the supervisor. Overflow is flagged, not truncated-and-parsed, for
@@ -24,6 +30,7 @@
 #include "relay_frame.h"
 #include "magnet_cfg.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -36,10 +43,22 @@ static const char *TAG = "transport_relay";
  * waited longer would only be delaying its own "unreachable". */
 #define RELAY_RESPONSE_TIMEOUT_MS 45000
 
+/* The wait scales with what the caller is prepared to receive: 45 s plus 1 ms
+ * per 4 bytes, so a slow link (~4 KB/s over BLE before #100) still finishes a
+ * large body. A check-in's 2 KB buffer still waits ~45 s. */
+static uint32_t response_timeout_ms(size_t cap) {
+    return RELAY_RESPONSE_TIMEOUT_MS + (uint32_t)(cap / 4);
+}
+
 /* The largest frame we will ever build. BLE tops out at ATT MTU 517 - 3;
  * a serial pipe may claim more but gains nothing from it, and this buffer
  * lives in .bss for the life of the device. */
 #define TX_FRAME_MAX 520
+
+/* Streaming: the first frame may wait for the proxy's whole HTTP fetch; after
+ * that frames come every few to a hundred ms. */
+#define STREAM_FIRST_MS 30000
+#define STREAM_IDLE_MS  4000
 
 #define MAX_PIPES 2
 static const relay_pipe_t *s_pipes[MAX_PIPES];
@@ -56,7 +75,11 @@ static struct {
     uint16_t seq;
     uint16_t next_idx;      /* frames must arrive in order */
     uint16_t total;
-    char    *buf;           /* caller's response buffer */
+    char    *buf;           /* caller's response buffer (NULL when streaming) */
+    relay_sink_fn sink;     /* streaming: gets each body slice of a 200 */
+    void    *sink_ctx;
+    bool     sink_failed;
+    int64_t  last_rx_us;    /* streaming: when the last frame arrived */
     size_t   cap;
     size_t   len;
     bool     overflow;
@@ -66,6 +89,8 @@ static struct {
 } s_rx;
 
 static uint16_t s_seq;
+
+static esp_err_t relay_open(magnet_transport_t *t);
 
 void relay_register_pipe(const relay_pipe_t *pipe) {
     if (!pipe || s_npipes >= MAX_PIPES) return;
@@ -88,9 +113,12 @@ const relay_stats_t *relay_stats(void) { return &s_stats; }
 
 /* ---- inbound ---------------------------------------------------------- */
 
-void relay_rx(const uint8_t *frame, size_t len) {
+static volatile bool s_in_rx;   /* relay_rx is running (see the stream give-up) */
+
+static void relay_rx_inner(const uint8_t *frame, size_t len) {
     relay_frame_t f;
     s_stats.frames_in++;
+    s_rx.last_rx_us = esp_timer_get_time();
     if (!relay_frame_decode(frame, len, &f)) {
         s_stats.bad_frames++;
         ESP_LOGW(TAG, "bad frame (%u bytes)", (unsigned)len);
@@ -128,7 +156,19 @@ void relay_rx(const uint8_t *frame, size_t len) {
         s_rx.have_status = true;
         p += 2; n -= 2;
     }
-    if (n) {
+    if (n && s_rx.sink) {
+        /* Streaming. Only a 200 or 206 body is the payload; an error body is
+         * dropped. The sink runs here, in the pipe's RX path, and may take a
+         * bounded time (a flash page write): the proxy waits for each write's
+         * acknowledgement, so that time is the flow control. */
+        if ((s_rx.status == 200 || s_rx.status == 206) && !s_rx.sink_failed && !s_rx.sink(s_rx.sink_ctx, p, n)) s_rx.sink_failed = true;
+        s_rx.len += n;
+        if (s_rx.sink_failed) {
+            s_rx.waiting = false;
+            xSemaphoreGive(s_done);
+            return;
+        }
+    } else if (n) {
         size_t room = (s_rx.cap > s_rx.len + 1) ? (s_rx.cap - s_rx.len - 1) : 0;
         size_t take = n < room ? n : room;
         if (take < n) s_rx.overflow = true;
@@ -141,13 +181,20 @@ void relay_rx(const uint8_t *frame, size_t len) {
     }
 }
 
+void relay_rx(const uint8_t *frame, size_t len) {
+    /* Set BEFORE relay_rx_inner reads s_rx.waiting: a requester that has just
+     * given up (waiting = false) then waits for this to clear, so a sink call
+     * already under way cannot touch the caller's state during its retry. */
+    s_in_rx = true;
+    relay_rx_inner(frame, len);
+    s_in_rx = false;
+}
+
 /* ---- outbound --------------------------------------------------------- */
 
-static int relay_request(magnet_transport_t *t,
-                         const char *method, const char *path,
-                         const char *body,
-                         char *resp, size_t resp_cap, size_t *resp_len) {
-    (void)t;
+static int do_request(const char *method, const char *path, const char *body,
+                      char *resp, size_t resp_cap, size_t *resp_len,
+                      relay_sink_fn sink, void *sink_ctx, size_t expect_len) {
     const relay_pipe_t *pipe = attached_pipe();
     if (!pipe) return -1;
     if (s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(1000)) != pdTRUE) return -1;
@@ -180,6 +227,7 @@ static int relay_request(magnet_transport_t *t,
     uint16_t seq = ++s_seq;
     memset(&s_rx, 0, sizeof s_rx);
     s_rx.seq = seq; s_rx.buf = resp; s_rx.cap = resp_cap; s_rx.waiting = true;
+    s_rx.sink = sink; s_rx.sink_ctx = sink_ctx;
     if (resp && resp_cap) resp[0] = '\0';
     xSemaphoreTake(s_done, 0);          /* drain a stale give */
     s_stats.requests++;
@@ -209,10 +257,31 @@ static int relay_request(magnet_transport_t *t,
     }
 
     int status = -1;
-    if (xSemaphoreTake(s_done, pdMS_TO_TICKS(RELAY_RESPONSE_TIMEOUT_MS)) != pdTRUE) {
+    uint32_t wait_ms = response_timeout_ms(sink ? expect_len : resp_cap);
+    bool done;
+    if (!sink) {
+        done = xSemaphoreTake(s_done, pdMS_TO_TICKS(wait_ms)) == pdTRUE;
+    } else {
+        /* A stream is judged by silence, not by its total: once frames flow,
+         * STREAM_IDLE_MS without one means a frame was lost at the tail (a
+         * lost middle frame is caught at once by the index check) and the
+         * caller retries the chunk, instead of waiting out the whole budget. */
+        s_rx.last_rx_us = 0;
+        int64_t start = esp_timer_get_time();
+        done = false;
+        for (;;) {
+            if (xSemaphoreTake(s_done, pdMS_TO_TICKS(250)) == pdTRUE) { done = true; break; }
+            int64_t now = esp_timer_get_time();
+            if (s_rx.last_rx_us ? now - s_rx.last_rx_us > (int64_t)STREAM_IDLE_MS * 1000
+                                : now - start > (int64_t)STREAM_FIRST_MS * 1000) break;
+            if (now - start > (int64_t)wait_ms * 1000) break;
+        }
+    }
+    if (!done) {
         s_rx.waiting = false;
+        while (s_in_rx) vTaskDelay(1);
         s_stats.timeouts++;
-        ESP_LOGW(TAG, "%s %s: no complete answer in %d ms", method, path, RELAY_RESPONSE_TIMEOUT_MS);
+        ESP_LOGW(TAG, "%s %s: no complete answer in %u ms", method, path, (unsigned)wait_ms);
     } else if (s_rx.error) {
         s_stats.responses++;
         ESP_LOGW(TAG, "%s %s: proxy error: %.120s", method, path, resp ? resp : "");
@@ -223,9 +292,25 @@ static int relay_request(magnet_transport_t *t,
         if (status != 200) ESP_LOGW(TAG, "%s %s -> %d via %s", method, path, status, pipe->name);
         if (s_rx.overflow) { ESP_LOGW(TAG, "response truncated at %u bytes", (unsigned)resp_cap); status = -2; }
     }
+    if (s_rx.sink_failed) { ESP_LOGW(TAG, "%s %s: sink refused the body at %u bytes", method, path, (unsigned)s_rx.len); status = -3; }
     if (resp_len) *resp_len = s_rx.len;
     xSemaphoreGive(s_lock);
     return status;
+}
+
+static int relay_request(magnet_transport_t *t,
+                         const char *method, const char *path,
+                         const char *body,
+                         char *resp, size_t resp_cap, size_t *resp_len) {
+    (void)t;
+    return do_request(method, path, body, resp, resp_cap, resp_len, NULL, NULL, 0);
+}
+
+int relay_request_stream(const char *method, const char *path, const char *body,
+                         relay_sink_fn sink, void *ctx, size_t expect_len, size_t *got) {
+    if (!sink) return -1;
+    if (!s_lock && relay_open(NULL) != ESP_OK) return -1;
+    return do_request(method, path, body, NULL, 0, got, sink, ctx, expect_len);
 }
 
 static esp_err_t relay_open(magnet_transport_t *t) {

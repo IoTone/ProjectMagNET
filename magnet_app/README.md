@@ -15,6 +15,39 @@ theming, and EN/JA localization. The MagNET-specific layer is:
 
 > Package: `magnet_app` · bundle id `io.iotone.magnet` · MIT licensed.
 
+## Sentinels (room presence over MQTT)
+
+**Dashboard → Presence sentinels** lists every
+[Sentinel IR](../reference-designs/MagNET_M5DialFiddlerCrab/M5StickCPlus_Hive_Sentinel_IR)
+node. Sentinels are PIR sensors on WiFi that publish to the MagNET MQTT
+broker, so they show up from any network; no BLE is involved.
+
+- **Each card shows:**
+  - **State:** ACTIVE (motion right now), PRESENT, CLEAR or OFFLINE.
+  - **Countdown:** last motion and the time left to clear. It restarts at
+    every movement.
+  - **Counts:** entries and occupied time for this hour, today, this week and
+    this month.
+  - **Last 5 minutes:** a chart of motion in 10-s bars.
+  - **Last 24 hours:** a chart of occupied minutes in 15-min bars. Tap or drag
+    to read a bar.
+  - **Recent activity:** enter, still present, clear, period rollovers and
+    resets.
+  - **Check-sensor warning:** shown when the PIR has seen no motion for its
+    limit (12 h by default). A loose wire looks like an empty room. The
+    Dashboard card shows a warning icon too.
+- **Chart code:** `lib/screens/sentinel_charts.dart` is a plain CustomPainter,
+  with no chart package.
+- **Code:** `lib/magnet/sentinel_feed.dart` (feed + payload parser, tested in
+  `test/magnet/sentinel_feed_test.dart`) and `lib/screens/sentinel_screen.dart`.
+- **When it connects:** the feed connects the first time the screen opens, and
+  then stays up while the app runs.
+- **Broker:** the default is `mqtt://broker.hivemq.com:1883`. Change it with
+  the server icon in the screen's app bar. Web builds use the broker's secure
+  WebSocket port (`wss://host:8884/mqtt`).
+- **Permissions:** this added `network.client` to the macOS entitlements and
+  `INTERNET` to the Android manifest.
+
 ## The provisioning model
 
 A node advertises its HCP service **only while unprovisioned**. The moment it

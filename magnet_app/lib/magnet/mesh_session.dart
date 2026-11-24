@@ -24,7 +24,10 @@ import 'hcp.dart';
 import 'magnet_ble.dart';
 
 /// Connection lifecycle of the companion link.
-enum MeshLinkState { idle, connecting, connected, error }
+/// `reconnecting`: the link dropped and the session is retrying the same
+/// companion on its own (a node that reboots after an update comes back with
+/// the same identifier within seconds). The feed and counters carry over.
+enum MeshLinkState { idle, connecting, connected, reconnecting, error }
 
 /// One rendered line of the live feed.
 class MeshFeedItem {
@@ -150,8 +153,23 @@ Future<MeshLink> _bleLinkFactory(String deviceId) async {
 /// Owns the companion connection and everything M3 renders: the live event
 /// feed, the peer table, node status, and mesh topology.
 class MeshSession extends ChangeNotifier {
-  MeshSession({MeshLinkFactory? linkFactory})
-      : _linkFactory = linkFactory ?? _bleLinkFactory;
+  MeshSession({
+    MeshLinkFactory? linkFactory,
+    this.reconnectWindow = const Duration(minutes: 3),
+    this.reconnectDelays = const <Duration>[
+      Duration(seconds: 1),
+      Duration(seconds: 2),
+      Duration(seconds: 3),
+      Duration(seconds: 5),
+    ],
+  }) : _linkFactory = linkFactory ?? _bleLinkFactory;
+
+  /// How long to keep retrying after the link drops; [Duration.zero] turns
+  /// auto-reconnect off. Three minutes covers a node's OTA reboot and trial.
+  final Duration reconnectWindow;
+
+  /// Wait before each retry; the last entry repeats.
+  final List<Duration> reconnectDelays;
 
   static const String _prefId = 'mesh.companion.id';
   static const String _prefName = 'mesh.companion.name';
@@ -159,6 +177,8 @@ class MeshSession extends ChangeNotifier {
 
   final MeshLinkFactory _linkFactory;
   MeshLink? _link;
+  int _reconnectGen = 0; // bumped to cancel a running reconnect loop
+  int _reconnects = 0;
   StreamSubscription<HcpEvent>? _evtSub;
   StreamSubscription<bool>? _connSub;
 
@@ -182,6 +202,9 @@ class MeshSession extends ChangeNotifier {
   Map<String, String> get nodeStatus => Map<String, String>.unmodifiable(_status);
   MeshTopology get topology => _topology;
   DateTime? get lastHeartbeat => _lastHeartbeat;
+
+  /// Automatic reconnects this session (the feed survives each one).
+  int get reconnects => _reconnects;
 
   /// Restore the remembered companion (id + display name) from disk.
   Future<void> load() async {
@@ -220,45 +243,17 @@ class MeshSession extends ChangeNotifier {
   Future<void> connect() async {
     final String? id = _companionId;
     if (id == null || _state == MeshLinkState.connecting) return;
+    _reconnectGen++; // a manual connect replaces any automatic retry
     await _teardown();
     _state = MeshLinkState.connecting;
     _error = null;
     notifyListeners();
 
     try {
-      final MeshLink link = await _linkFactory(id);
-      _link = link;
-      _evtSub = link.client.events.listen(_onEvent);
-      _connSub = link.connected?.listen((bool up) {
-        if (!up && _state == MeshLinkState.connected) {
-          _addFeed(MeshFeedItem('info', 'link lost — reconnect to resume'));
-          _state = MeshLinkState.error;
-          _error = 'link lost';
-          notifyListeners();
-        }
-      });
-
-      // Everything the node can tell us, from the start: subscribe first so
-      // no event slips between the initial snapshot and the live stream.
-      await link.client.subscribe(<String>['all']);
-      _status = await link.client.status();
-      _companionName = _status['name'] ?? _companionName;
-      _state = MeshLinkState.connected;
+      await _attach(await _linkFactory(id), id);
       _addFeed(MeshFeedItem(
           'info', 'connected to ${_companionName ?? id} — live'));
       notifyListeners();
-
-      // The phone is the only participant with a real clock, so hand it over
-      // before anything else uses it. Cheap, idempotent, every connect.
-      unawaited(_seedClock(link));
-
-      // Backfill what the channel said while we were away: the companion
-      // replays its recent ring as !RCHAT events (fw ≥ 0.6.0-eg).
-      unawaited(_backfill(link));
-
-      // Best-effort snapshots; the feed is already live if these are slow.
-      unawaited(refreshPeers());
-      unawaited(refreshTopology());
     } catch (e) {
       _state = MeshLinkState.error;
       _error = '$e';
@@ -267,7 +262,89 @@ class MeshSession extends ChangeNotifier {
     }
   }
 
+  /// Wire a fresh link into the session: events, liveness, the status
+  /// snapshot, then the best-effort catch-up. Throws if the node does not
+  /// answer; the caller tears down.
+  Future<void> _attach(MeshLink link, String id) async {
+    _link = link;
+    _evtSub = link.client.events.listen(_onEvent);
+    _connSub = link.connected?.listen((bool up) {
+      if (!up && _state == MeshLinkState.connected) _onLinkLost();
+    });
+
+    // Everything the node can tell us, from the start: subscribe first so
+    // no event slips between the initial snapshot and the live stream.
+    await link.client.subscribe(<String>['all']);
+    _status = await link.client.status();
+    _companionName = _status['name'] ?? _companionName;
+    _state = MeshLinkState.connected;
+    notifyListeners();
+
+    // The phone is the only participant with a real clock, so hand it over
+    // before anything else uses it. Cheap, idempotent, every connect.
+    unawaited(_seedClock(link));
+
+    // Backfill what the channel said while we were away: the companion
+    // replays its recent ring as !RCHAT events (fw ≥ 0.6.0-eg).
+    unawaited(_backfill(link));
+
+    // Best-effort snapshots; the feed is already live if these are slow.
+    unawaited(refreshPeers());
+    unawaited(refreshTopology());
+  }
+
+  void _onLinkLost() {
+    _error = 'link lost';
+    if (reconnectWindow == Duration.zero) {
+      _addFeed(MeshFeedItem('info', 'link lost — reconnect to resume'));
+      _state = MeshLinkState.error;
+      notifyListeners();
+      return;
+    }
+    _addFeed(MeshFeedItem('info', 'link lost — reconnecting'));
+    _state = MeshLinkState.reconnecting;
+    notifyListeners();
+    unawaited(_reconnectLoop());
+  }
+
+  /// Retry the same companion until [reconnectWindow] runs out. A node that
+  /// rebooted (after an OTA, by design) is back within seconds.
+  Future<void> _reconnectLoop() async {
+    final int gen = ++_reconnectGen;
+    final String? id = _companionId;
+    if (id == null) return;
+    final DateTime deadline = DateTime.now().add(reconnectWindow);
+    await _teardown();
+    for (int attempt = 0; DateTime.now().isBefore(deadline); attempt++) {
+      await Future<void>.delayed(
+          reconnectDelays[attempt < reconnectDelays.length ? attempt : reconnectDelays.length - 1]);
+      if (gen != _reconnectGen) return;
+      try {
+        final MeshLink link = await _linkFactory(id);
+        if (gen != _reconnectGen) {
+          await link.dispose();
+          return;
+        }
+        await _attach(link, id);
+        _reconnects++;
+        _error = null;
+        _addFeed(MeshFeedItem('info',
+            'reconnected to ${_companionName ?? id} (${_reconnects}x this session)'));
+        notifyListeners();
+        return;
+      } catch (_) {
+        await _teardown();
+        if (gen != _reconnectGen) return;
+      }
+    }
+    if (gen != _reconnectGen) return;
+    _state = MeshLinkState.error;
+    _addFeed(MeshFeedItem('info', 'link lost — reconnect to resume'));
+    notifyListeners();
+  }
+
   Future<void> disconnect() async {
+    _reconnectGen++;
     await _teardown();
     _state = MeshLinkState.idle;
     notifyListeners();
@@ -493,6 +570,7 @@ class MeshSession extends ChangeNotifier {
 
   @override
   void dispose() {
+    _reconnectGen++;
     _teardown();
     super.dispose();
   }

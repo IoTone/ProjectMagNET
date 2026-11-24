@@ -6,7 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../gen/app_localizations.dart';
 import '../magnet/magnet_ble.dart';
-import '../magnet/multisense_advert.dart';
+import '../magnet/multisense.dart';
 import '../scanner/scanned_access_point.dart';
 import '../scanner/scanned_device.dart';
 import '../scanner/scanner_controller.dart';
@@ -117,11 +117,12 @@ class _BleRow extends StatelessWidget {
     // configured — surface that instead of burying it in the generic sheet.
     final bool isNode = MagnetUuids.looksLikeNode(
         name: device.name, serviceUuids: device.serviceUuids);
-    // Nodes that advertise capabilities (the Multisensor) carry live readings
-    // in the advert itself; show them without connecting.
-    final MultisenseAdvert? caps = isNode
-        ? MultisenseAdvert.fromManufacturerData(device.manufacturerData)
-        : null;
+    // A multisensor broadcasts its readings, so the list can show them
+    // without connecting to anything (README §5.1).
+    final MultisenseReadings? ms =
+        MultisenseReadings.decodeAdvert(device.manufacturerData);
+    final String? readings =
+        ms != null && ms.hasAnyReading ? ms.summaryLine : null;
     return ListTile(
       leading: Icon(isNode ? Icons.hub : Icons.bluetooth,
           color: isNode ? cs.primary : signalColor(device.rssi, cs)),
@@ -148,15 +149,16 @@ class _BleRow extends StatelessWidget {
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          if (caps != null)
-            Text(caps.summary(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12, color: cs.primary)),
           Text(device.id,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
+          if (readings != null)
+            Text(readings,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontFamily: 'monospace', fontSize: 11, color: cs.primary)),
         ],
       ),
       trailing: Text(l.rssiDbm(device.rssi),

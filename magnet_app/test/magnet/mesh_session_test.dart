@@ -241,4 +241,73 @@ void main() {
     final SharedPreferences p = await SharedPreferences.getInstance();
     expect(p.getString('mesh.companion.id'), isNull);
   });
+
+  test('a dropped link reconnects to the same companion and keeps the feed',
+      () async {
+    final StreamController<bool> up = StreamController<bool>.broadcast();
+    int opened = 0;
+    final MeshSession s = MeshSession(
+      reconnectDelays: const <Duration>[Duration(milliseconds: 10)],
+      linkFactory: (String id) async {
+        opened++;
+        return MeshLink(
+          client: HcpClient(transport),
+          connected: up.stream,
+          dispose: () async {},
+        );
+      },
+    );
+    await s.adopt('AA:BB:CC:DD:EE:FF', name: 'probe');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final int feedBefore = s.feed.length;
+
+    up.add(false); // the node rebooted
+    await Future<void>.delayed(Duration.zero);
+    expect(s.state, MeshLinkState.reconnecting);
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(s.state, MeshLinkState.connected);
+    expect(opened, 2);
+    expect(s.reconnects, 1);
+    expect(s.feed.length, greaterThan(feedBefore), reason: 'feed carries over');
+    expect(s.feed.any((MeshFeedItem f) => f.text.startsWith('reconnected')), isTrue);
+    await up.close();
+  });
+
+  test('reconnect gives up after its window, and disconnect cancels it',
+      () async {
+    final StreamController<bool> up = StreamController<bool>.broadcast();
+    bool nodeBack = true;
+    final MeshSession s = MeshSession(
+      reconnectWindow: const Duration(milliseconds: 80),
+      reconnectDelays: const <Duration>[Duration(milliseconds: 10)],
+      linkFactory: (String id) async {
+        if (!nodeBack) throw StateError('not found');
+        return MeshLink(
+          client: HcpClient(transport),
+          connected: up.stream,
+          dispose: () async {},
+        );
+      },
+    );
+    await s.adopt('AA:BB:CC:DD:EE:FF', name: 'probe');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    nodeBack = false;
+    up.add(false);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    expect(s.state, MeshLinkState.error);
+    expect(s.reconnects, 0);
+
+    // A manual reconnect works; a later drop then a disconnect stops retrying.
+    nodeBack = true;
+    await s.connect();
+    expect(s.state, MeshLinkState.connected);
+    up.add(false);
+    await Future<void>.delayed(Duration.zero);
+    await s.disconnect();
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(s.state, MeshLinkState.idle);
+    await up.close();
+  });
 }

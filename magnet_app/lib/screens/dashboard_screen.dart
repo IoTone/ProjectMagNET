@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../gen/app_localizations.dart';
+import '../magnet/sentinel_feed.dart';
 import '../scanner/ble_scanner.dart';
 import '../scanner/scanner_controller.dart';
 import 'scan_controls.dart';
@@ -17,6 +18,7 @@ class DashboardScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ScannerController sc = context.watch<ScannerController>();
+    final SentinelFeed sentinels = context.watch<SentinelFeed>();
     final ColorScheme cs = Theme.of(context).colorScheme;
     final AppLocalizations l = AppLocalizations.of(context);
 
@@ -80,6 +82,26 @@ class DashboardScreen extends StatelessWidget {
             subtitle: Text(l.meshDashboardHint),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/mesh'),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          child: ListTile(
+            leading: Icon(Icons.sensors, color: cs.primary),
+            title: Text(l.sentinelDashboardCard),
+            subtitle: Text(l.sentinelDashboardHint),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+              if (sentinels.checkSensorCount(DateTime.now()) > 0)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Icon(Icons.warning_amber_rounded, color: cs.secondary, size: 20),
+                ),
+              if (sentinels.presentCount > 0)
+                Text('${sentinels.presentCount}',
+                    style: TextStyle(color: cs.error, fontWeight: FontWeight.w700)),
+              const Icon(Icons.chevron_right),
+            ]),
+            onTap: () => context.push('/sentinels'),
           ),
         ),
       ],
